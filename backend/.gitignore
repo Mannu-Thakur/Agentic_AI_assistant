@@ -1,0 +1,57 @@
+# ===== Environment & Secrets =====
+.env
+.env.local
+.env.production
+*.env
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.Python
+venv/
+.venv/
+env/
+*.egg-info/
+dist/
+build/
+*.egg
+pip-wheel-metadata/
+
+# ===== Database & Persistent Stores =====
+*.db
+*.sqlite
+*.sqlite3
+chroma_db/
+chromadb/
+
+# ===== Logs =====
+*.log
+logs/
+
+# ===== Alembic (keep versions but not pycache) =====
+alembic/__pycache__/
+alembic/versions/__pycache__/
+
+# ===== Test cache =====
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ===== IDE =====
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ===== Uploads & Generated Files =====
+uploads/
+temp/
+tmp/
