@@ -63,11 +63,7 @@ cd frontend
 npm install
 npm run dev
 ```
-
-Open [http://localhost:5173](http://localhost:5173)
-
-API docs: [http://localhost:8000/docs](http://localhost:8000/docs)
-
+ 
 ## Environment Variables
 
 Copy `.env.template` to `.env` and fill in your API keys:
