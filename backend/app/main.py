@@ -3,7 +3,7 @@ import logging
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
-from app.api import auth, chat, documents, memories
+from app.api import auth, chat, documents, memories, api_keys
 
 # Setup logging
 logging.basicConfig(
@@ -24,6 +24,7 @@ app.include_router(auth.router, prefix=settings.API_V1_STR)
 app.include_router(chat.router, prefix=settings.API_V1_STR)
 app.include_router(documents.router, prefix=settings.API_V1_STR)
 app.include_router(memories.router, prefix=settings.API_V1_STR)
+app.include_router(api_keys.router, prefix=settings.API_V1_STR)
 
 # Set CORS middleware
 if settings.BACKEND_CORS_ORIGINS:

@@ -12,12 +12,27 @@ class Chat(Base):
     title = Column(String(255), default="New Chat")
     is_pinned = Column(Boolean, default=False)
     is_favorite = Column(Boolean, default=False)
+    is_shared = Column(Boolean, default=False)
+    share_id = Column(String(36), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
 
     # Relationships
     user = relationship("User", back_populates="chats")
     messages = relationship("Message", back_populates="chat", cascade="all, delete-orphan", order_by="Message.created_at")
+
+
+class SharedLink(Base):
+    __tablename__ = "shared_links"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    chat_id = Column(String(36), ForeignKey("chats.id", ondelete="CASCADE"), nullable=False)
+    title = Column(String(255), default="Shared Chat")
+    snapshot_messages = Column(JSON, nullable=False)  # List of dicts representing messages snapshot
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Relationships
+    chat = relationship("Chat")
 
 
 class Message(Base):

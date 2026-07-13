@@ -44,12 +44,16 @@ class GroqProvider(BaseLLMProvider):
   async def generate(
       self,
       messages: List[Dict[str, str]],
-      model: str = "llama3-8b-8192",
+      model: str = "llama-3.1-8b-instant",
       temperature: float = 0.7,
       max_tokens: int = 2048,
       tools: Optional[List[Dict[str, Any]]] = None,
+      api_key: Optional[str] = None,
   ) -> Dict[str, Any]:
-    if self.is_mock:
+    key_to_use = api_key or self.api_key
+    is_mock_run = not key_to_use or key_to_use.startswith("mock_")
+
+    if is_mock_run:
       await asyncio.sleep(0.5)
       simulated_calls = self._check_mock_tool_call(messages)
       
@@ -94,7 +98,7 @@ class GroqProvider(BaseLLMProvider):
 
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
-        "Authorization": f"Bearer {self.api_key}",
+        "Authorization": f"Bearer {key_to_use}",
         "Content-Type": "application/json"
     }
 
@@ -136,12 +140,16 @@ class GroqProvider(BaseLLMProvider):
   async def generate_stream(
       self,
       messages: List[Dict[str, str]],
-      model: str = "llama3-8b-8192",
+      model: str = "llama-3.1-8b-instant",
       temperature: float = 0.7,
       max_tokens: int = 2048,
       tools: Optional[List[Dict[str, Any]]] = None,
+      api_key: Optional[str] = None,
   ) -> AsyncGenerator[Dict[str, Any], None]:
-    if self.is_mock:
+    key_to_use = api_key or self.api_key
+    is_mock_run = not key_to_use or key_to_use.startswith("mock_")
+
+    if is_mock_run:
       simulated_calls = self._check_mock_tool_call(messages)
 
       if simulated_calls:
@@ -217,7 +225,7 @@ class GroqProvider(BaseLLMProvider):
 
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
-        "Authorization": f"Bearer {self.api_key}",
+        "Authorization": f"Bearer {key_to_use}",
         "Content-Type": "application/json"
     }
 

@@ -2,7 +2,7 @@ import time
 import json
 import httpx
 import asyncio
-from typing import AsyncGenerator, Dict, Any, List
+from typing import AsyncGenerator, Dict, Any, List, Optional
 from app.providers.base import BaseLLMProvider
 from app.core.config import settings
 
@@ -17,8 +17,12 @@ class OpenRouterProvider(BaseLLMProvider):
       model: str,
       temperature: float = 0.7,
       max_tokens: int = 2048,
+      api_key: Optional[str] = None,
   ) -> Dict[str, Any]:
-    if self.is_mock:
+    key_to_use = api_key or self.api_key
+    is_mock_run = not key_to_use or key_to_use.startswith("mock_")
+
+    if is_mock_run:
       await asyncio.sleep(0.5)
       mock_text = f"[Mock OpenRouter Response for model {model}]: You asked: '{messages[-1]['content']}'"
       return {
@@ -37,7 +41,7 @@ class OpenRouterProvider(BaseLLMProvider):
 
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
-        "Authorization": f"Bearer {self.api_key}",
+        "Authorization": f"Bearer {key_to_use}",
         "Content-Type": "application/json",
         "HTTP-Referer": "https://localhost:3000",  # Site URL for OpenRouter ranking
         "X-Title": "Omni Agentic Workspace"
@@ -66,8 +70,12 @@ class OpenRouterProvider(BaseLLMProvider):
       model: str,
       temperature: float = 0.7,
       max_tokens: int = 2048,
+      api_key: Optional[str] = None,
   ) -> AsyncGenerator[Dict[str, Any], None]:
-    if self.is_mock:
+    key_to_use = api_key or self.api_key
+    is_mock_run = not key_to_use or key_to_use.startswith("mock_")
+
+    if is_mock_run:
       mock_text = f"Hello from Omni Agent Workspace! This is a real-time streamed response from the **OpenRouter Adapter**. You selected the model **{model}**.\n\nHere is a code snippet demonstration:\n```python\nprint('Hello OpenRouter!')\n```"
       words = mock_text.split(" ")
       input_tokens = len(str(messages)) // 4
@@ -108,7 +116,7 @@ class OpenRouterProvider(BaseLLMProvider):
 
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
-        "Authorization": f"Bearer {self.api_key}",
+        "Authorization": f"Bearer {key_to_use}",
         "Content-Type": "application/json",
         "HTTP-Referer": "https://localhost:3000",
         "X-Title": "Omni Agentic Workspace"

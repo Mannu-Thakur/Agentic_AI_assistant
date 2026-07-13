@@ -10,6 +10,7 @@ class BaseLLMProvider(ABC):
       temperature: float = 0.7,
       max_tokens: int = 2048,
       tools: Optional[List[Dict[str, Any]]] = None,
+      api_key: Optional[str] = None,
   ) -> Dict[str, Any]:
     """
     Generate a complete text response.
@@ -25,6 +26,7 @@ class BaseLLMProvider(ABC):
       temperature: float = 0.7,
       max_tokens: int = 2048,
       tools: Optional[List[Dict[str, Any]]] = None,
+      api_key: Optional[str] = None,
   ) -> AsyncGenerator[Dict[str, Any], None]:
     """
     Stream the response.

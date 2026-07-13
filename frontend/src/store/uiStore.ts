@@ -1,14 +1,15 @@
 import { create } from 'zustand';
 
 type ViewMode = 'chat' | 'memories' | 'documents';
+type ThemeType = 'dark' | 'light-dark' | 'light';
 
 interface UIState {
-  theme: 'dark' | 'light';
+  theme: ThemeType;
   developerMode: boolean;
-  sidebarOpen: boolean;
+  sidebarOpen: boolean;   // true = expanded, false = icon-only (desktop)
   activeView: ViewMode;
   toggleTheme: () => void;
-  setTheme: (theme: 'dark' | 'light') => void;
+  setTheme: (theme: ThemeType) => void;
   toggleDeveloperMode: () => void;
   setDeveloperMode: (enabled: boolean) => void;
   toggleSidebar: () => void;
@@ -16,29 +17,42 @@ interface UIState {
   setActiveView: (view: ViewMode) => void;
 }
 
+
+function applyTheme(theme: ThemeType) {
+  const root = document.documentElement;
+  root.classList.remove('dark', 'light-dark', 'light');
+  if (theme === 'light-dark') root.classList.add('light-dark');
+  if (theme === 'light') root.classList.add('light');
+}
+
+// Apply theme immediately on module load so it's set before first render
+const _savedTheme = (localStorage.getItem('theme') as ThemeType) || 'dark';
+applyTheme(_savedTheme);
+
 export const useUIStore = create<UIState>((set) => ({
-  theme: (localStorage.getItem('theme') as 'dark' | 'light') || 'dark',
+  theme: _savedTheme,
   developerMode: localStorage.getItem('developer_mode') === 'true',
-  sidebarOpen: true,
+  // Default: sidebar expanded on desktop
+  sidebarOpen: localStorage.getItem('sidebar_open') !== 'false',
   activeView: 'chat',
 
   toggleTheme: () => set((state) => {
-    const nextTheme = state.theme === 'dark' ? 'light' : 'dark';
-    localStorage.setItem('theme', nextTheme);
-    document.documentElement.classList.toggle('light', nextTheme === 'light');
-    return { theme: nextTheme };
+    const next: ThemeType = state.theme === 'dark' ? 'light-dark' : state.theme === 'light-dark' ? 'light' : 'dark';
+    localStorage.setItem('theme', next);
+    applyTheme(next);
+    return { theme: next };
   }),
 
   setTheme: (theme) => {
     localStorage.setItem('theme', theme);
-    document.documentElement.classList.toggle('light', theme === 'light');
+    applyTheme(theme);
     set({ theme });
   },
 
   toggleDeveloperMode: () => set((state) => {
-    const nextVal = !state.developerMode;
-    localStorage.setItem('developer_mode', String(nextVal));
-    return { developerMode: nextVal };
+    const next = !state.developerMode;
+    localStorage.setItem('developer_mode', String(next));
+    return { developerMode: next };
   }),
 
   setDeveloperMode: (enabled) => {
@@ -46,9 +60,16 @@ export const useUIStore = create<UIState>((set) => ({
     set({ developerMode: enabled });
   },
 
-  toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
-  
-  setSidebarOpen: (open) => set({ sidebarOpen: open }),
-  
-  setActiveView: (view) => set({ activeView: view })
+  toggleSidebar: () => set((state) => {
+    const next = !state.sidebarOpen;
+    localStorage.setItem('sidebar_open', String(next));
+    return { sidebarOpen: next };
+  }),
+
+  setSidebarOpen: (open) => {
+    localStorage.setItem('sidebar_open', String(open));
+    set({ sidebarOpen: open });
+  },
+
+  setActiveView: (view) => set({ activeView: view }),
 }));

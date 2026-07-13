@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.api.auth import get_current_user
 from app.schemas.auth import UserOut
-from app.schemas.chat import ChatOut, MessageOut, MessageCreate, ChatCreate
+from app.schemas.chat import ChatOut, MessageOut, MessageCreate, ChatCreate, ChatShareUpdate, SharedChatOut, SharedMessageOut
 from app.services.chat_service import ChatService
 from app.agent.graph import agent_graph
 from langchain_core.messages import HumanMessage, AIMessage
@@ -28,6 +28,39 @@ async def create_chat(
     db: AsyncSession = Depends(get_db)
 ):
   return await ChatService.create_chat(db, current_user.id, schema.title)
+
+
+# ── Public shared-chat endpoint — keyed by share_id (not chat_id) for privacy
+@router.get("/shared/{share_id}", response_model=SharedChatOut)
+async def get_shared_chat(
+    share_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+  """
+  Public endpoint — returns the static snapshot of a shared conversation.
+  Keyed by an opaque share_id, NOT the internal chat_id.
+  No authentication required.
+  """
+  shared_link = await ChatService.get_shared_link_by_id(db, share_id)
+  if not shared_link:
+    raise HTTPException(status_code=404, detail="Shared chat not found or access restricted")
+
+  messages = [
+    SharedMessageOut(
+      id=m["id"],
+      role=m["role"],
+      content=m["content"],
+      created_at=m["created_at"]
+    )
+    for m in (shared_link.snapshot_messages or [])
+  ]
+
+  return {
+    "id": share_id,
+    "title": shared_link.title,
+    "messages": messages
+  }
+
 
 @router.get("/{chat_id}", response_model=List[MessageOut])
 async def get_chat_history(
@@ -93,6 +126,25 @@ async def stream_agent_message(
       elif msg.role == "assistant":
         langchain_messages.append(AIMessage(content=msg.content))
 
+    # Fetch user's custom API keys
+    from sqlalchemy.future import select
+    from app.models.user import ApiKey
+    from app.core.security import decrypt_api_key
+
+    # Query API keys
+    db_keys = await db.execute(
+        select(ApiKey).where(ApiKey.user_id == current_user.id)
+    )
+    api_keys = db_keys.scalars().all()
+    
+    # Decrypt and format them
+    user_keys = {}
+    for k in api_keys:
+        try:
+            user_keys[k.provider_name] = decrypt_api_key(k.encrypted_key)
+        except Exception:
+            user_keys[k.provider_name] = k.encrypted_key
+
     # Fetch memories
     memories = await ChatService.get_user_memories(db, current_user.id)
 
@@ -113,7 +165,10 @@ async def stream_agent_message(
             "chat_id": chat_id,
             "memories": memories,
             "on_token": on_token_callback,
-            "on_metrics": on_metrics_callback
+            "on_metrics": on_metrics_callback,
+            "gemini_api_key": user_keys.get("gemini"),
+            "groq_api_key": user_keys.get("groq"),
+            "openrouter_api_key": user_keys.get("openrouter")
         }
     }
 
@@ -136,8 +191,8 @@ async def stream_agent_message(
     # Resolve task result
     try:
       final_state = await task
-      response_content = final_state.get("response_text", "")
-      
+      response_content = final_state.get("response_text", "") or "[No response generated]"
+
       # 2. Save Assistant message with metrics to database
       await ChatService.save_message(
           db=db,
@@ -163,3 +218,16 @@ async def stream_agent_message(
     yield "data: [DONE]\n\n"
 
   return StreamingResponse(sse_event_stream(), media_type="text/event-stream")
+
+
+@router.post("/{chat_id}/share", response_model=ChatOut)
+async def share_chat(
+    chat_id: str,
+    schema: ChatShareUpdate,
+    current_user: UserOut = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+  chat = await ChatService.toggle_chat_share(db, chat_id, current_user.id, schema.is_shared)
+  if not chat:
+    raise HTTPException(status_code=404, detail="Conversation session not found")
+  return chat

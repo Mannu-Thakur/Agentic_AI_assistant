@@ -16,8 +16,12 @@ class Settings(BaseSettings):
     # CORS
     BACKEND_CORS_ORIGINS: List[str] = [
         "http://localhost:5173",
+        "http://localhost:5174",
+        "http://localhost:5175",
         "http://localhost:3000",
         "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174",
+        "http://127.0.0.1:5175",
         "http://127.0.0.1:3000",
     ]
     
@@ -62,6 +66,9 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_SECRET: Optional[str] = None
     GITHUB_CLIENT_ID: Optional[str] = None
     GITHUB_CLIENT_SECRET: Optional[str] = None
+    GOOGLE_REDIRECT_URI: str = "http://localhost:5173/auth/google/callback"
+    GITHUB_REDIRECT_URI: str = "http://localhost:5173/auth/github/callback"
+    ENABLE_MOCK_OAUTH: bool = False
     
     # File upload constraints
     MAX_UPLOAD_SIZE_MB: int = 20

@@ -45,7 +45,26 @@ class ChatOut(BaseModel):
   title: str
   is_pinned: bool
   is_favorite: bool
+  is_shared: bool
+  share_id: Optional[str] = None
   created_at: datetime
   updated_at: datetime
 
   model_config = ConfigDict(from_attributes=True)
+
+class ChatShareUpdate(BaseModel):
+  is_shared: bool
+
+class SharedMessageOut(BaseModel):
+  id: str
+  role: str
+  content: str
+  created_at: datetime
+
+  model_config = ConfigDict(from_attributes=True)
+
+class SharedChatOut(BaseModel):
+  id: str
+  title: str
+  messages: List[SharedMessageOut]
+

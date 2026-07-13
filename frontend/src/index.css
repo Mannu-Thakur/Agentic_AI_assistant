@@ -1,114 +1,498 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* ============================================================
+   DESIGN TOKENS
+   ============================================================ */
 @layer base {
   :root {
-    --background: 240 10% 3.9%;
-    --foreground: 0 0% 98%;
-    
-    --card: 240 10% 3.9%;
-    --card-foreground: 0 0% 98%;
-    
-    --popover: 240 10% 3.9%;
-    --popover-foreground: 0 0% 98%;
-    
-    --primary: 263.4 70% 50.4%;
-    --primary-foreground: 210 20% 98%;
-    
-    --secondary: 240 3.7% 15.9%;
-    --secondary-foreground: 0 0% 98%;
-    
-    --muted: 240 3.7% 15.9%;
-    --muted-foreground: 240 5% 64.9%;
-    
-    --accent: 240 3.7% 15.9%;
-    --accent-foreground: 0 0% 98%;
-    
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 0 0% 98%;
-    
-    --border: 240 3.7% 15.9%;
-    --input: 240 3.7% 15.9%;
-    --ring: 240 4.9% 83.9%;
-    
-    --radius: 0.75rem;
+    /* ── Dark (default) ── */
+    --background:   240 6% 7%;       /* #0d0e11 */
+    --surface:      240 6% 10%;      /* #16171a */
+    --surface-2:    240 5% 16%;      /* #232429 */
+    --surface-3:    240 4% 19%;      /* #2d2e33 */
+
+    --foreground:   240 5% 92%;      /* #e6e6ea */
+    --foreground-2: 240 4% 68%;      /* #abaab3 */
+    --foreground-3: 240 4% 44%;      /* #6f6f74 */
+
+    /* Vibrant indigo accent — high contrast on dark surfaces */
+    --accent:        243 75% 59%;    /* #5B5BD6 – indigo */
+    --accent-hover:  243 75% 65%;
+    --accent-fg:     0 0% 100%;      /* white text on accent bg */
+
+    --border:       240 5% 13%;      /* #1f2024 */
+    --border-2:     240 5% 18%;      /* #2b2c31 */
+    --ring:         243 75% 59%;
+
+    --destructive:    0 72% 51%;
+    --destructive-fg: 0 0% 100%;
+    --success:        142 70% 45%;
+    --warning:        38 92% 50%;
+
+    /* Layout */
+    --sidebar-width:     240px;
+    --sidebar-collapsed: 56px;
+    --header-height:     56px;
+    --chat-max-width:    760px;
+    --radius:            0.625rem;
+
+    /* Tailwind/shadcn compat */
+    --card:             var(--surface);
+    --card-foreground:  var(--foreground);
+    --popover:          var(--surface);
+    --popover-foreground: var(--foreground);
+    --primary:          var(--accent);
+    --primary-foreground: var(--accent-fg);
+    --secondary:        var(--surface-2);
+    --secondary-foreground: var(--foreground);
+    --muted:            var(--surface-2);
+    --muted-foreground: var(--foreground-3);
+    --input:            var(--surface-2);
+    --accent-foreground: var(--accent-fg);
   }
 
+  /* ── Light-Dark Variant (elevated dark, richer contrast) ── */
+  .light-dark {
+    --background:   240 8% 11%;      /* #191A20 */
+    --surface:      240 6% 16%;      /* #242529 */
+    --surface-2:    240 5% 21%;      /* #313137 */
+    --surface-3:    240 5% 27%;      /* #40414A */
+
+    --foreground:   240 5% 95%;      /* #f1f1f3 — brighter */
+    --foreground-2: 240 4% 72%;      /* #b5b4bd */
+    --foreground-3: 240 4% 50%;      /* #7e7e84 */
+
+    --accent:       250 80% 63%;     /* #6C6EE8 – slightly brighter indigo */
+    --accent-hover: 250 80% 70%;
+    --accent-fg:    0 0% 100%;
+
+    --border:       240 5% 19%;
+    --border-2:     240 5% 24%;
+    --ring:         250 80% 63%;
+
+    --card:             var(--surface);
+    --card-foreground:  var(--foreground);
+    --popover:          var(--surface);
+    --popover-foreground: var(--foreground);
+    --primary:          var(--accent);
+    --primary-foreground: var(--accent-fg);
+    --secondary:        var(--surface-2);
+    --secondary-foreground: var(--foreground);
+    --muted:            var(--surface-2);
+    --muted-foreground: var(--foreground-3);
+    --input:            var(--surface-2);
+    --accent-foreground: var(--accent-fg);
+  }
+
+  /* ── Full Light Theme ── */
   .light {
-    --background: 0 0% 100%;
-    --foreground: 240 10% 3.9%;
-    
-    --card: 0 0% 100%;
-    --card-foreground: 240 10% 3.9%;
-    
-    --popover: 0 0% 100%;
-    --popover-foreground: 240 10% 3.9%;
-    
-    --primary: 262.1 83.3% 57.8%;
-    --primary-foreground: 210 20% 98%;
-    
-    --secondary: 240 4.8% 95.9%;
-    --secondary-foreground: 240 5.9% 10%;
-    
-    --muted: 240 4.8% 95.9%;
-    --muted-foreground: 240 3.8% 46.1%;
-    
-    --accent: 240 4.8% 95.9%;
-    --accent-foreground: 240 5.9% 10%;
-    
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 0 0% 98%;
-    
-    --border: 240 5.9% 90%;
-    --input: 240 5.9% 90%;
-    --ring: 262.1 83.3% 57.8%;
+    --background:   0 0% 98%;        /* #fafafa */
+    --surface:      0 0% 100%;       /* #ffffff */
+    --surface-2:    240 5% 96%;      /* #f2f2f4 */
+    --surface-3:    240 5% 90%;      /* #e3e3e8 */
+
+    --foreground:   240 10% 10%;     /* #161618 – near-black */
+    --foreground-2: 240 6% 35%;      /* #515159 */
+    --foreground-3: 240 4% 56%;      /* #8a8a91 */
+
+    --accent:       243 75% 52%;     /* #4A4AC4 – deep indigo, readable on white */
+    --accent-hover: 243 75% 44%;
+    --accent-fg:    0 0% 100%;
+
+    --border:       240 6% 88%;      /* #dddde3 */
+    --border-2:     240 5% 80%;      /* #ccccd4 */
+    --ring:         243 75% 52%;
+
+    --destructive:    0 72% 51%;
+    --destructive-fg: 0 0% 100%;
+    --success:        142 60% 36%;
+    --warning:        38 85% 42%;
+
+    --card:             var(--surface);
+    --card-foreground:  var(--foreground);
+    --popover:          var(--surface);
+    --popover-foreground: var(--foreground);
+    --primary:          var(--accent);
+    --primary-foreground: var(--accent-fg);
+    --secondary:        var(--surface-2);
+    --secondary-foreground: var(--foreground);
+    --muted:            var(--surface-2);
+    --muted-foreground: var(--foreground-3);
+    --input:            var(--surface-2);
+    --accent-foreground: var(--accent-fg);
   }
 }
 
+/* ============================================================
+   BASE RESET
+   ============================================================ */
 @layer base {
-  * {
-    @apply border-border;
-  }
+  * { @apply border-border box-border; }
+
+  html { font-size: 15px; }
+
   body {
-    @apply bg-background text-foreground;
-    font-family: 'Plus Jakarta Sans', sans-serif;
+    @apply bg-background text-foreground antialiased;
+    font-family: 'Inter', system-ui, sans-serif;
+    font-feature-settings: 'cv02','cv03','cv04','cv11';
   }
-  code, pre {
-    font-family: 'JetBrains Mono', monospace;
+
+  code, pre, kbd {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 0.875em;
+  }
+
+  :focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background: hsl(var(--accent) / 0.2);
+    color: hsl(var(--foreground));
+  }
+
+  /* Light theme: ensure select/option elements are readable */
+  .light select,
+  .light option {
+    background-color: hsl(var(--surface-2));
+    color: hsl(var(--foreground));
+  }
+  /* Ensure select options always have a solid background in all themes */
+  select option {
+    background-color: hsl(var(--surface-2));
+    color: hsl(var(--foreground));
   }
 }
 
-/* Custom premium scrollbar styling */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+/* ============================================================
+   SCROLLBAR
+   ============================================================ */
+::-webkit-scrollbar        { width: 5px; height: 5px; }
+::-webkit-scrollbar-track  { background: transparent; }
+::-webkit-scrollbar-thumb  { background: hsl(var(--border-2)); border-radius: 9999px; }
+::-webkit-scrollbar-thumb:hover { background: hsl(var(--foreground-3)); }
+
+/* ============================================================
+   LAYOUT UTILITIES
+   ============================================================ */
+@layer utilities {
+  .sidebar-expanded  { width: var(--sidebar-width); }
+  .sidebar-collapsed { width: var(--sidebar-collapsed); }
+
+  /* Glassmorphism card */
+  .glass {
+    background: hsl(var(--surface) / 0.7);
+    backdrop-filter: blur(14px) saturate(1.4);
+    -webkit-backdrop-filter: blur(14px) saturate(1.4);
+    border: 1px solid hsl(var(--border));
+  }
+
+  .glass-heavy {
+    background: hsl(var(--surface) / 0.95);
+    backdrop-filter: blur(20px) saturate(1.6);
+    -webkit-backdrop-filter: blur(20px) saturate(1.6);
+    border: 1px solid hsl(var(--border-2));
+  }
+
+  /* Elevated card hover */
+  .card-hover {
+    transition: box-shadow 0.2s, transform 0.2s, border-color 0.2s;
+  }
+  .card-hover:hover {
+    box-shadow: 0 4px 24px hsl(var(--accent) / 0.12);
+    border-color: hsl(var(--accent) / 0.3);
+    transform: translateY(-1px);
+  }
+
+  /* Accent gradient text */
+  .gradient-text {
+    background: linear-gradient(135deg, hsl(var(--accent)) 0%, hsl(var(--accent-hover)) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  /* Subtle inner glow on active items */
+  .active-glow {
+    box-shadow: inset 0 0 0 1px hsl(var(--accent) / 0.2),
+                0 0 10px hsl(var(--accent) / 0.08);
+  }
+
+  /* Smooth sidebar */
+  .sidebar-transition {
+    transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  /* Truncate with fade */
+  .truncate-fade {
+    overflow: hidden;
+    white-space: nowrap;
+    mask-image: linear-gradient(to right, black 80%, transparent 100%);
+  }
+
+  /* User message bubble container (dark-gray card) */
+  .user-bubble {
+    background: hsl(var(--surface-2));
+    border: 1px solid hsl(var(--border-2));
+    color: hsl(var(--foreground));
+    box-shadow: 0 1px 4px rgba(0,0,0,0.15);
+  }
+
+  /* Assistant message card transparent */
+  .assistant-bubble {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+  }
+  .light .assistant-bubble {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+  }
 }
 
-::-webkit-scrollbar-track {
-  background: transparent;
+/* ============================================================
+   MARKDOWN PROSE
+   ============================================================ */
+.prose-chat {
+  color: hsl(var(--foreground));
+  line-height: 1.7;
+  font-size: 0.9375rem;
+  word-break: break-word;
 }
 
-::-webkit-scrollbar-thumb {
-  background: hsl(var(--border));
-  border-radius: 9999px;
+.prose-chat h1,
+.prose-chat h2,
+.prose-chat h3,
+.prose-chat h4 {
+  font-weight: 600;
+  line-height: 1.3;
+  margin-top: 1.25em;
+  margin-bottom: 0.5em;
+  color: hsl(var(--foreground));
+}
+.prose-chat h1 { font-size: 1.4rem; }
+.prose-chat h2 { font-size: 1.2rem; }
+.prose-chat h3 { font-size: 1.05rem; }
+
+.prose-chat p { margin-bottom: 0.75em; }
+.prose-chat p:last-child { margin-bottom: 0; }
+
+.prose-chat ul, .prose-chat ol {
+  padding-left: 1.5em;
+  margin-bottom: 0.75em;
+}
+.prose-chat li { margin-bottom: 0.25em; }
+.prose-chat ul { list-style-type: disc; }
+.prose-chat ol { list-style-type: decimal; }
+
+.prose-chat blockquote {
+  border-left: 4px solid hsl(var(--accent));
+  padding: 0.6em 1.2em;
+  margin: 1.2em 0;
+  background: hsl(var(--surface-2));
+  border: 1px solid hsl(var(--border-2));
+  border-left-width: 4px;
+  border-radius: 0 8px 8px 0;
+  color: hsl(var(--foreground-2));
+  font-style: normal;
 }
 
-::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--muted-foreground) / 0.5);
+.prose-chat a {
+  color: hsl(var(--accent));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.prose-chat a:hover { color: hsl(var(--accent-hover)); }
+
+.prose-chat strong { font-weight: 600; color: hsl(var(--foreground)); }
+.prose-chat em    { font-style: italic; }
+
+.prose-chat code {
+  font-size: 0.85em;
+  background: hsl(var(--surface-2));
+  padding: 0.15em 0.4em;
+  border-radius: 6px;
+  border: 1px solid hsl(var(--border-2));
+  color: hsl(var(--foreground));
 }
 
-/* Glassmorphism utility classes */
-.glass {
-  background: rgba(15, 15, 20, 0.6);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.05);
+.prose-chat table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.2em 0;
+  font-size: 0.875rem;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid hsl(var(--border-2));
+}
+.prose-chat th {
+  background: hsl(var(--surface-3));
+  border: 1px solid hsl(var(--border-2));
+  padding: 0.6em 0.8em;
+  text-align: left;
+  font-weight: 600;
+  color: hsl(var(--foreground));
+}
+.prose-chat td {
+  background: hsl(var(--surface-2));
+  border: 1px solid hsl(var(--border-2));
+  padding: 0.5em 0.8em;
+  color: hsl(var(--foreground-2));
+}
+.prose-chat tr:hover td { background: hsl(var(--surface-3)); }
+
+.prose-chat hr {
+  border: none;
+  border-top: 1px solid hsl(var(--border));
+  margin: 1.5em 0;
 }
 
-.light .glass {
-  background: rgba(255, 255, 255, 0.6);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(0, 0, 0, 0.05);
+/* ============================================================
+   CODE BLOCK WRAPPER
+   ============================================================ */
+.code-block-wrapper {
+  position: relative;
+  margin: 0.75em 0;
+  border-radius: 8px;
+  border: 1px solid hsl(var(--border));
+  overflow: hidden;
+}
+
+.code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.4em 0.75em;
+  background: hsl(var(--surface-3));
+  border-bottom: 1px solid hsl(var(--border));
+  font-family: 'Inter', sans-serif;
+}
+
+.code-block-header span {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: hsl(var(--foreground-2));
+}
+
+.code-block-wrapper pre {
+  margin: 0 !important;
+  border-radius: 0 !important;
+  background: #0d1117 !important;
+  padding: 1em !important;
+  overflow-x: auto;
+  font-size: 0.82rem !important;
+  line-height: 1.6 !important;
+}
+
+/* ============================================================
+   INPUT + FORM ELEMENTS
+   ============================================================ */
+.input-base {
+  @apply w-full bg-surface-2 border border-border rounded-lg px-3 py-2 text-sm text-foreground
+         placeholder:text-muted-foreground focus:outline-none focus:border-accent transition-colors;
+}
+
+/* Select element styling — solid background in all themes */
+select {
+  background-color: hsl(var(--surface-2));
+  color: hsl(var(--foreground));
+  border-color: hsl(var(--border));
+}
+
+/* ============================================================
+   SKELETON LOADER
+   ============================================================ */
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}
+
+.skeleton {
+  background: hsl(var(--surface-2));
+  border-radius: 4px;
+  animation: skeleton-pulse 1.8s ease-in-out infinite;
+}
+
+/* ============================================================
+   STREAMING CURSOR
+   ============================================================ */
+@keyframes cursor-blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+.streaming-cursor::after {
+  content: '▋';
+  animation: cursor-blink 0.7s ease-in-out infinite;
+  color: hsl(var(--accent));
+  font-size: 0.95em;
+  margin-left: 1px;
+}
+
+/* ============================================================
+   INGESTION PROGRESS STEP
+   ============================================================ */
+@keyframes progress-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.7; transform: scale(0.95); }
+}
+.step-active {
+  animation: progress-pulse 1.2s ease-in-out infinite;
+}
+
+/* ============================================================
+   TOOLTIPS
+   ============================================================ */
+[data-tooltip] {
+  position: relative;
+}
+[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: calc(100% + 10px);
+  top: 50%;
+  transform: translateY(-50%);
+  background: hsl(var(--surface-3));
+  border: 1px solid hsl(var(--border-2));
+  color: hsl(var(--foreground));
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+  z-index: 999;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+}
+[data-tooltip]:hover::after {
+  opacity: 1;
+}
+
+/* ============================================================
+   SCROLL TO BOTTOM BTN
+   ============================================================ */
+.scroll-btn {
+  position: absolute;
+  bottom: 80px;
+  right: 20px;
+  z-index: 20;
+}
+
+/* ============================================================
+   REDUCED MOTION
+   ============================================================ */
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

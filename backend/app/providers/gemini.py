@@ -94,8 +94,12 @@ class GeminiProvider(BaseLLMProvider):
       temperature: float = 0.7,
       max_tokens: int = 2048,
       tools: Optional[List[Dict[str, Any]]] = None,
+      api_key: Optional[str] = None,
   ) -> Dict[str, Any]:
-    if self.is_mock:
+    key_to_use = api_key or self.api_key
+    is_mock_run = not key_to_use or key_to_use.startswith("mock_")
+
+    if is_mock_run:
       await asyncio.sleep(0.5)
       simulated_calls = self._check_mock_tool_call(messages)
       
@@ -138,7 +142,7 @@ class GeminiProvider(BaseLLMProvider):
           })
       payload["tools"] = [{"functionDeclarations": func_declarations}]
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={self.api_key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key_to_use}"
     
     async with httpx.AsyncClient(timeout=30.0) as client:
       response = await client.post(url, json=payload)
@@ -181,8 +185,12 @@ class GeminiProvider(BaseLLMProvider):
       temperature: float = 0.7,
       max_tokens: int = 2048,
       tools: Optional[List[Dict[str, Any]]] = None,
+      api_key: Optional[str] = None,
   ) -> AsyncGenerator[Dict[str, Any], None]:
-    if self.is_mock:
+    key_to_use = api_key or self.api_key
+    is_mock_run = not key_to_use or key_to_use.startswith("mock_")
+
+    if is_mock_run:
       simulated_calls = self._check_mock_tool_call(messages)
 
       if simulated_calls:
@@ -256,7 +264,7 @@ class GeminiProvider(BaseLLMProvider):
           })
       payload["tools"] = [{"functionDeclarations": func_declarations}]
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent?alt=sse&key={self.api_key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent?alt=sse&key={key_to_use}"
     input_tokens = len(str(messages)) // 4
     output_text = ""
     start_time = time.time()

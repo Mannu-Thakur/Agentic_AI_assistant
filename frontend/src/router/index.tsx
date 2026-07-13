@@ -5,6 +5,8 @@ import LoginPage from '../pages/LoginPage';
 import ChatPage from '../pages/ChatPage';
 import WorkspacePage from '../pages/WorkspacePage';
 import SettingsPage from '../pages/SettingsPage';
+import OAuthCallbackPage from '../pages/OAuthCallbackPage';
+import SharedChatPage from '../pages/SharedChatPage';
 import { useAuthStore } from '../store/authStore';
 
 // Protected Route Helper
@@ -35,6 +37,14 @@ export const router = createBrowserRouter([
     ],
   },
   {
+    path: '/auth/google/callback',
+    element: <OAuthCallbackPage provider="google" />,
+  },
+  {
+    path: '/auth/github/callback',
+    element: <OAuthCallbackPage provider="github" />,
+  },
+  {
     path: '/',
     element: (
       <ProtectedRoute>
@@ -55,6 +65,10 @@ export const router = createBrowserRouter([
         element: <SettingsPage />,
       },
     ],
+  },
+  {
+    path: '/share/:chatId',
+    element: <SharedChatPage />,
   },
   {
     path: '*',

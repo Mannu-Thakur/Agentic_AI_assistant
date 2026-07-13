@@ -15,7 +15,7 @@ openrouter_provider = OpenRouterProvider()
 def get_provider(model: str):
   if "gemini" in model:
     return gemini_provider
-  elif "llama3" in model or "mixtral" in model:
+  elif "llama" in model or "mixtral" in model:
     return groq_provider
   else:
     return openrouter_provider
@@ -99,12 +99,30 @@ async def generate_response_node(state: AgentState, config: RunnableConfig = Non
   registry = ToolRegistry()
   tool_schemas = registry.get_tool_schemas()
 
+  # Extract keys from config
+  gemini_api_key = config.get("configurable", {}).get("gemini_api_key")
+  groq_api_key = config.get("configurable", {}).get("groq_api_key")
+  openrouter_api_key = config.get("configurable", {}).get("openrouter_api_key")
+
   provider = get_provider(model)
+  provider_api_key = None
+  if "gemini" in model:
+    provider_api_key = gemini_api_key
+  elif "llama" in model or "mixtral" in model:
+    provider_api_key = groq_api_key
+  else:
+    provider_api_key = openrouter_api_key
+
   full_response = ""
   tool_calls = []
   
   # Call provider streaming generator with tools
-  async for chunk in provider.generate_stream(raw_messages, model, tools=tool_schemas):
+  async for chunk in provider.generate_stream(
+      messages=raw_messages,
+      model=model,
+      tools=tool_schemas,
+      api_key=provider_api_key
+  ):
     if chunk["event"] == "chunk":
       text = chunk["text"]
       full_response += text

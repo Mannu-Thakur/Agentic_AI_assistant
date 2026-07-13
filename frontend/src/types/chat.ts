@@ -42,6 +42,8 @@ export interface ChatSession {
   title: string;
   is_pinned: boolean;
   is_favorite: boolean;
+  is_shared: boolean;
+  share_id: string | null;
   created_at: string;
   updated_at: string;
 }

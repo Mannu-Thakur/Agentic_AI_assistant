@@ -1,22 +1,26 @@
-import { Outlet, Link, useNavigate, useLocation } from 'react-router-dom';
+import { Outlet, useNavigate, useLocation } from 'react-router-dom';
+import { useState } from 'react';
 import { useUIStore } from '../store/uiStore';
 import { useAuthStore } from '../store/authStore';
-import { 
-  MessageSquare, 
-  Brain, 
-  FolderClosed, 
-  Settings, 
-  LogOut, 
-  Menu, 
-  X,
-  Cpu
+import Logo from '../components/ui/Logo';
+import {
+  MessageSquare,
+  Brain,
+  FolderClosed,
+  Settings,
+  LogOut,
+  ChevronLeft,
+  ChevronRight,
+  Terminal,
 } from 'lucide-react';
 
 export default function AppLayout() {
-  const { sidebarOpen, toggleSidebar, setActiveView } = useUIStore();
+  const { sidebarOpen, toggleSidebar, setActiveView, activeView, developerMode, toggleDeveloperMode } = useUIStore();
   const { user, logout } = useAuthStore();
   const navigate = useNavigate();
   const location = useLocation();
+
+  const [showUserMenu, setShowUserMenu] = useState(false);
 
   const handleLogout = () => {
     logout();
@@ -24,124 +28,166 @@ export default function AppLayout() {
   };
 
   const navItems = [
-    { id: 'chat', label: 'Chat Workspace', icon: MessageSquare, path: '/' },
-    { id: 'memories', label: 'Semantic Memory', icon: Brain, path: '/workspace' },
-    { id: 'documents', label: 'Document Files', icon: FolderClosed, path: '/workspace' },
+    { id: 'chat',      label: 'Chat',            icon: MessageSquare, path: '/' },
+    { id: 'memories',  label: 'Semantic Memory',  icon: Brain,        path: '/workspace' },
+    { id: 'documents', label: 'Documents',        icon: FolderClosed, path: '/workspace' },
+    { id: 'settings',  label: 'Settings',         icon: Settings,     path: '/settings' },
   ];
+
+  const isItemActive = (id: string) => {
+    if (id === 'chat')     return location.pathname === '/';
+    if (id === 'settings') return location.pathname === '/settings';
+    // On /workspace, use activeView to pick exactly one
+    if (id === 'memories')  return location.pathname.startsWith('/workspace') && activeView === 'memories';
+    if (id === 'documents') return location.pathname.startsWith('/workspace') && activeView === 'documents';
+    return false;
+  };
+
+  const userInitial = user?.full_name
+    ? user.full_name.charAt(0).toUpperCase()
+    : user?.email.charAt(0).toUpperCase() ?? 'U';
 
   return (
     <div className="h-screen w-screen flex overflow-hidden bg-background text-foreground">
-      
-      {/* Sidebar Component */}
-      <aside 
-        className={`fixed inset-y-0 left-0 z-40 w-64 border-r border-border bg-card/50 backdrop-blur-xl flex flex-col justify-between transition-transform duration-300 md:translate-x-0 md:relative ${
-          sidebarOpen ? 'translate-x-0' : '-translate-x-full'
-        }`}
+
+      {/* ─── Left Sidebar ─── */}
+      <aside
+        className="relative flex flex-col border-r border-border bg-surface sidebar-transition flex-shrink-0 z-30"
+        style={{ width: sidebarOpen ? 'var(--sidebar-width)' : 'var(--sidebar-collapsed)' }}
+        aria-label="Main navigation"
       >
-        <div className="flex flex-col flex-1 min-h-0">
-          
-          {/* Sidebar Header branding */}
-          <div className="h-16 px-6 flex items-center justify-between border-b border-border">
-            <div className="flex items-center space-x-3">
-              <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-violet-600 to-indigo-600 flex items-center justify-center">
-                <Cpu className="w-4.5 h-4.5 text-white" />
-              </div>
-              <span className="font-semibold text-sm tracking-tight">Omni</span>
-            </div>
-            <button onClick={toggleSidebar} className="md:hidden text-muted-foreground hover:text-foreground">
-              <X className="w-5 h-5" />
-            </button>
-          </div>
+        {/* Header */}
+        <div
+          className="flex items-center border-b border-border flex-shrink-0 overflow-hidden bg-transparent light-dark"
+          style={{ height: 'var(--header-height)', padding: sidebarOpen ? '0 14px' : '0 12px' }}
+        >
+          <Logo collapsed={!sidebarOpen} size={26} />
+        </div>
 
-          {/* Navigation Links */}
-          <nav className="flex-1 px-4 py-6 space-y-1.5 overflow-y-auto">
-            {navItems.map((item) => {
-              const Icon = item.icon;
-              const isActive = (item.id === 'chat' && location.pathname === '/') || 
-                               (item.id !== 'chat' && location.pathname.startsWith('/workspace'));
-              
-              const clickHandler = () => {
-                if (item.id === 'memories') setActiveView('memories');
-                if (item.id === 'documents') setActiveView('documents');
-                navigate(item.path);
-              };
+        {/* Nav */}
+        <nav className="flex-1 overflow-y-auto overflow-x-hidden py-3 px-2 space-y-0.5" aria-label="Primary navigation">
+          {navItems.map((item) => {
+            const Icon = item.icon;
+            const active = isItemActive(item.id);
 
-              return (
-                <button
-                  key={item.id}
-                  onClick={clickHandler}
-                  className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                    isActive 
-                      ? 'bg-primary text-primary-foreground shadow-lg shadow-primary/20' 
-                      : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'
+            return (
+              <button
+                key={item.id}
+              onClick={() => {
+                  if (item.id === 'memories')  { setActiveView('memories');  }
+                  if (item.id === 'documents') { setActiveView('documents'); }
+                  if (item.id === 'chat')      { setActiveView('chat');      }
+                  navigate(item.path);
+                }}
+                data-tooltip={!sidebarOpen ? item.label : undefined}
+                aria-label={item.label}
+                className={`w-full flex items-center gap-3 rounded-lg text-sm font-medium transition-all duration-150
+                  ${sidebarOpen ? 'px-3 py-2' : 'px-0 py-2 justify-center'}
+                  ${active
+                    ? 'bg-accent/10 text-accent active-glow'
+                    : 'text-foreground-2 hover:text-foreground hover:bg-surface-2'
                   }`}
-                >
-                  <Icon className="w-4.5 h-4.5" />
-                  <span>{item.label}</span>
-                </button>
-              );
-            })}
-          </nav>
-        </div>
+              >
+                <Icon className="w-4 h-4 flex-shrink-0" />
+                {sidebarOpen && (
+                  <span className="truncate leading-none">{item.label}</span>
+                )}
+              </button>
+            );
+          })}
 
-        {/* Sidebar Footer - User profile settings */}
-        <div className="p-4 border-t border-border bg-card/80">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center space-x-3 min-w-0">
-              <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-violet-600 to-indigo-600 flex items-center justify-center font-bold text-white uppercase shadow-md shadow-violet-900/20">
-                {user?.full_name ? user.full_name.charAt(0) : user?.email.charAt(0)}
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="text-xs font-semibold truncate">{user?.full_name || 'Active User'}</p>
-                <p className="text-[10px] text-muted-foreground truncate">{user?.email}</p>
-              </div>
-            </div>
-          </div>
+          {/* Developer Mode toggle */}
+          <button
+            onClick={toggleDeveloperMode}
+            data-tooltip={!sidebarOpen ? 'Dev Mode' : undefined}
+            aria-label="Toggle Developer Mode"
+            className={`w-full flex items-center gap-3 rounded-lg text-sm font-medium transition-all duration-150
+              ${sidebarOpen ? 'px-3 py-2' : 'px-0 py-2 justify-center'}
+              ${developerMode
+                ? 'bg-surface-3 text-foreground border border-border-2'
+                : 'text-foreground-2 hover:text-foreground hover:bg-surface-2 border border-transparent'
+              }`}
+          >
+            <Terminal className="w-4 h-4 flex-shrink-0" />
+            {sidebarOpen && <span className="truncate leading-none">Dev HUD</span>}
+            {sidebarOpen && developerMode && (
+              <span className="ml-auto text-[9px] px-1.5 py-0.5 rounded-full bg-accent/20 text-foreground font-semibold">ON</span>
+            )}
+          </button>
+        </nav>
 
-          <div className="grid grid-cols-2 gap-2">
-            <Link
-              to="/settings"
-              className="flex items-center justify-center space-x-1.5 py-1.5 px-2 rounded-lg border border-border bg-secondary/50 hover:bg-muted text-xs font-medium transition-all"
-            >
-              <Settings className="w-3.5 h-3.5" />
-              <span>Settings</span>
-            </Link>
+        {/* Footer – user profile */}
+        <div className="border-t border-border p-2 space-y-1 flex-shrink-0">
+          {/* User row */}
+          <div className="relative">
             <button
-              onClick={handleLogout}
-              className="flex items-center justify-center space-x-1.5 py-1.5 px-2 rounded-lg border border-red-500/20 bg-red-500/5 hover:bg-red-500/10 text-red-400 text-xs font-medium transition-all"
+              onClick={() => setShowUserMenu(!showUserMenu)}
+              data-tooltip={!sidebarOpen ? (user?.full_name || user?.email || 'Account') : undefined}
+              aria-label="User menu"
+              className={`w-full flex items-center gap-2.5 rounded-lg transition-all hover:bg-surface-2
+                ${sidebarOpen ? 'px-2.5 py-2' : 'px-0 py-2 justify-center'}`}
             >
-              <LogOut className="w-3.5 h-3.5" />
-              <span>Logout</span>
+              <div className="w-7 h-7 rounded-full bg-accent/20 border border-accent/30 flex items-center justify-center text-accent font-bold text-xs flex-shrink-0">
+                {userInitial}
+              </div>
+              {sidebarOpen && (
+                <div className="min-w-0 flex-1 text-left">
+                  <p className="text-xs font-semibold truncate leading-tight">{user?.full_name || 'User'}</p>
+                  <p className="text-[10px] text-foreground-3 truncate">{user?.email}</p>
+                </div>
+              )}
             </button>
+
+            {/* Dropdown */}
+            {showUserMenu && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setShowUserMenu(false)} />
+                <div className={`absolute ${sidebarOpen ? 'left-0' : 'left-full ml-2'} bottom-full mb-1 w-44 glass-heavy rounded-xl shadow-2xl p-1 z-50 animate-scale-in`}>
+                  <button
+                    onClick={() => { navigate('/settings'); setShowUserMenu(false); }}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium text-foreground-2 hover:text-foreground hover:bg-surface-2 transition-all"
+                  >
+                    <Settings className="w-3.5 h-3.5" />
+                    Settings
+                  </button>
+                  <button
+                    onClick={handleLogout}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium text-red-400 hover:text-red-300 hover:bg-red-500/10 transition-all"
+                  >
+                    <LogOut className="w-3.5 h-3.5" />
+                    Logout
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
+
+        {/* Collapse toggle button */}
+        <button
+          onClick={toggleSidebar}
+          aria-label={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
+          className="absolute -right-3 top-[calc(var(--header-height)_+_16px)] z-50
+                     w-6 h-6 rounded-full border border-border bg-surface-2 shadow-md
+                     flex items-center justify-center text-foreground-2
+                     hover:text-foreground hover:bg-surface-3 transition-all"
+        >
+          {sidebarOpen ? <ChevronLeft className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+        </button>
       </aside>
 
-      {/* Main Content Pane */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
-        
-        {/* Toggle navigation bar header for mobile screens */}
-        <header className="h-16 border-b border-border flex items-center justify-between px-6 md:hidden glass sticky top-0 z-30">
-          <button 
-            onClick={toggleSidebar}
-            className="p-2 rounded-lg border border-border bg-card text-foreground hover:bg-muted"
-          >
-            <Menu className="w-5 h-5" />
-          </button>
-          <div className="flex items-center space-x-2">
-            <div className="w-7 h-7 rounded-lg bg-gradient-to-tr from-violet-600 to-indigo-600 flex items-center justify-center">
-              <Cpu className="w-4 h-4 text-white" />
-            </div>
-            <span className="font-semibold text-xs tracking-tight">Omni</span>
-          </div>
-          <div className="w-9" /> {/* Spacer */}
-        </header>
+      {/* Mobile overlay */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 bg-black/60 z-20 md:hidden"
+          onClick={toggleSidebar}
+        />
+      )}
 
-        {/* Children content page injection */}
-        <main className="flex-1 overflow-y-auto relative bg-background/95">
-          <Outlet />
-        </main>
-      </div>
+      {/* ─── Main content ─── */}
+      <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        <Outlet />
+      </main>
     </div>
   );
 }

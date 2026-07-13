@@ -1,3 +1,4 @@
+import httpx
 from datetime import timedelta
 from fastapi import APIRouter, Depends, HTTPException, status, Response, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,6 +8,7 @@ from app.core.security import create_access_token, create_refresh_token, verify_
 from app.schemas.auth import UserRegister, UserLogin, Token, UserOut
 from app.services.auth_service import AuthService
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from app.models.user import User, UserPreference
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 security = HTTPBearer()
@@ -127,37 +129,89 @@ async def google_login():
     Redirects the user to Google OAuth consent screen.
     In local development, returns a mock consent URL or redirects.
     """
+    if settings.ENABLE_MOCK_OAUTH:
+        return {"url": f"{settings.GOOGLE_REDIRECT_URI}?code=mock_google_code"}
+        
     # Placeholder for google auth client initiation
     redirect_uri = "https://accounts.google.com/o/oauth2/v2/auth"
     params = {
         "client_id": settings.GOOGLE_CLIENT_ID or "mock_client_id",
-        "redirect_uri": "http://localhost:5173/auth/google/callback",
+        "redirect_uri": settings.GOOGLE_REDIRECT_URI,
         "response_type": "code",
         "scope": "openid email profile",
     }
     query_string = "&".join([f"{k}={v}" for k, v in params.items()])
     return {"url": f"{redirect_uri}?{query_string}"}
 
-@router.post("/oauth/google/callback", response_model=Token)
+@router.get("/oauth/google/callback", response_model=Token)
 async def google_callback(code: str, response: Response, db: AsyncSession = Depends(get_db)):
     """
     Exchanges authorization code for Google profile data,
     creates user if they don't exist, and issues JWT access/refresh tokens.
     """
-    # Mocking successful OAuth authentication if keys are missing
-    mock_email = "oauth_google_user@example.com"
-    mock_name = "Google OAuth User"
+    if settings.ENABLE_MOCK_OAUTH or code == "mock_google_code":
+        email = "mock_google_user@example.com"
+        name = "Mock Google User"
+        avatar_url = None
+    else:
+        if not settings.GOOGLE_CLIENT_ID or not settings.GOOGLE_CLIENT_SECRET:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Google OAuth is not configured on this server."
+            )
+
+        # Google OAuth token exchange
+        token_url = "https://oauth2.googleapis.com/token"
+        token_data = {
+            "code": code,
+            "client_id": settings.GOOGLE_CLIENT_ID,
+            "client_secret": settings.GOOGLE_CLIENT_SECRET,
+            "redirect_uri": settings.GOOGLE_REDIRECT_URI,
+            "grant_type": "authorization_code"
+        }
+        
+        async with httpx.AsyncClient() as client:
+            try:
+                token_res = await client.post(token_url, data=token_data)
+                if token_res.status_code != 200:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Google OAuth token exchange failed: {token_res.text}"
+                    )
+                token_json = token_res.json()
+                access_token = token_json.get("access_token")
+                
+                # Fetch user profile
+                profile_url = "https://www.googleapis.com/oauth2/v3/userinfo"
+                profile_res = await client.get(profile_url, headers={"Authorization": f"Bearer {access_token}"})
+                if profile_res.status_code != 200:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Failed to fetch Google profile info: {profile_res.text}"
+                    )
+                profile = profile_res.json()
+            except httpx.RequestError as e:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Could not connect to Google API: {str(e)}"
+                )
+
+        email = profile.get("email")
+        if not email:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Google profile did not contain a valid email."
+            )
+        name = profile.get("name")
+        avatar_url = profile.get("picture")
     
-    # In production, query Google APIs to get user profile:
-    # user_profile = await exchange_code_for_profile(code)
-    
-    user = await AuthService.get_user_by_email(db, mock_email)
+    user = await AuthService.get_user_by_email(db, email)
     if not user:
         # Create user without password (OAuth user)
         user = User(
-            email=mock_email,
-            full_name=mock_name,
-            avatar_url="https://lh3.googleusercontent.com/a/default-user"
+            email=email,
+            full_name=name,
+            avatar_url=avatar_url
         )
         db.add(user)
         await db.flush()
@@ -190,29 +244,105 @@ async def github_login():
     """
     Redirects the user to GitHub OAuth consent screen.
     """
+    if settings.ENABLE_MOCK_OAUTH:
+        return {"url": f"{settings.GITHUB_REDIRECT_URI}?code=mock_github_code"}
+        
     redirect_uri = "https://github.com/login/oauth/authorize"
     params = {
         "client_id": settings.GITHUB_CLIENT_ID or "mock_client_id",
-        "redirect_uri": "http://localhost:5173/auth/github/callback",
+        "redirect_uri": settings.GITHUB_REDIRECT_URI,
         "scope": "user:email",
     }
     query_string = "&".join([f"{k}={v}" for k, v in params.items()])
     return {"url": f"{redirect_uri}?{query_string}"}
 
-@router.post("/oauth/github/callback", response_model=Token)
+@router.get("/oauth/github/callback", response_model=Token)
 async def github_callback(code: str, response: Response, db: AsyncSession = Depends(get_db)):
     """
     Exchanges code for GitHub profile and logs user in.
     """
-    mock_email = "oauth_github_user@example.com"
-    mock_name = "GitHub OAuth User"
+    if settings.ENABLE_MOCK_OAUTH or code == "mock_github_code":
+        email = "mock_github_user@example.com"
+        name = "Mock GitHub User"
+        avatar_url = None
+    else:
+        if not settings.GITHUB_CLIENT_ID or not settings.GITHUB_CLIENT_SECRET:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="GitHub OAuth is not configured on this server."
+            )
+
+        # GitHub OAuth token exchange
+        token_url = "https://github.com/login/oauth/access_token"
+        token_headers = {"Accept": "application/json"}
+        token_data = {
+            "client_id": settings.GITHUB_CLIENT_ID,
+            "client_secret": settings.GITHUB_CLIENT_SECRET,
+            "code": code,
+            "redirect_uri": settings.GITHUB_REDIRECT_URI
+        }
+        
+        async with httpx.AsyncClient() as client:
+            try:
+                token_res = await client.post(token_url, data=token_data, headers=token_headers)
+                if token_res.status_code != 200:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"GitHub OAuth token exchange failed: {token_res.text}"
+                    )
+                token_json = token_res.json()
+                access_token = token_json.get("access_token")
+                if not access_token:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"GitHub OAuth error: {token_json.get('error_description', 'No access token returned')}"
+                    )
+                    
+                # Fetch user profile
+                profile_url = "https://api.github.com/user"
+                profile_headers = {
+                    "Authorization": f"Bearer {access_token}",
+                    "User-Agent": "Flagship-Agentic-AI-Workspace"
+                }
+                profile_res = await client.get(profile_url, headers=profile_headers)
+                if profile_res.status_code != 200:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Failed to fetch GitHub profile info: {profile_res.text}"
+                    )
+                profile = profile_res.json()
+                
+                email = profile.get("email")
+                # Fetch email from private emails list if profile returns null email
+                if not email:
+                    emails_url = "https://api.github.com/user/emails"
+                    emails_res = await client.get(emails_url, headers=profile_headers)
+                    if emails_res.status_code == 200:
+                        emails = emails_res.json()
+                        for em in emails:
+                            if em.get("primary"):
+                                email = em.get("email")
+                                break
+                        if not email and emails:
+                            email = emails[0].get("email")
+            except httpx.RequestError as e:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Could not connect to GitHub API: {str(e)}"
+                )
+                
+        if not email:
+            email = f"{profile.get('login')}@users.noreply.github.com"
+            
+        name = profile.get("name") or profile.get("login")
+        avatar_url = profile.get("avatar_url")
     
-    user = await AuthService.get_user_by_email(db, mock_email)
+    user = await AuthService.get_user_by_email(db, email)
     if not user:
         user = User(
-            email=mock_email,
-            full_name=mock_name,
-            avatar_url="https://github.com/identicons/default-user"
+            email=email,
+            full_name=name,
+            avatar_url=avatar_url
         )
         db.add(user)
         await db.flush()

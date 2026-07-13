@@ -26,6 +26,7 @@ pip-wheel-metadata/
 *.sqlite3
 chroma_db/
 chromadb/
+vector_db/
 
 # ===== Logs =====
 *.log

@@ -1,28 +1,40 @@
 import { Outlet } from 'react-router-dom';
-import { Cpu } from 'lucide-react';
+import Logo from '../components/ui/Logo';
 
 export default function AuthLayout() {
   return (
     <div className="min-h-screen relative flex items-center justify-center p-4 bg-background overflow-hidden">
-      
-      {/* Dynamic Background Gradients */}
-      <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] rounded-full bg-violet-600/10 blur-[120px] pointer-events-none" />
-      <div className="absolute bottom-[-20%] right-[-10%] w-[50%] h-[50%] rounded-full bg-indigo-600/10 blur-[120px] pointer-events-none" />
 
-      {/* Main Container Card */}
-      <div className="w-full max-w-md relative z-10 glass rounded-3xl shadow-2xl p-8 border border-border">
-        
-        {/* Title branding logo */}
-        <div className="flex flex-col items-center mb-8">
-          <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-violet-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-violet-900/30 mb-3">
-            <Cpu className="w-6 h-6 text-white" />
+      {/* Ambient background glows */}
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div className="absolute -top-1/4 -left-1/4 w-[60%] h-[60%] rounded-full
+                        bg-accent/4 blur-[120px] animate-pulse" style={{ animationDuration: '8s' }} />
+        <div className="absolute -bottom-1/4 -right-1/4 w-[60%] h-[60%] rounded-full
+                        bg-accent/3 blur-[120px] animate-pulse" style={{ animationDuration: '12s' }} />
+        {/* Grid overlay */}
+        <div className="absolute inset-0 opacity-[0.02]"
+             style={{ backgroundImage: 'linear-gradient(hsl(var(--border)) 1px, transparent 1px), linear-gradient(90deg, hsl(var(--border)) 1px, transparent 1px)', backgroundSize: '40px 40px' }} />
+      </div>
+
+      {/* Card */}
+      <div className="w-full max-w-[400px] relative z-10">
+        <div className="glass-heavy rounded-2xl shadow-2xl p-8 border border-border animate-fade-in">
+
+          {/* Branding */}
+          <div className="flex flex-col items-center mb-8 space-y-2">
+            <div className="mb-1">
+              <Logo size={36} />
+            </div>
+            <h1 className="text-xl font-semibold text-foreground tracking-tight">Omni AI Workspace</h1>
+            <p className="text-foreground-3 text-xs">Production-grade agent orchestrator</p>
           </div>
-          <h2 className="text-2xl font-bold tracking-tight text-foreground">Omni Workspace</h2>
-          <p className="text-muted-foreground text-xs mt-1">Production-Grade Agent Orchestrator</p>
+
+          <Outlet />
         </div>
 
-        {/* Children routers */}
-        <Outlet />
+        <p className="text-center text-foreground-3 text-[11px] mt-5">
+          © {new Date().getFullYear()} Omni Systems. All rights reserved.
+        </p>
       </div>
     </div>
   );

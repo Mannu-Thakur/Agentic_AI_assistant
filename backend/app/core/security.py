@@ -42,3 +42,20 @@ def verify_token(token: str, token_type: str = "access") -> Optional[str]:
         return payload.get("sub")
     except JWTError:
         return None
+
+def _get_fernet() -> Any:
+    import base64
+    import hashlib
+    from cryptography.fernet import Fernet
+    # Derive a 32-byte key from settings.SECRET_KEY
+    key = hashlib.sha256(settings.SECRET_KEY.encode()).digest()
+    return Fernet(base64.urlsafe_b64encode(key))
+
+def encrypt_api_key(key: str) -> str:
+    f = _get_fernet()
+    return f.encrypt(key.encode()).decode()
+
+def decrypt_api_key(encrypted_key: str) -> str:
+    f = _get_fernet()
+    return f.decrypt(encrypted_key.encode()).decode()
+

@@ -39,7 +39,8 @@ export const useChatStore = create<ChatState>((set) => ({
   addChat: (chat) => set((state) => ({ chats: [chat, ...state.chats] })),
   removeChat: (chatId) => set((state) => ({ 
     chats: state.chats.filter((c) => c.id !== chatId),
-    activeChatId: state.activeChatId === chatId ? null : state.activeChatId
+    activeChatId: state.activeChatId === chatId ? null : state.activeChatId,
+    messages: state.activeChatId === chatId ? [] : state.messages,
   })),
   updateChat: (chat) => set((state) => ({
     chats: state.chats.map((c) => c.id === chat.id ? chat : c)

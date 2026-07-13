@@ -11,6 +11,7 @@ export default function LoginPage() {
   const [fullName, setFullName] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
+  const [rememberMe, setRememberMe] = useState<boolean>(true);
   const loginStore = useAuthStore((state) => state.login);
   const navigate = useNavigate();
 
@@ -32,7 +33,7 @@ export default function LoginPage() {
           headers: { Authorization: `Bearer ${data.access_token}` }
         });
         
-        loginStore(data.access_token, user);
+        loginStore(data.access_token, user, rememberMe);
         navigate('/');
       } else {
         // Register account
@@ -51,7 +52,7 @@ export default function LoginPage() {
           headers: { Authorization: `Bearer ${data.access_token}` }
         });
         
-        loginStore(data.access_token, user);
+        loginStore(data.access_token, user, rememberMe);
         navigate('/');
       }
     } catch (err: any) {
@@ -143,6 +144,20 @@ export default function LoginPage() {
             <KeyRound className="absolute left-3.5 top-3 w-4 h-4 text-muted-foreground" />
           </div>
         </div>
+
+        {isLogin && (
+          <div className="flex items-center mt-2">
+            <label className="flex items-center space-x-2 text-xs text-muted-foreground cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={rememberMe}
+                onChange={(e) => setRememberMe(e.target.checked)}
+                className="w-4 h-4 rounded border border-gray-600 bg-[#0B0F19] text-violet-600 focus:ring-violet-500 cursor-pointer accent-violet-600"
+              />
+              <span>Remember Me</span>
+            </label>
+          </div>
+        )}
 
         <button
           type="submit"

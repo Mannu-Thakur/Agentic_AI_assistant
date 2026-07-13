@@ -72,10 +72,29 @@ class MemoryService:
         
         logger = logging.getLogger("app.services.memory_service")
         provider = GeminiProvider()
+
+        # Fetch user's custom Gemini API key if available
+        user_gemini_key = None
+        try:
+            from app.models.user import ApiKey
+            from app.core.security import decrypt_api_key
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(
+                    select(ApiKey).where(ApiKey.user_id == user_id, ApiKey.provider_name == "gemini")
+                )
+                key_record = result.scalars().first()
+                if key_record:
+                    user_gemini_key = decrypt_api_key(key_record.encrypted_key)
+        except Exception as e:
+            logger.error(f"Failed to fetch user Gemini API key for memory extraction: {str(e)}")
+
+        is_mock_run = provider.is_mock
+        if user_gemini_key:
+            is_mock_run = user_gemini_key.startswith("mock_")
         
         memories_to_create = []
 
-        if provider.is_mock:
+        if is_mock_run:
             # 1. Rule-based simulated extraction for Mock Mode
             logger.info("Executing rule-based memory extraction in mock mode")
             import re
@@ -183,7 +202,7 @@ class MemoryService:
             ]
             
             try:
-                response = await provider.generate(messages, model="gemini-1.5-flash")
+                response = await provider.generate(messages, model="gemini-1.5-flash", api_key=user_gemini_key)
                 raw_text = response.get("text", "").strip()
                 
                 # Strip markdown code blocks
