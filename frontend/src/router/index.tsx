@@ -57,6 +57,10 @@ export const router = createBrowserRouter([
         element: <ChatPage />,
       },
       {
+        path: 'c/:chatId',
+        element: <ChatPage />,
+      },
+      {
         path: 'workspace',
         element: <WorkspacePage />,
       },

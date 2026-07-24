@@ -22,6 +22,7 @@ class UserOut(BaseModel):
     full_name: Optional[str] = None
     avatar_url: Optional[str] = None
     is_active: bool
+    role: str = "user"
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

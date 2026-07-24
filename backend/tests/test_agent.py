@@ -5,12 +5,21 @@ from app.services.chat_service import ChatService
 
 def test_agent_graph_compilation():
   """
-  Verify that the LangGraph StateGraph compiles without errors.
+  Verify that the LangGraph StateGraph compiles without errors and that all
+  P0 nodes (classify_intent, memory_write) are present alongside existing nodes.
   """
   assert agent_graph is not None
-  # Ensure nodes and entrypoint are registered
-  assert "retrieve_context" in agent_graph.nodes
-  assert "generate_response" in agent_graph.nodes
+  # Original nodes still present
+  assert "retrieve_context"   in agent_graph.nodes
+  assert "generate_response"  in agent_graph.nodes
+  assert "plan"               in agent_graph.nodes
+  assert "check_retrieval"    in agent_graph.nodes
+  assert "grade_documents"    in agent_graph.nodes
+  assert "execute_tools"      in agent_graph.nodes
+  assert "reflect"            in agent_graph.nodes
+  # New P0 nodes present
+  assert "classify_intent"    in agent_graph.nodes
+  assert "memory_write"       in agent_graph.nodes
 
 @pytest.mark.anyio
 async def test_chat_service_operations(db_session: AsyncSession):
@@ -102,8 +111,8 @@ async def test_memory_auto_extraction(db_session: AsyncSession):
   assert len(memories) == 2, f"Expected 2 memories but found {len(memories)}: {[m.content for m in memories]}"
   
   # Check name fact
-  name_mem = next((m for m in memories if m.category == "fact"), None)
-  assert name_mem is not None, "Expected a 'fact' category memory"
+  name_mem = next((m for m in memories if m.category in ("fact", "user_profile")), None)
+  assert name_mem is not None, "Expected a 'fact' or 'user_profile' category memory"
   assert "Mannu" in name_mem.content
   assert name_mem.importance_score == 9
 

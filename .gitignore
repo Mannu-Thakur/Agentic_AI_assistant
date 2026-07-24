@@ -13,3 +13,16 @@ desktop.ini
 
 # ===== FullName (internal folder) =====
 .FullName/
+
+# ===== Database & Temporary Stores =====
+*.db
+*.db-shm
+*.db-wal
+sql_app.db*
+uploads/
+vector_db/
+.pytest_cache/
+tmp_pytest/
+mcp_store.json
+task.md
+

@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Bot, User, Loader2, AlertCircle, Lock, ExternalLink, Copy, Check } from 'lucide-react';
+import { Bot, User, Loader2, AlertCircle, Lock, ExternalLink, Copy, Check, Radio } from 'lucide-react';
 
 interface SharedMessage {
   id: string;
@@ -12,6 +12,7 @@ interface SharedMessage {
 interface SharedChat {
   id: string;
   title: string;
+  is_live_share: boolean;
   messages: SharedMessage[];
 }
 
@@ -29,11 +30,9 @@ function RenderContent({ text }: { text: string }) {
   return (
     <div className="space-y-1 text-sm leading-relaxed">
       {lines.map((line, i) => {
-        // code block detection (simplified single-line)
         if (line.startsWith('```')) {
           return null; // skip fence lines
         }
-        // Bold: **text**
         const parts = line.split(/(\*\*[^*]+\*\*)/g);
         return (
           <p key={i} className={line === '' ? 'h-3' : ''}>
@@ -56,21 +55,44 @@ export default function SharedChatPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const fetchChat = async (id: string, showLoadingSpinner = false) => {
+    if (showLoadingSpinner) setLoading(true);
+    try {
+      const res = await fetch(`/api/v1/chats/shared/${id}`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `HTTP ${res.status}`);
+      }
+      const data: SharedChat = await res.json();
+      setChat(data);
+      setLastUpdated(new Date());
+      // Auto-scroll to bottom on update
+      setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+    } catch (err: any) {
+      setError(err.message || 'Failed to load shared chat.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (!chatId) { setError('No chat ID provided.'); setLoading(false); return; }
-
-    fetch(`/api/v1/chats/shared/${chatId}`)
-      .then(async (res) => {
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
-          throw new Error(body.detail || `HTTP ${res.status}`);
-        }
-        return res.json();
-      })
-      .then((data: SharedChat) => { setChat(data); setLoading(false); })
-      .catch((err: any) => { setError(err.message || 'Failed to load shared chat.'); setLoading(false); });
+    fetchChat(chatId, true);
   }, [chatId]);
+
+  // Once we have the chat data, start polling if it's a live share
+  useEffect(() => {
+    if (!chat || !chat.is_live_share || !chatId) return;
+    if (pollRef.current) clearInterval(pollRef.current);
+    pollRef.current = setInterval(() => fetchChat(chatId), 5000);
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, [chat?.is_live_share, chatId]);
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(window.location.href);
@@ -118,6 +140,7 @@ export default function SharedChatPage() {
   }
 
   const userMessages = chat.messages.filter((m) => m.role !== 'system');
+  const isLive = chat.is_live_share;
 
   /* ── Shared chat view ── */
   return (
@@ -131,13 +154,28 @@ export default function SharedChatPage() {
               <Bot className="w-4 h-4 text-white" />
             </div>
             <div className="min-w-0">
-              <p className="text-[10px] font-semibold text-accent uppercase tracking-widest">Shared Conversation</p>
+              <div className="flex items-center gap-2">
+                <p className="text-[10px] font-semibold text-accent uppercase tracking-widest">
+                  {isLive ? 'Live Conversation' : 'Shared Conversation'}
+                </p>
+                {isLive && (
+                  <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/25">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    <span className="text-[9px] font-bold text-emerald-400 uppercase">Live</span>
+                  </span>
+                )}
+              </div>
               <h1 className="text-sm font-semibold text-foreground truncate">{chat.title}</h1>
             </div>
           </div>
 
           {/* Actions */}
           <div className="flex items-center gap-2 flex-shrink-0">
+            {isLive && lastUpdated && (
+              <span className="hidden sm:block text-[10px] text-foreground-3">
+                Updated {formatTime(lastUpdated.toISOString())}
+              </span>
+            )}
             <button
               onClick={handleCopyLink}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-surface-2 hover:bg-surface-3 text-xs font-medium text-foreground-2 transition-all"
@@ -156,20 +194,31 @@ export default function SharedChatPage() {
         </div>
       </header>
 
-      {/* Shared banner */}
+      {/* Banner — different for live vs static */}
       <div className="max-w-3xl mx-auto w-full px-4 pt-4">
-        <div className="flex items-center gap-2.5 px-4 py-2.5 rounded-xl bg-amber-500/5 border border-amber-500/20 text-amber-400">
-          <AlertCircle className="w-4 h-4 flex-shrink-0" />
-          <p className="text-xs leading-relaxed">
-            This is a <strong>read-only snapshot</strong> captured at share time. New messages added after sharing are not visible here.
-          </p>
-        </div>
+        {isLive ? (
+          <div className="flex items-center gap-2.5 px-4 py-2.5 rounded-xl bg-emerald-500/5 border border-emerald-500/20 text-emerald-400">
+            <Radio className="w-4 h-4 flex-shrink-0 animate-pulse" />
+            <p className="text-xs leading-relaxed">
+              This is a <strong>live conversation</strong>. New messages will automatically appear here as they are added — no need to refresh.
+            </p>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2.5 px-4 py-2.5 rounded-xl bg-amber-500/5 border border-amber-500/20 text-amber-400">
+            <AlertCircle className="w-4 h-4 flex-shrink-0" />
+            <p className="text-xs leading-relaxed">
+              This is a <strong>read-only snapshot</strong> captured at share time. New messages added after sharing are not visible here.
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Messages */}
       <main className="flex-1 max-w-3xl mx-auto w-full px-4 py-6 space-y-6">
         {userMessages.length === 0 && (
-          <div className="text-center py-16 text-foreground-3 text-sm">No messages in this conversation.</div>
+          <div className="text-center py-16 text-foreground-3 text-sm">
+            {isLive ? 'Conversation is empty — messages will appear here as they are sent.' : 'No messages in this conversation.'}
+          </div>
         )}
 
         {userMessages.map((msg) => (
@@ -203,6 +252,22 @@ export default function SharedChatPage() {
             </div>
           </div>
         ))}
+
+        {/* Live typing indicator when polling */}
+        {isLive && (
+          <div className="flex gap-3 flex-row">
+            <div className="w-8 h-8 rounded-xl bg-accent/10 flex items-center justify-center flex-shrink-0">
+              <Bot className="w-4 h-4 text-accent" />
+            </div>
+            <div className="flex items-center gap-1.5 px-4 py-3 rounded-2xl bg-surface-2 border border-border rounded-bl-sm">
+              <span className="w-1.5 h-1.5 rounded-full bg-foreground-3 animate-bounce" style={{ animationDelay: '0ms' }} />
+              <span className="w-1.5 h-1.5 rounded-full bg-foreground-3 animate-bounce" style={{ animationDelay: '150ms' }} />
+              <span className="w-1.5 h-1.5 rounded-full bg-foreground-3 animate-bounce" style={{ animationDelay: '300ms' }} />
+            </div>
+          </div>
+        )}
+
+        <div ref={bottomRef} />
       </main>
 
       {/* Footer CTA */}

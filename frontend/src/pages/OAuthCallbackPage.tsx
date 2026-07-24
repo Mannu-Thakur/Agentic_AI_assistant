@@ -12,6 +12,7 @@ export default function OAuthCallbackPage({ provider }: { provider: 'google' | '
 
   useEffect(() => {
     const code = searchParams.get('code');
+    const state = searchParams.get('state');
     if (!code) {
       setError('Authorization code is missing from callback.');
       return;
@@ -19,10 +20,20 @@ export default function OAuthCallbackPage({ provider }: { provider: 'google' | '
 
     async function exchangeCode() {
       try {
+        // Build the same redirect_uri that was used during OAuth initiation
+        const currentOrigin = window.location.origin;
+        const redirectUri = encodeURIComponent(`${currentOrigin}/auth/${provider}/callback`);
+
         // Exchange authorization code for access token on backend
-        const data = await apiRequest(`/auth/oauth/${provider}/callback?code=${code}`, {
-          method: 'GET',
-        });
+        let callbackUrl = `/auth/oauth/${provider}/callback?code=${code}&redirect_uri=${redirectUri}`;
+        if (state) {
+          callbackUrl += `&state=${state}`;
+        }
+        
+        const data = await apiRequest(
+          callbackUrl,
+          { method: 'GET' }
+        );
         
         // Fetch user profile info using the token
         const user = await apiRequest('/auth/me', {
@@ -30,7 +41,7 @@ export default function OAuthCallbackPage({ provider }: { provider: 'google' | '
         });
         
         // Save auth details in store (remember by default for OAuth)
-        loginStore(data.access_token, user, true);
+        loginStore(data.access_token, user, true, data.expires_in);
         navigate('/');
       } catch (err: any) {
         setError(err.message || 'OAuth exchange failed.');

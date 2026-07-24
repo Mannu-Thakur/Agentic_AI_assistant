@@ -33,10 +33,16 @@ class GeminiProvider(BaseLLMProvider):
             new_schema[k] = v
     return new_schema
 
-  def _convert_messages(self, messages: List[Dict[str, str]]) -> tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
+  def _convert_messages(
+      self,
+      messages: List[Dict[str, str]],
+      images: Optional[List[Dict[str, str]]] = None,
+  ) -> tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
     """
     Convert messages to Gemini format: roles are 'user' or 'model'.
     Separate system instruction.
+    When `images` is provided, the base64 payloads are injected as
+    inlineData parts into the LAST user message (multimodal vision).
     """
     contents = []
     system_instruction = None
@@ -54,6 +60,24 @@ class GeminiProvider(BaseLLMProvider):
             "role": gemini_role,
             "parts": [{"text": content}]
         })
+
+    # Inject images into the last user turn if provided
+    if images:
+      # Find the last user content entry
+      for entry in reversed(contents):
+        if entry["role"] == "user":
+          image_parts = [
+              {
+                  "inlineData": {
+                      "mimeType": img["mimeType"],
+                      "data": img["base64"],
+                  }
+              }
+              for img in images
+          ]
+          # Prepend image parts before the text part
+          entry["parts"] = image_parts + entry["parts"]
+          break
 
     return contents, system_instruction
 
@@ -90,11 +114,12 @@ class GeminiProvider(BaseLLMProvider):
   async def generate(
       self,
       messages: List[Dict[str, str]],
-      model: str = "gemini-1.5-flash",
+      model: str = "gemini-3.5-flash",
       temperature: float = 0.7,
       max_tokens: int = 2048,
       tools: Optional[List[Dict[str, Any]]] = None,
       api_key: Optional[str] = None,
+      images: Optional[List[Dict[str, str]]] = None,
   ) -> Dict[str, Any]:
     key_to_use = api_key or self.api_key
     is_mock_run = not key_to_use or key_to_use.startswith("mock_")
@@ -121,7 +146,7 @@ class GeminiProvider(BaseLLMProvider):
           "tool_calls": []
       }
 
-    contents, system_instruction = self._convert_messages(messages)
+    contents, system_instruction = self._convert_messages(messages, images=images)
     payload: Dict[str, Any] = {
         "contents": contents,
         "generationConfig": {
@@ -181,11 +206,12 @@ class GeminiProvider(BaseLLMProvider):
   async def generate_stream(
       self,
       messages: List[Dict[str, str]],
-      model: str = "gemini-1.5-flash",
+      model: str = "gemini-3.5-flash",
       temperature: float = 0.7,
       max_tokens: int = 2048,
       tools: Optional[List[Dict[str, Any]]] = None,
       api_key: Optional[str] = None,
+      images: Optional[List[Dict[str, str]]] = None,
   ) -> AsyncGenerator[Dict[str, Any], None]:
     key_to_use = api_key or self.api_key
     is_mock_run = not key_to_use or key_to_use.startswith("mock_")
@@ -243,7 +269,7 @@ class GeminiProvider(BaseLLMProvider):
       }
       return
 
-    contents, system_instruction = self._convert_messages(messages)
+    contents, system_instruction = self._convert_messages(messages, images=images)
     payload: Dict[str, Any] = {
         "contents": contents,
         "generationConfig": {

@@ -169,9 +169,9 @@ async def test_documents_and_memories_api_flow(override_get_db, db_session: Asyn
         res_mem_list2 = await ac.get("/api/v1/memories", headers=headers)
         assert not any(m["id"] == mem_id for m in res_mem_list2.json())
 
-        # 7. Delete document
+        # 7. Delete document — expects 204 No Content (FIX-8)
         res_del_doc = await ac.delete(f"/api/v1/documents/{doc_id}", headers=headers)
-        assert res_del_doc.status_code == 200
+        assert res_del_doc.status_code == 204
 
         # Verify deleted document is gone
         res_list2 = await ac.get("/api/v1/documents", headers=headers)

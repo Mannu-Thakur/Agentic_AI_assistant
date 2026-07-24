@@ -1,63 +1,114 @@
 version: '3.8'
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  Omni Agentic Workspace — full-stack Docker Compose
+#
+#  Services:
+#    postgres   — Primary relational store (SQLAlchemy ORM)
+#    redis      — Cache layer + rate-limiting (redis_client.py)
+#    backend    — FastAPI app (LangGraph agent, RAG, MCP, etc.)
+#    frontend   — React SPA served by nginx (proxies /api/* to backend)
+#
+#  Quick start:
+#    cp .env.template .env          # fill in your API keys
+#    docker compose up --build -d
+#    docker compose logs -f
+# ─────────────────────────────────────────────────────────────────────────────
+
 services:
+
+  # ── PostgreSQL ─────────────────────────────────────────────────────────────
   postgres:
     image: postgres:15-alpine
     container_name: ai_assistant_db
-    restart: always
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: ai_assistant
+      POSTGRES_USER:     ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB:       ${POSTGRES_DB:-ai_assistant}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d ai_assistant"]
+      test:     ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-ai_assistant}"]
       interval: 5s
-      timeout: 5s
-      retries: 5
+      timeout:  5s
+      retries:  5
 
+  # ── Redis ──────────────────────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
     container_name: ai_assistant_redis
-    restart: always
+    restart: unless-stopped
+    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test:     ["CMD", "redis-cli", "ping"]
       interval: 5s
-      timeout: 5s
-      retries: 5
+      timeout:  5s
+      retries:  5
 
+  # ── Backend ────────────────────────────────────────────────────────────────
   backend:
     build:
-      context: ./backend
+      context:    ./backend
       dockerfile: Dockerfile
     container_name: ai_assistant_backend
-    restart: always
+    restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "${BACKEND_PORT:-8000}:8000"
+    env_file:
+      - .env
     environment:
-      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/ai_assistant
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - SECRET_KEY=supersecretkeychangeinproduction1234567890
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-ai_assistant}
+      REDIS_HOST:   redis
+      REDIS_PORT:   6379
+      SECRET_KEY:   ${SECRET_KEY:?SECRET_KEY must be set in .env}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
     volumes:
-      - ./backend:/backend
-      - vector_data:/backend/vector_db
-      - upload_data:/backend/uploads
+      - vector_data:/app/vector_db
+      - upload_data:/app/uploads
+    healthcheck:
+      test:         ["CMD-SHELL", "curl -f http://localhost:8000/api/v1/health || exit 1"]
+      interval:     15s
+      timeout:      5s
+      start_period: 30s
+      retries:      3
 
+  # ── Frontend ───────────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context:    ./frontend
+      dockerfile: Dockerfile
+    container_name: ai_assistant_frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-80}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test:         ["CMD-SHELL", "wget -qO- http://localhost/health || exit 1"]
+      interval:     30s
+      timeout:      5s
+      start_period: 10s
+      retries:      3
+
+# ── Named volumes ───────────────────────────────────────────────────────────
 volumes:
   postgres_data:
+    driver: local
   redis_data:
+    driver: local
   vector_data:
+    driver: local
   upload_data:
+    driver: local

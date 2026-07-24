@@ -23,10 +23,11 @@ async def test_python_sandbox_executor():
     assert "Timeout" in timeout_result
 
 @pytest.mark.anyio
-async def test_tavily_search_mock():
+async def test_tavily_search_mock(monkeypatch):
     """
     Verify web search returns content results.
     """
+    monkeypatch.setattr("app.tools.local_tools.settings.TAVILY_API_KEY", "mock_key")
     result = await tavily_search("fastapi best practices")
     assert "Result" in result or "FastAPI" in result
 
@@ -44,10 +45,15 @@ async def test_mcp_client_and_calculator_server():
     client = McpStdioClient(command=python_exe, args=[calculator_script])
     await client.connect()
 
-    # 1. List tools
+    # 1. List tools — now 5 tools (calculate + expense + reminder + email)
     tools = await client.list_tools()
-    assert len(tools) == 1
-    assert tools[0]["name"] == "calculate"
+    tool_names = [t["name"] for t in tools]
+    assert len(tools) == 5
+    assert "calculate" in tool_names
+    assert "add_expense" in tool_names
+    assert "get_expenses" in tool_names
+    assert "create_reminder" in tool_names
+    assert "send_email" in tool_names
 
     # 2. Call tool calculate
     result = await client.call_tool("calculate", {"expression": "12 * 12"})
@@ -57,7 +63,23 @@ async def test_mcp_client_and_calculator_server():
     result_sin = await client.call_tool("calculate", {"expression": "sin(pi/2)"})
     assert abs(float(result_sin) - 1.0) < 0.01
 
-    # 4. Clean up subprocess
+    # 4. Test add_expense
+    result_exp = await client.call_tool("add_expense", {"amount": 500, "description": "lunch", "category": "food"})
+    assert "Successfully added" in result_exp
+
+    # 5. Test get_expenses
+    result_get = await client.call_tool("get_expenses", {"category": "food"})
+    assert "lunch" in result_get or "food" in result_get.lower()
+
+    # 6. Test create_reminder
+    result_rem = await client.call_tool("create_reminder", {"time": "tomorrow 10 AM", "text": "Meeting"})
+    assert "Successfully created" in result_rem
+
+    # 7. Test send_email
+    result_email = await client.call_tool("send_email", {"to": "test@example.com", "subject": "Test", "body": "Test body"})
+    assert "Successfully sent" in result_email
+
+    # 8. Clean up subprocess
     await client.close()
 
 @pytest.mark.anyio
@@ -90,16 +112,26 @@ async def test_agent_graph_tool_calling_loop():
     """
     Verify that the LangGraph agent graph correctly executes tool-calling loops
     when prompted with a query requiring tool execution (using mock adapter rules).
+    The state must supply intent=MCP_TOOL and allowed_tools=['calculate'] so the
+    calculator tool schema is offered to the LLM.
     """
     initial_state = {
-        "messages": [HumanMessage(content="calculate 8 * 8")],
-        "active_model": "gemini-1.5-flash",
-        "user_id": "test-user",
-        "chat_id": "test-chat",
-        "retrieved_documents": [],
-        "metrics": {},
-        "response_text": "",
-        "tool_calls": []
+        "messages":              [HumanMessage(content="calculate 8 * 8")],
+        "active_model":          "gemini-3.5-flash",
+        "user_id":               "test-user",
+        "chat_id":               "test-chat",
+        "retrieved_documents":   [],
+        "metrics":               {},
+        "response_text":         "",
+        "tool_calls":            [],
+        # Intent gating: supply MCP_TOOL intent so calculate is whitelisted
+        "intent":                "MCP_TOOL",
+        "allowed_tools":         ["calculate"],
+        "is_private_doc_query":  False,
+        "no_doc_answer":         False,
+        "memory_write_content":  None,
+        "memory_write_category": None,
+        "uploaded_file_paths":   [],
     }
 
     config = {
@@ -119,10 +151,19 @@ async def test_agent_graph_tool_calling_loop():
     # The agent should have loop-routed, executed the tool calculation,
     # and produced the final response in its history.
     messages = final_state.get("messages", [])
-    
-    # Assert assistant tool announcement is in history
-    assert any("Calling tools: calculate" in msg.content for msg in messages)
-    # Assert tool output message is in history
-    assert any("[Tool Output: calculate] 64" in msg.content for msg in messages)
-    
+
+    # Assert tool output message is in history (neutral label, no internal name)
+    assert any("[Tool Result]" in msg.content for msg in messages), (
+        "Expected a [Tool Result] message in history after tool execution.\n"
+        f"Messages were: {[m.content for m in messages]}"
+    )
+    # Assert the result 64 appears somewhere in the conversation
+    all_content = " ".join(
+        m.content for m in messages if isinstance(m.content, str)
+    )
+    assert "64" in all_content, (
+        f"Expected '64' (8*8) to appear in conversation. Got: {all_content[:500]}"
+    )
+
     await registry.shutdown()
+

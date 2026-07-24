@@ -13,6 +13,7 @@ class User(Base):
     full_name = Column(String(255), nullable=True)
     avatar_url = Column(String(500), nullable=True)
     is_active = Column(Boolean, default=True)
+    role = Column(String(50), default="user", nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships
@@ -28,7 +29,7 @@ class UserPreference(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True)
-    default_model = Column(String(100), default="gemini-1.5-flash")
+    default_model = Column(String(100), default="gemini-3.5-flash")
     theme = Column(String(20), default="dark")
     system_prompt_override = Column(String(2000), nullable=True)
     developer_mode = Column(Boolean, default=False)
@@ -44,8 +45,16 @@ class ApiKey(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     provider_name = Column(String(50), nullable=False)  # groq, gemini, openrouter, custom
-    encrypted_key = Column(String(500), nullable=False)
+    encrypted_api_key = Column(String(500), nullable=True)
+    status = Column(String(50), default="UNCONFIGURED", nullable=False)
+    verified_at = Column(DateTime(timezone=True), nullable=True)
+    last_checked = Column(DateTime(timezone=True), nullable=True)
+    last_error = Column(String(1000), nullable=True)
+    available_models = Column(JSON, nullable=True)
+    quota = Column(String(255), nullable=True)
+    organization = Column(String(255), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
 
     # Relationships
     user = relationship("User", back_populates="api_keys")

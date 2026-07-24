@@ -14,12 +14,14 @@ class Chat(Base):
     is_favorite = Column(Boolean, default=False)
     is_shared = Column(Boolean, default=False)
     share_id = Column(String(36), nullable=True)
+    is_live_share = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
 
     # Relationships
     user = relationship("User", back_populates="chats")
     messages = relationship("Message", back_populates="chat", cascade="all, delete-orphan", order_by="Message.created_at")
+    documents = relationship("Document", back_populates="chat", cascade="all, delete-orphan")
 
 
 class SharedLink(Base):
@@ -45,6 +47,7 @@ class Message(Base):
     content = Column(Text, nullable=False)
     tool_calls = Column(JSON, nullable=True)  # Store JSON representation of tool invocations
     developer_metrics = Column(JSON, nullable=True)  # Latency, tokens, costs, model used, retrieval hits
+    images = Column(JSON, nullable=True)  # List of {base64, mimeType} dicts for uploaded images
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships

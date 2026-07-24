@@ -10,15 +10,15 @@ logger = logging.getLogger(__name__)
 
 class DocumentService:
     @staticmethod
-    async def get_user_documents(db: AsyncSession, user_id: str) -> List[Document]:
+    async def get_user_documents(db: AsyncSession, user_id: str, chat_id: Optional[str] = None) -> List[Document]:
         """
-        Retrieves all documents owned by a specific user.
+        Retrieves all documents owned by a specific user, optionally filtered by chat_id.
         """
-        result = await db.execute(
-            select(Document)
-            .where(Document.user_id == user_id)
-            .order_by(desc(Document.uploaded_at))
-        )
+        query = select(Document).where(Document.user_id == user_id)
+        if chat_id:
+            query = query.where(Document.chat_id == chat_id)
+        query = query.order_by(desc(Document.uploaded_at))
+        result = await db.execute(query)
         return list(result.scalars().all())
 
     @staticmethod
@@ -28,13 +28,15 @@ class DocumentService:
         filename: str,
         file_type: str,
         storage_path: str,
-        size_bytes: int
+        size_bytes: int,
+        chat_id: Optional[str] = None
     ) -> Document:
         """
         Registers a new document with 'processing' status in the database.
         """
         doc = Document(
             user_id=user_id,
+            chat_id=chat_id,
             filename=filename,
             file_type=file_type,
             storage_path=storage_path,

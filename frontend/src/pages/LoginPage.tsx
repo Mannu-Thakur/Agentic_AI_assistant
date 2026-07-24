@@ -33,7 +33,7 @@ export default function LoginPage() {
           headers: { Authorization: `Bearer ${data.access_token}` }
         });
         
-        loginStore(data.access_token, user, rememberMe);
+        loginStore(data.access_token, user, rememberMe, data.expires_in);
         navigate('/');
       } else {
         // Register account
@@ -52,7 +52,7 @@ export default function LoginPage() {
           headers: { Authorization: `Bearer ${data.access_token}` }
         });
         
-        loginStore(data.access_token, user, rememberMe);
+        loginStore(data.access_token, user, rememberMe, data.expires_in);
         navigate('/');
       }
     } catch (err: any) {
@@ -63,8 +63,10 @@ export default function LoginPage() {
   };
 
   const handleOAuth = (provider: 'google' | 'github') => {
-    // Initiate OAuth redirection
-    apiRequest(`/auth/oauth/${provider}`)
+    // Initiate OAuth redirection with dynamic callback URL based on active origin
+    const currentOrigin = window.location.origin;
+    const redirectUri = encodeURIComponent(`${currentOrigin}/auth/${provider}/callback`);
+    apiRequest(`/auth/oauth/${provider}?redirect_uri=${redirectUri}`)
       .then((res) => {
         if (res.url) {
           window.location.href = res.url;

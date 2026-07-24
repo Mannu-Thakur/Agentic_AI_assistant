@@ -56,3 +56,22 @@ desktop.ini
 uploads/
 temp/
 tmp/
+tmp_pytest/
+mcp_store.json
+
+# ===== Temporary / Scratch Test Scripts =====
+tests/load_test.py
+tests/test_agent_phase*.py
+tests/test_audit_fixes.py
+tests/test_auth_messages_audit_e2e.py
+tests/test_auth_solidification.py
+tests/test_delete_all_chats.py
+tests/test_intent_routing.py
+tests/test_ocr_pipeline.py
+tests/test_production_readiness.py
+tests/test_provider_keys_e2e.py
+tests/test_security.py
+tests/test_source_attribution.py
+tests/test_system_hardening.py
+verify_all_systems.py
+

@@ -91,7 +91,16 @@ class McpStdioClient:
     async def send_request(self, method: str, params: Optional[Dict[str, Any]] = None) -> Any:
         """
         Sends a JSON-RPC 2.0 request to the MCP server and awaits the response.
+        Auto-reconnects if the connection or process is down.
         """
+        # Auto-reconnect if process died or is not running
+        if not self.is_connected or not self.proc or self.proc.returncode is not None:
+            logger.info("MCP server is not connected or process died. Attempting to reconnect...")
+            try:
+                await self.connect()
+            except Exception as e:
+                raise Exception(f"MCP server reconnect failed: {e}")
+
         if not self.is_connected or not self.proc or not self.proc.stdin:
             raise Exception("MCP client is not connected to server.")
 
@@ -171,19 +180,31 @@ class McpStdioClient:
     async def call_tool(self, name: str, arguments: Dict[str, Any]) -> str:
         """
         Calls a tool on the MCP server. Returns the textual result representation.
+        Supports up to 3 exponential backoff retries on failure.
         """
         params = {
             "name": name,
             "arguments": arguments
         }
-        result = await self.send_request("tools/call", params)
-        content_items = result.get("content", [])
         
-        text_responses = []
-        for item in content_items:
-            if item.get("type") == "text":
-                text_responses.append(item.get("text", ""))
-        return "\n".join(text_responses)
+        max_retries = 3
+        backoff = 1.0
+        for attempt in range(1, max_retries + 1):
+            try:
+                result = await self.send_request("tools/call", params)
+                content_items = result.get("content", [])
+                
+                text_responses = []
+                for item in content_items:
+                    if item.get("type") == "text":
+                        text_responses.append(item.get("text", ""))
+                return "\n".join(text_responses)
+            except Exception as e:
+                logger.warning(f"MCP tool call '{name}' attempt {attempt} failed: {e}")
+                if attempt == max_retries:
+                    raise e
+                await asyncio.sleep(backoff)
+                backoff *= 2.0
 
     async def close(self):
         """

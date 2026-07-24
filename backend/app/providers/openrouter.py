@@ -17,6 +17,7 @@ class OpenRouterProvider(BaseLLMProvider):
       model: str,
       temperature: float = 0.7,
       max_tokens: int = 2048,
+      tools: Optional[List[Dict[str, Any]]] = None,
       api_key: Optional[str] = None,
   ) -> Dict[str, Any]:
     key_to_use = api_key or self.api_key
@@ -70,6 +71,7 @@ class OpenRouterProvider(BaseLLMProvider):
       model: str,
       temperature: float = 0.7,
       max_tokens: int = 2048,
+      tools: Optional[List[Dict[str, Any]]] = None,
       api_key: Optional[str] = None,
   ) -> AsyncGenerator[Dict[str, Any], None]:
     key_to_use = api_key or self.api_key
