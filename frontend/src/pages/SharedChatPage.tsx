@@ -132,7 +132,7 @@ export default function SharedChatPage() {
             onClick={() => navigate('/login')}
             className="px-5 py-2.5 bg-accent hover:bg-accent/80 text-white rounded-xl text-sm font-semibold transition-all"
           >
-            Sign in to Omni
+            Sign in to openChat
           </button>
         </div>
       </div>
@@ -188,7 +188,7 @@ export default function SharedChatPage() {
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent hover:bg-accent/80 text-xs font-semibold text-white transition-all"
             >
               <ExternalLink className="w-3.5 h-3.5" />
-              <span>Try Omni</span>
+              <span>Try openChat</span>
             </button>
           </div>
         </div>
@@ -274,7 +274,7 @@ export default function SharedChatPage() {
       <footer className="border-t border-border bg-[#030712]/80 backdrop-blur-xl">
         <div className="max-w-3xl mx-auto px-4 py-4 flex flex-col sm:flex-row items-center justify-between gap-3">
           <p className="text-xs text-foreground-3">
-            Powered by <span className="text-accent font-semibold">Omni</span> — Agentic AI Workspace
+            Powered by <span className="text-accent font-semibold">openChat</span> — Agentic AI Workspace
           </p>
           <button
             onClick={() => navigate('/login')}

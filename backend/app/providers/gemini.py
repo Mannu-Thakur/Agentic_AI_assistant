@@ -114,7 +114,7 @@ class GeminiProvider(BaseLLMProvider):
   async def generate(
       self,
       messages: List[Dict[str, str]],
-      model: str = "gemini-3.5-flash",
+      model: str = "gemini-2.5-flash",
       temperature: float = 0.7,
       max_tokens: int = 2048,
       tools: Optional[List[Dict[str, Any]]] = None,
@@ -169,12 +169,28 @@ class GeminiProvider(BaseLLMProvider):
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key_to_use}"
     
-    async with httpx.AsyncClient(timeout=30.0) as client:
-      response = await client.post(url, json=payload)
-      if response.status_code != 200:
-        raise Exception(f"Gemini API returned error {response.status_code}: {response.text}")
-      
-      data = response.json()
+    max_retries = 3
+    initial_delay = 1.0
+    data = None
+
+    for attempt in range(max_retries + 1):
+      async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(url, json=payload)
+        if response.status_code == 200:
+          data = response.json()
+          break
+        elif response.status_code in (429, 500, 502, 503, 504) and attempt < max_retries:
+          delay = initial_delay * (2 ** attempt)
+          await asyncio.sleep(delay)
+          continue
+        elif response.status_code == 429:
+          raise Exception(
+              "Gemini rate limit exceeded (HTTP 429). "
+              "You have reached the API request limit. Please wait a moment before trying again or switch to another model."
+          )
+        else:
+          raise Exception(f"Gemini API returned error {response.status_code}: {response.text}")
+
       
       text = ""
       tool_calls = []
@@ -206,7 +222,7 @@ class GeminiProvider(BaseLLMProvider):
   async def generate_stream(
       self,
       messages: List[Dict[str, str]],
-      model: str = "gemini-3.5-flash",
+      model: str = "gemini-2.5-flash",
       temperature: float = 0.7,
       max_tokens: int = 2048,
       tools: Optional[List[Dict[str, Any]]] = None,
@@ -239,35 +255,9 @@ class GeminiProvider(BaseLLMProvider):
         }
         return
 
-      mock_text = f"Hello from Omni Agent Workspace! This is a real-time streamed response from the **Gemini Mock Adapter**. You selected the model **{model}**.\n\nHere is a code snippet demonstration:\n```python\ndef greet(name): \n    print(f'Hello, {{name}}!')\n```"
-      words = mock_text.split(" ")
-      input_tokens = len(str(messages)) // 4
-      output_tokens = 0
-      
-      start_time = time.time()
-      for i, word in enumerate(words):
-        await asyncio.sleep(0.05)
-        text_chunk = word + (" " if i < len(words) - 1 else "")
-        output_tokens += len(text_chunk) // 4
-        yield {
-            "event": "chunk",
-            "text": text_chunk
-        }
-      
-      latency_ms = int((time.time() - start_time) * 1000)
-      yield {
-          "event": "metrics",
-          "metrics": {
-              "model_used": model,
-              "latency_ms": latency_ms,
-              "tokens_input": input_tokens,
-              "tokens_output": output_tokens + 5,
-              "cost_estimate": (input_tokens * 0.000075 + output_tokens * 0.0003) / 1000,
-              "confidence_score": 0.95,
-              "memory_hits": 1
-          }
-      }
-      return
+      raise Exception(
+          "Gemini API key missing or invalid. Please configure your Gemini API key in Settings to stream real-time responses."
+      )
 
     contents, system_instruction = self._convert_messages(messages, images=images)
     payload: Dict[str, Any] = {
@@ -296,36 +286,52 @@ class GeminiProvider(BaseLLMProvider):
     start_time = time.time()
     tool_calls = []
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-      async with client.stream("POST", url, json=payload) as response:
-        if response.status_code != 200:
-          raise Exception(f"Gemini streaming API returned error {response.status_code}")
+    max_retries = 3
+    initial_delay = 1.0
+
+    for attempt in range(max_retries + 1):
+      async with httpx.AsyncClient(timeout=30.0) as client:
+        async with client.stream("POST", url, json=payload) as response:
+          if response.status_code in (429, 500, 502, 503, 504):
+            if attempt < max_retries:
+              delay = initial_delay * (2 ** attempt)
+              await asyncio.sleep(delay)
+              continue
+            else:
+              raise Exception(
+                  "Gemini streaming API rate limit exceeded (HTTP 429). "
+                  "You have reached the API request limit. Please wait a moment before trying again or switch to another model."
+              )
+          elif response.status_code != 200:
+            raise Exception(f"Gemini streaming API returned error {response.status_code}")
           
-        async for line in response.aiter_lines():
-          line = line.strip()
-          if not line or not line.startswith("data: "):
-            continue
-            
-          raw_data = line[6:]
-          try:
-            parsed = json.loads(raw_data)
-            parts = parsed["candidates"][0]["content"]["parts"]
-            for part in parts:
-              if "text" in part:
-                chunk_text = part["text"]
-                output_text += chunk_text
-                yield {
-                    "event": "chunk",
-                    "text": chunk_text
-                }
-              if "functionCall" in part:
-                fc = part["functionCall"]
-                tool_calls.append({
-                    "name": fc["name"],
-                    "arguments": fc.get("args", {})
-                })
-          except (KeyError, IndexError, json.JSONDecodeError):
-            continue
+          async for line in response.aiter_lines():
+            line = line.strip()
+            if not line or not line.startswith("data: "):
+              continue
+              
+            raw_data = line[6:]
+            try:
+              parsed = json.loads(raw_data)
+              parts = parsed["candidates"][0]["content"]["parts"]
+              for part in parts:
+                if "text" in part:
+                  chunk_text = part["text"]
+                  output_text += chunk_text
+                  yield {
+                      "event": "chunk",
+                      "text": chunk_text
+                  }
+                if "functionCall" in part:
+                  fc = part["functionCall"]
+                  tool_calls.append({
+                      "name": fc["name"],
+                      "arguments": fc.get("args", {})
+                  })
+            except (KeyError, IndexError, json.JSONDecodeError):
+              continue
+
+          break
             
     # Yield tool calls if any were collected
     if tool_calls:

@@ -169,12 +169,31 @@
 }
 
 /* ============================================================
-   SCROLLBAR
+   GLOBAL SLEEK SCROLLBAR (Arrow-free modern dark design)
    ============================================================ */
-::-webkit-scrollbar        { width: 5px; height: 5px; }
-::-webkit-scrollbar-track  { background: transparent; }
-::-webkit-scrollbar-thumb  { background: hsl(var(--border-2)); border-radius: 9999px; }
-::-webkit-scrollbar-thumb:hover { background: hsl(var(--foreground-3)); }
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.35);
+}
+::-webkit-scrollbar-button {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
 
 /* ============================================================
    KEYFRAME ANIMATIONS
@@ -211,7 +230,17 @@
 
 @keyframes cursor-blink {
   0%, 100% { opacity: 1; }
-  50%       { opacity: 0; }
+  40%, 60% { opacity: 0; }
+}
+
+@keyframes thinking-shimmer {
+  0%   { background-position: -200% center; }
+  100% { background-position: 200% center; }
+}
+
+@keyframes thinking-dot-wave {
+  0%, 80%, 100% { transform: scaleY(0.4); opacity: 0.4; }
+  40%            { transform: scaleY(1);   opacity: 1; }
 }
 
 @keyframes progress-pulse {
@@ -337,12 +366,13 @@
     mask-image: linear-gradient(to right, black 80%, transparent 100%);
   }
 
-  /* User message bubble — sleek dark glass */
+  /* User message bubble — sleek dark pill / rounded capsule */
   .user-bubble {
-    background: linear-gradient(135deg, hsl(var(--surface-3)) 0%, hsl(var(--surface-2)) 100%);
-    border: 1px solid hsl(var(--border-2));
-    color: hsl(var(--foreground));
-    box-shadow: 0 2px 12px rgba(0,0,0,0.22), inset 0 1px 0 hsl(var(--foreground) / 0.04);
+    background: #2f2f2f;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #ffffff;
+    border-radius: 20px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.3);
   }
 
   /* Assistant message — clean no-bg */
@@ -781,28 +811,32 @@ select {
 .skeleton-avatar { border-radius: 50%; }
 
 /* ============================================================
-   STREAMING CURSOR
+   STREAMING CURSOR — slim elegant vertical line
    ============================================================ */
 .streaming-cursor::after {
-  content: '▋';
-  animation: cursor-blink 0.7s ease-in-out infinite;
-  color: hsl(var(--accent));
-  font-size: 0.95em;
-  margin-left: 1px;
+  content: '';
+  display: inline-block;
+  width: 2px;
+  height: 0.9em;
+  background: hsl(var(--accent));
+  border-radius: 2px;
+  margin-left: 3px;
+  vertical-align: middle;
+  animation: cursor-blink 0.9s ease-in-out infinite;
 }
 
 /* ============================================================
    TYPING INDICATOR DOTS
    ============================================================ */
 .typing-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: hsl(var(--accent) / 0.7);
-  animation: typing-dot 1.4s ease-in-out infinite;
+  width: 3px;
+  height: 16px;
+  border-radius: 3px;
+  background: hsl(var(--accent) / 0.85);
+  animation: thinking-dot-wave 1.2s ease-in-out infinite;
 }
-.typing-dot:nth-child(2) { animation-delay: 0.2s; }
-.typing-dot:nth-child(3) { animation-delay: 0.4s; }
+.typing-dot:nth-child(2) { animation-delay: 0.15s; }
+.typing-dot:nth-child(3) { animation-delay: 0.3s; }
 
 /* ============================================================
    INGESTION PROGRESS STEP
@@ -1034,155 +1068,231 @@ select {
 }
 
 .welcome-logo-ring {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
+  margin-bottom: 1.25rem;
+  transition: transform 0.3s ease;
+}
+
+.welcome-logo-ring:hover {
+  transform: scale(1.08);
 }
 
 .welcome-headline {
-  font-size: 1.65rem;
+  font-size: 1.75rem;
   font-weight: 700;
-  color: hsl(var(--foreground));
-  letter-spacing: -0.025em;
+  letter-spacing: -0.03em;
   line-height: 1.25;
-  max-width: 420px;
+  max-width: 520px;
+  background: linear-gradient(180deg, #ffffff 0%, rgba(255, 255, 255, 0.82) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+:root[data-theme='light'] .welcome-headline {
+  background: linear-gradient(180deg, #0f172a 0%, #334155 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
 }
 
 .welcome-sub {
   font-size: 0.875rem;
   color: hsl(var(--foreground-3));
   line-height: 1.6;
-  max-width: 340px;
-}
-
-/* ============================================================
-   ERROR CARD
-   ============================================================ */
-.error-card {
-  border-radius: 16px;
-  border: 1px solid rgba(244, 63, 94, 0.25);
-  background: linear-gradient(180deg, rgba(244, 63, 94, 0.08) 0%, rgba(15, 23, 42, 0.75) 100%);
-  backdrop-filter: blur(12px);
-  overflow: hidden;
-  box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.35);
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
-}
-
-.light .error-card {
-  border: 1px solid rgba(244, 63, 94, 0.3);
-  background: linear-gradient(180deg, #fff1f2 0%, #ffffff 100%);
-  box-shadow: 0 4px 16px rgba(244, 63, 94, 0.08);
-}
-
-.error-card-inner {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.85rem;
-  padding: 1rem 1.15rem;
-}
-
-.error-card-icon {
-  font-size: 1.1rem;
-  line-height: 1;
-  flex-shrink: 0;
-  margin-top: 2px;
-}
-
-.error-card-title {
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: #fda4af;
-  margin-bottom: 0.35rem;
+  max-width: 480px;
+  font-weight: 450;
   letter-spacing: -0.01em;
 }
 
-.light .error-card-title {
+/* ============================================================
+   ERROR CARD v2 — Compact glassmorphism (ChatGPT/Claude/Gemini style)
+   ============================================================ */
+
+/* Fade + slide-up entry animation */
+.error-card-wrapper {
+  animation: error-fade-slide 0.18s cubic-bezier(0.16, 1, 0.3, 1) both;
+  display: inline-block;
+}
+
+@keyframes error-fade-slide {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Compact glassy pill */
+.error-card-v2 {
+  display: inline-flex;
+  border-radius: 16px;
+  border: 1px solid rgba(244, 63, 94, 0.16);
+  background: rgba(244, 63, 94, 0.06);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  max-width: 480px;
+  transition: border-color 0.15s ease;
+}
+
+.error-card-v2:hover {
+  border-color: rgba(244, 63, 94, 0.28);
+}
+
+.light .error-card-v2 {
+  border: 1px solid rgba(244, 63, 94, 0.18);
+  background: rgba(255, 241, 242, 0.88);
+}
+
+.light .error-card-v2:hover {
+  border-color: rgba(244, 63, 94, 0.32);
+}
+
+/* Inner layout: icon · message · optional action */
+.error-card-v2-inner {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.45rem 0.875rem;
+}
+
+/* Warning icon */
+.error-card-v2-icon {
+  width: 13px;
+  height: 13px;
+  color: #fb7185;
+  flex-shrink: 0;
+  opacity: 0.9;
+}
+
+.light .error-card-v2-icon {
   color: #e11d48;
 }
 
-.error-card-body {
-  font-size: 0.75rem;
+/* Concise message text — 14px, medium weight */
+.error-card-v2-text {
+  font-size: 0.875rem;
+  font-weight: 500;
   color: hsl(var(--foreground-2));
-  line-height: 1.6;
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
-  word-break: break-word;
-  overflow-wrap: anywhere;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
 }
 
-.light .error-card-body {
-  color: #374151;
-}
-
-.error-card-toggle {
-  margin-top: 0.4rem;
-  font-size: 0.7rem;
-  font-weight: 600;
+/* Optional inline action link (e.g. "· Configure") */
+.error-card-v2-action {
+  font-size: 0.8125rem;
+  font-weight: 500;
   color: #fb7185;
-  text-decoration: none;
+  background: none;
+  border: none;
   cursor: pointer;
-  transition: color 0.15s;
+  padding: 0;
+  line-height: 1;
+  transition: color 0.14s ease;
+  white-space: nowrap;
+  text-decoration: none;
+  flex-shrink: 0;
 }
-.error-card-toggle:hover { color: #f43f5e; }
+
+.error-card-v2-action:hover {
+  color: #f43f5e;
+}
+
+.error-card-v2-action:focus-visible {
+  outline: 2px solid rgba(251, 113, 133, 0.6);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+.light .error-card-v2-action {
+  color: #e11d48;
+}
+
+.light .error-card-v2-action:hover {
+  color: #be123c;
+}
+
+/* ── Legacy error-card classes (kept for compat, visually hidden) ── */
+.error-card,
+.error-card-inner,
+.error-card-icon,
+.error-card-title,
+.error-card-body,
+.error-card-toggle {
+  display: none !important;
+}
 
 
 
 /* ============================================================
-   PILL INPUT BAR
+   PILL INPUT BAR (Screenshot Dark Floating Capsule Design)
    ============================================================ */
 .pill-input-bar {
   display: flex;
   align-items: flex-end;
-  gap: 8px;
-  padding: 10px 12px 10px 14px;
-  border-radius: 24px;
-  border: 1px solid hsl(var(--border-2));
-  background: hsl(var(--surface-2));
-  transition: border-color 0.2s, box-shadow 0.2s, border-radius 0.2s;
+  gap: 10px;
+  padding: 10px 14px 10px 16px;
+  border-radius: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: #212121;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+  transition: border-color 0.2s, box-shadow 0.2s, background-color 0.2s, border-radius 0.2s;
 }
 
 .pill-input-bar:focus-within {
-  border-color: hsl(var(--foreground-3) / 0.35);
-  box-shadow: 0 0 0 3px hsl(var(--accent) / 0.06);
+  border-color: rgba(255, 255, 255, 0.25);
+  background: #262626;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
 }
 
 .pill-input-side-btn {
-  width: 30px;
-  height: 30px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  color: hsl(var(--foreground-3));
-  transition: color 0.15s, background 0.15s;
+  color: #a1a1aa;
+  transition: color 0.15s, background 0.15s, transform 0.1s;
   background: transparent;
   border: none;
   cursor: pointer;
 }
 
 .pill-input-side-btn:hover {
-  color: hsl(var(--foreground));
-  background: hsl(var(--surface-3));
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .pill-send-btn {
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  background: hsl(var(--foreground) / 0.9);
-  color: hsl(var(--background));
+  background: #ffffff;
+  color: #000000;
   border: none;
   cursor: pointer;
   transition: background 0.15s, transform 0.1s, opacity 0.15s;
 }
 
 .pill-send-btn:hover:not(:disabled) {
-  background: hsl(var(--foreground));
-  transform: scale(1.05);
+  background: #f4f4f5;
+  transform: scale(1.04);
+}
+
+.pill-send-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+  background: #3f3f46;
+  color: #a1a1aa;
 }
 
 .pill-send-btn:disabled {
@@ -1190,28 +1300,22 @@ select {
   cursor: not-allowed;
 }
 
-/* Welcome headline — cleaner for the pill layout */
-.welcome-headline {
-  font-size: 1.5rem;
-  font-weight: 600;
-  color: hsl(var(--foreground));
-  letter-spacing: -0.02em;
-  line-height: 1.3;
-  max-width: 380px;
-}
+
 
 /* ============================================================
-   STREAMING CURSOR — only show at end of text
+   STREAMING CURSOR — slim vertical line, only at end of text
    ============================================================ */
 .streaming-cursor > *:last-child::after,
 .streaming-cursor::after {
-  content: '▋';
-  animation: cursor-blink 0.7s ease-in-out infinite;
-  color: hsl(var(--accent));
-  font-size: 0.9em;
-  margin-left: 2px;
+  content: '';
+  display: inline-block;
+  width: 2px;
+  height: 0.85em;
+  background: hsl(var(--accent));
+  border-radius: 2px;
+  margin-left: 3px;
   vertical-align: middle;
-  display: inline;
+  animation: cursor-blink 0.9s ease-in-out infinite;
 }
 /* Don't show the generic one if we added to last-child */
 .streaming-cursor:has(> *:last-child)::after {
@@ -1296,6 +1400,66 @@ select {
 
 .scrollbar-hide::-webkit-scrollbar {
   display: none;                 /* Chrome, Edge, Safari */
+}
+
+/* ============================================================
+   CUSTOM PREMIUM SCROLLBARS
+   ============================================================ */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.25);
+  border-radius: 9999px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.4);
+}
+
+.custom-scrollbar::-webkit-scrollbar-button {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+.custom-sidebar-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
+
+.custom-sidebar-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.custom-sidebar-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-sidebar-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 9999px;
+}
+
+.custom-sidebar-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.35);
+}
+
+.custom-sidebar-scrollbar::-webkit-scrollbar-button {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
 }
 
 /* ============================================================
@@ -1437,105 +1601,112 @@ select {
   position: relative;
 }
 
-/* The floating card */
-.questions-popup {
+/* Premium Light Dark Grey Glassmorphic Popups */
+.questions-popup,
+.more-options-popup {
   position: absolute;
   right: 0;
-  top: calc(100% + 6px);
-  width: 296px;
-  background: hsl(var(--surface));
-  border: 1px solid hsl(var(--border-2));
-  border-radius: 16px;
+  top: calc(100% + 8px);
+  background: rgba(18, 20, 26, 0.94);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 20px;
   box-shadow:
-    0 24px 64px rgba(0, 0, 0, 0.55),
-    0 4px 16px rgba(0, 0, 0, 0.3),
-    inset 0 1px 0 hsl(255 255% 255% / 0.04);
-  display: flex;
-  flex-direction: column;
+    0 20px 50px rgba(0, 0, 0, 0.7),
+    0 4px 18px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  transform-origin: top right;
+  animation: popover-scale-in 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
   z-index: 200;
-  animation: popup-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-/* Invisible bridge that fills the gap between button and popup so hover doesn't break */
-.questions-popup::before {
-  content: '';
-  position: absolute;
-  top: -10px;
-  left: 0;
-  right: 0;
-  height: 10px;
+.questions-popup {
+  width: 320px;
 }
 
-@keyframes popup-in {
-  from { opacity: 0; transform: translateY(-8px) scale(0.96); }
-  to   { opacity: 1; transform: translateY(0)    scale(1); }
+@keyframes popover-scale-in {
+  0% {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.94);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .questions-popup-header {
-  padding: 11px 16px 9px;
-  font-size: 10px;
+  padding: 14px 18px 12px;
+  font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.07em;
-  color: hsl(var(--foreground-3));
-  border-bottom: 1px solid hsl(var(--border) / 0.6);
+  letter-spacing: 0.08em;
+  color: rgba(255, 255, 255, 0.7);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   flex-shrink: 0;
 }
 
 .questions-popup-list {
   overflow-y: auto;
   max-height: 380px;
-  padding: 5px 5px;
+  padding: 6px;
   scrollbar-width: thin;
-  scrollbar-color: hsl(var(--border-2)) transparent;
-}
-
-.questions-popup-list::-webkit-scrollbar { width: 4px; }
-.questions-popup-list::-webkit-scrollbar-track { background: transparent; }
-.questions-popup-list::-webkit-scrollbar-thumb {
-  background: hsl(var(--border-2));
-  border-radius: 4px;
+  scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
 }
 
 .questions-popup-item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 9px 12px;
-  border-radius: 11px;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 14px;
   cursor: pointer;
-  transition: background 0.12s ease;
+  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
   text-align: left;
   width: 100%;
-  border: none;
+  border: 1px solid transparent;
   background: transparent;
+  color: rgba(255, 255, 255, 0.85);
 }
 
 .questions-popup-item:hover {
-  background: hsl(var(--surface-2));
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.08);
+  transform: translateX(2px);
+  color: #ffffff;
 }
 
 .questions-popup-item.active {
-  background: hsl(var(--accent) / 0.12);
+  background: rgba(59, 130, 246, 0.16);
+  border-color: rgba(59, 130, 246, 0.35);
+  color: #60a5fa;
+}
+
+.questions-popup-item-num {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.6);
+  font-family: var(--font-mono, monospace);
 }
 
 .questions-popup-item-text {
   font-size: 13px;
-  line-height: 1.35;
-  color: hsl(var(--foreground));
+  line-height: 1.4;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   flex: 1;
   min-width: 0;
-}
-
-.questions-popup-item-num {
-  flex-shrink: 0;
-  font-size: 10px;
-  font-weight: 600;
-  color: hsl(var(--foreground-3) / 0.7);
-  font-variant-numeric: tabular-nums;
 }
 
 /* Legacy sidebar classes kept for compat but unused */

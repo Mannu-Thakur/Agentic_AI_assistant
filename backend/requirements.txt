@@ -34,6 +34,7 @@ langgraph>=0.0.26
 chromadb>=0.4.0
 openai>=1.0.0
 requests>=2.31.0
+duckduckgo-search>=6.0.0
 
 # ── Document Parsing ─────────────────────────────────────────────────────────
 pypdf>=3.12.0

@@ -17,17 +17,18 @@ import KeyboardShortcutsModal from '../components/ui/KeyboardShortcutsModal';
 import GlobalSearch from '../components/ui/GlobalSearch';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { ChatInput } from '../components/chat/ChatInput';
+import { TimeWidget } from '../components/chat/TimeWidget';
 import { ToastContainer } from '../components/ui/Toast';
 import { useToast } from '../hooks/useToast';
 import {
-  Send, Upload, Plus, Terminal, Database, Lock,
+  Upload, Plus, Terminal, Database, Lock,
   Sparkles, Cpu, X, CheckCircle2, Copy, Check,
   RefreshCw, ChevronLeft, ChevronRight,
   Search, ArrowDown,
   MessageSquare, Pencil, Trash2, Pin,
   BookOpen, Share2, Download, FileJson, FileText,
   MoreHorizontal, Archive, FolderClosed, ChevronDown, Files,
-  Settings, LogOut, ListOrdered, KeyRound, GitBranch, Link
+  Settings, LogOut, ListOrdered, GitBranch, Link
 } from 'lucide-react';
 
 // ─────────────────────────────────────────────────────────────
@@ -60,43 +61,98 @@ function formatRelativeTime(dateStr?: string) {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
-// ── Helper: Format Clean Chat Title (ChatGPT Inspired) ───────────
+// ── Helper: Format Clean Chat Title — Smart & Descriptive ──────────
 function formatChatTitle(rawTitle?: string): string {
-  if (!rawTitle || rawTitle.trim() === '' || rawTitle === 'New Chat') {
-    return 'New Chat';
+  if (!rawTitle || rawTitle.trim() === '') return 'New Chat';
+  let t = rawTitle.trim();
+  const wc = t.split(/\s+/).filter(Boolean).length;
+  if (wc <= 4 && !/^(hi|hello|hey|can you|what is|how to|i want|please|explain|tell me)/i.test(t)) {
+    return t.charAt(0).toUpperCase() + t.slice(1);
   }
-
-  let cleaned = rawTitle.trim();
-
-  // Custom replacements for known prompt patterns
-  if (/^am mannu$/i.test(cleaned) || /^i am /i.test(rawTitle)) {
-    return 'Introduction';
-  }
-  if (/^keys models gemini/i.test(cleaned) || /gemini.*flash/i.test(rawTitle)) {
-    return 'Gemini Models';
-  }
-  if (/explain tcp vs udp/i.test(rawTitle)) {
-    return 'TCP vs UDP';
-  }
-  if (/langgraph memory/i.test(rawTitle)) {
-    return 'LangGraph Memory';
-  }
-
-  // Strip greetings and common conversational filler prefixes
-  cleaned = cleaned.replace(/^(hi|hello|hey|greetings|can you|could you|please|explain everything about|explain|tell me about|what is|how to|i want to|how do i)\s+/i, '');
-
-  // Trim trailing punctuation
-  cleaned = cleaned.replace(/[\.\?\!]+$/, '').trim();
-
-  // Limit to 2–5 words max
-  const words = cleaned.split(/\s+/).filter(Boolean);
-  if (words.length > 5) {
-    cleaned = words.slice(0, 4).join(' ');
-  }
-
-  if (!cleaned) return rawTitle;
-
-  return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+  const fillers = [
+    /^(hi+|hello|hey there|hey|greetings|good (morning|afternoon|evening)),?\s*/i,
+    /^(can you (please |kindly )?|could you (please |kindly )?|would you (please |kindly )?)/i,
+    /^(please |kindly )/i,
+    /^(i (want|need|would like|am looking) to (know|understand|learn|find out|ask about|discuss|talk about))\s*/i,
+    /^(i (want|need|would like) (a|an|to))\s*/i,
+    /^(tell me (everything |all )?about|tell me)\s*/i,
+    /^(explain (everything about|all about|in detail|to me)?)\s*/i,
+    /^(what (is|are|does|do|was|were|should|can|will|would)|what'?s)\s*/i,
+    /^(how (do|does|can|should|to|is|are|was|were))\s*/i,
+    /^(why (do|does|is|are|was|were|did|should|would))\s*/i,
+    /^(who (is|are|was|were|did|created|invented|made|wrote))\s*/i,
+    /^(when (was|were|is|are|did|do|does|should|will))\s*/i,
+    /^(where (is|are|was|were|can|do|does|did|should|will))\s*/i,
+    /^(give me (a|an|some|the)? ?(list|overview|summary|examples?|explanation|breakdown|details?) (of|about|on|for)?)\s*/i,
+    /^(write (me )?(a|an|the)?)\s*/i,
+    /^(create (me )?(a|an|the)?)\s*/i,
+    /^(generate (me )?(a|an|the)?)\s*/i,
+    /^(make (me )?(a|an|the)?)\s*/i,
+    /^(help me (with|to|understand|learn|fix|debug|write|create|build|find))\s*/i,
+    /^(i am |i'm |am |my name is )/i,
+    /^(show me (how to|a|an|the|some)?)\s*/i,
+    /^(teach me (about|how to|the)?)\s*/i,
+    /^(i have a question (about|on|regarding)?)\s*/i,
+    /^(i need help (with|on|understanding|about)?)\s*/i,
+    /^(discuss|describe|list|summarize|compare) (the|a|an)?\s*/i,
+    /^(difference between)\s*/i,
+  ];
+  let prev = '';
+  while (prev !== t) { prev = t; for (const rx of fillers) t = t.replace(rx, '').trim(); }
+  t = t.replace(/\s*(please|thanks?|thank you|asap|in detail|step by step)[.!?]*$/i,'').replace(/[?.!,;:]+$/,'').trim();
+  const tech: [RegExp, string][] = [
+    [/react\s*(js)?.*hook/i,'React Hooks'],[/react\s*(js)?.*state/i,'React State'],
+    [/react\s*(js)?.*context/i,'React Context'],[/react\s*(js)?.*component/i,'React Components'],
+    [/react\s*(js)?.*router/i,'React Router'],[/next\.?js/i,'Next.js'],[/node\.?js/i,'Node.js'],
+    [/typescript/i,'TypeScript'],[/javascript/i,'JavaScript'],
+    [/python.*async/i,'Python Async'],[/python.*pandas/i,'Python Pandas'],
+    [/python.*flask/i,'Python Flask'],[/python.*django/i,'Python Django'],
+    [/machine learning/i,'Machine Learning'],[/deep learning/i,'Deep Learning'],
+    [/neural network/i,'Neural Networks'],[/large language model/i,'LLMs'],
+    [/sql.*query/i,'SQL Query'],[/mongodb/i,'MongoDB'],[/postgresql/i,'PostgreSQL'],
+    [/docker.*container/i,'Docker Containers'],[/kubernetes/i,'Kubernetes'],
+    [/rest.*api/i,'REST API'],[/graphql/i,'GraphQL'],[/tcp.*udp/i,'TCP vs UDP'],
+    [/git.*merge/i,'Git Merge'],[/git.*rebase/i,'Git Rebase'],
+    [/css.*flexbox/i,'CSS Flexbox'],[/css.*grid/i,'CSS Grid'],
+    [/langgraph/i,'LangGraph'],[/langchain/i,'LangChain'],
+    [/gemini/i,'Gemini AI'],[/\bgpt\b/i,'GPT'],[/claude/i,'Claude AI'],[/openai/i,'OpenAI'],
+    [/sort.*algorithm/i,'Sorting Algorithms'],[/binary search/i,'Binary Search'],
+    [/dynamic programming/i,'Dynamic Programming'],
+  ];
+  for (const [rx, label] of tech) { if (rx.test(rawTitle)) return label; }
+  const topics: [RegExp, string][] = [
+    [/\bresume\b.*\b(write|creat|build|improv)/i,'Resume Writing'],
+    [/\bcover letter\b/i,'Cover Letter'],[/\bsalary\b.*\bnegotiat/i,'Salary Negotiation'],
+    [/\bjob interview/i,'Job Interview Tips'],[/\bbusiness plan\b/i,'Business Plan'],
+    [/\bmarketing (strategy|plan|campaign)/i,'Marketing Strategy'],
+    [/\bemail.*\b(write|draft|compos)/i,'Email Writing'],[/\bblog.*\b(post|write|creat)/i,'Blog Writing'],
+    [/\bstory.*\b(write|creat|generat)/i,'Story Writing'],[/\bpoem\b/i,'Poetry'],
+    [/\bessay\b/i,'Essay Writing'],[/\btranslat/i,'Translation'],[/\bgrammar\b/i,'Grammar Help'],
+    [/\bweight loss\b/i,'Weight Loss'],[/\bfitness.*plan\b/i,'Fitness Plan'],
+    [/\bdiet.*plan\b/i,'Diet Plan'],[/\bmental health\b/i,'Mental Health'],
+    [/\bmeditation\b/i,'Meditation'],[/\bcalori/i,'Calorie Tracking'],
+    [/\brecipe\b/i,'Recipe Ideas'],[/\bcooking\b/i,'Cooking Tips'],
+    [/\btravel.*plan\b/i,'Travel Planning'],[/\bvisa\b/i,'Visa Process'],
+    [/\bbudget\b.*\b(plan|creat|manag)/i,'Budget Planning'],[/\binvest/i,'Investment Tips'],
+    [/\bstock market\b/i,'Stock Market'],[/\bcryptocurrency\b/i,'Cryptocurrency'],
+    [/\bmath\b.*\b(problem|solv|help)/i,'Math Problem'],[/\bcalculus\b/i,'Calculus'],
+    [/\balgebra\b/i,'Algebra'],[/\bstatistics\b/i,'Statistics'],[/\bphysics\b/i,'Physics'],
+    [/\bchemistry\b/i,'Chemistry'],[/\bbiology\b/i,'Biology'],
+    [/\bworld war\b/i,'World War History'],[/\bclimate change\b/i,'Climate Change'],
+    [/\bartificial intelligence\b/i,'Artificial Intelligence'],[/\bblockchain\b/i,'Blockchain'],
+    [/\bcybersecurity\b/i,'Cybersecurity'],[/\bcloud computing\b/i,'Cloud Computing'],
+    [/\baws\b/i,'AWS'],[/\bazure\b/i,'Microsoft Azure'],[/\bintroduction\b/i,'Introduction'],
+  ];
+  for (const [rx, label] of topics) { if (rx.test(rawTitle)) return label; }
+  const acronyms = new Set(['api','ui','ux','ai','ml','sql','css','html','http','tcp','udp','url','jwt','oauth','ci','cd','aws','gcp','llm','nlp','gpu','cpu','ram','ios','pdf','csv','json','xml','rest','ssh']);
+  const stopW = new Set(['a','an','the','and','or','but','in','on','at','to','for','of','with','by','from','is','it','its','this','that','i','me','my','we','our','you','your','they','their','be','been','have','has','had','do','does','did','will','would','could','should','may','might','shall']);
+  const words = t.split(/\s+/).filter(Boolean);
+  const meaningful = words.filter((w, i) => i === 0 || !stopW.has(w.toLowerCase()));
+  const result = meaningful.slice(0, 4).map((w) => {
+    const lower = w.toLowerCase().replace(/[^a-z0-9]/g, '');
+    return acronyms.has(lower) ? lower.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+  }).join(' ');
+  return result || t.charAt(0).toUpperCase() + t.slice(1);
 }
 
 // ── Helper: Group Conversations by Date ──────────────────────────
@@ -379,16 +435,30 @@ function CitedContent({
 }
 
 // ─────────────────────────────────────────────────────────────
-//  Typing indicator
+//  Typing indicator — premium GPT-style shimmer
 // ─────────────────────────────────────────────────────────────
 function TypingIndicator() {
   return (
-    <div className="px-4 py-3 rounded-2xl rounded-bl-sm bg-surface-2 border border-border text-sm inline-flex items-center gap-2">
-      <span className="text-xs text-foreground-3 font-medium">Thinking</span>
-      <span className="flex gap-1.5 items-center h-4">
-        <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-bounce" style={{ animationDelay: '0ms' }} />
-        <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-bounce" style={{ animationDelay: '150ms' }} />
-        <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-bounce" style={{ animationDelay: '300ms' }} />
+    <div className="inline-flex items-center gap-2.5 px-1 py-1">
+      {/* Wave bars */}
+      <span className="flex gap-[3px] items-center h-4">
+        <span className="typing-dot" style={{ animationDelay: '0ms' }} />
+        <span className="typing-dot" style={{ animationDelay: '0.15s' }} />
+        <span className="typing-dot" style={{ animationDelay: '0.3s' }} />
+      </span>
+      {/* Shimmer "Thinking" text */}
+      <span
+        className="text-xs font-medium"
+        style={{
+          background: 'linear-gradient(90deg, hsl(var(--foreground-3)) 0%, hsl(var(--foreground)) 40%, hsl(var(--foreground-3)) 80%)',
+          backgroundSize: '200% auto',
+          WebkitBackgroundClip: 'text',
+          WebkitTextFillColor: 'transparent',
+          backgroundClip: 'text',
+          animation: 'thinking-shimmer 2s linear infinite',
+        }}
+      >
+        Thinking
       </span>
     </div>
   );
@@ -422,27 +492,66 @@ function ActionBtn({
 function getTimeGreeting(name: string) {
   const h = new Date().getHours();
   const t = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
-  if (h >= 5 && h < 12) return {
-    headline: name ? `Good morning, ${name}.` : `Good morning.`,
-    sub: 'Fresh start, fresh ideas — what are we tackling today?',
+  const displayName = name ? name : 'Creator';
+
+  const pick = (list: Array<{ headline: string; sub: string }>) => {
+    const seed = (h * 37 + new Date().getMinutes() + new Date().getSeconds()) % list.length;
+    return list[seed];
   };
-  if (h >= 12 && h < 17) return {
-    headline: name ? `Good afternoon, ${name}.` : `Good afternoon.`,
-    sub: "Peak hours. Let's make every minute count.",
-  };
-  if (h >= 17 && h < 21) return {
-    headline: name ? `Good evening, ${name}.` : `Good evening.`,
-    sub: "Day's winding down — what's still on your mind?",
-  };
-  if (h >= 21) return {
-    headline: name ? `Good to see you, ${name}.` : `Good to see you.`,
-    sub: "Most people are asleep. We're just warming up.",
-  };
-  // 0–4 AM deep night
-  return {
-    headline: name ? `Still up, ${name}?` : `Still at it?`,
-    sub: `It's ${t} and you're still going — respect.`,
-  };
+
+  // Morning (5 AM – 11:59 AM)
+  if (h >= 5 && h < 12) {
+    return pick([
+      { headline: `Systems online, ${displayName}.`, sub: 'Clear mind, high bandwidth. What are we engineering today?' },
+      { headline: `Morning, ${displayName}.`, sub: `Fresh context at ${t} — let's set the pace.` },
+      { headline: `Rise & execute, ${displayName}.`, sub: 'Turning vision into clean, sharp execution.' },
+      { headline: `Fresh canvas, ${displayName}.`, sub: 'Ready to write the next chapter?' },
+      { headline: `A new horizon, ${displayName}.`, sub: 'Unfiltered potential. Where do we begin?' },
+    ]);
+  }
+
+  // Afternoon (12 PM – 4:59 PM)
+  if (h >= 12 && h < 17) {
+    return pick([
+      { headline: `Peak velocity, ${displayName}.`, sub: 'In the zone. Let\'s conquer the complex tasks.' },
+      { headline: `Good afternoon, ${displayName}.`, sub: 'Momentum is high. What\'s our next breakthrough?' },
+      { headline: `High voltage, ${displayName}.`, sub: 'Pure execution, line by line.' },
+      { headline: `Flow state, ${displayName}.`, sub: 'Precision in focus. What are we building?' },
+      { headline: `Midday rhythm, ${displayName}.`, sub: 'Deep work mode activated.' },
+    ]);
+  }
+
+  // Evening (5 PM – 8:59 PM)
+  if (h >= 17 && h < 21) {
+    return pick([
+      { headline: `Evening pulse, ${displayName}.`, sub: 'Refining raw ideas into polished reality.' },
+      { headline: `Golden hour, ${displayName}.`, sub: 'The day wraps, but the vision stays crystal clear.' },
+      { headline: `Good evening, ${displayName}.`, sub: 'Let me take over the heavy cognitive lifting.' },
+      { headline: `Twilight session, ${displayName}.`, sub: 'Unwind while we map out the big picture.' },
+      { headline: `Sharp focus, ${displayName}.`, sub: 'Finalizing achievements before dusk.' },
+    ]);
+  }
+
+  // Late Evening / Night (9 PM – 11:59 PM)
+  if (h >= 21) {
+    return pick([
+      { headline: `Night ops, ${displayName}.`, sub: 'Late hours, peak creative freedom.' },
+      { headline: `Starlight focus, ${displayName}.`, sub: 'Zero noise. Pure, uninterrupted potential.' },
+      { headline: `Quiet hours, ${displayName}.`, sub: 'The world slows down; our ideas speed up.' },
+      { headline: `Unwind & create, ${displayName}.`, sub: 'Crafting brilliance in the quiet of the night.' },
+      { headline: `Midnight horizon, ${displayName}.`, sub: 'The best innovations happen after dark.' },
+    ]);
+  }
+
+  // Deep Midnight / Early Hours (12 AM – 4:59 AM)
+  return pick([
+    { headline: `Ghost hours, ${displayName}.`, sub: `It's ${t} — silence is where legendary work is born.` },
+    { headline: `Still cookin', ${displayName}?`, sub: `It's ${t} and your drive is relentless — respect.` },
+    { headline: `Midnight mode, ${displayName}.`, sub: 'Zero distractions. Pure architectural focus.' },
+    { headline: `Insomnia & intellect, ${displayName}.`, sub: 'Deep night flow unlocked. What are we solving?' },
+    { headline: `Building in the dark, ${displayName}.`, sub: 'The world sleeps while we shape the future.' },
+    { headline: `Late night frequency, ${displayName}.`, sub: `Clock reads ${t}. High intellect mode engaged.` },
+  ]);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -459,7 +568,7 @@ function parseErrorFromContent(content: string): { clean: string; error: string 
     else cleanLines.push(line);
   }
   const clean = cleanLines.join('\n').trim();
-  const error = errLines.length ? errLines.join(' ') : null;
+  const error = errLines.length ? 'Request failed' : null;
   return { clean, error };
 }
 
@@ -492,88 +601,7 @@ function formatShortTitle(text: string): string {
   return result.length > 35 ? result.slice(0, 35) + '…' : result || 'New Chat';
 }
 
-function ErrorCard({ message, onRetry }: { message: string; onRetry?: () => void }) {
-  const [showDetails, setShowDetails] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const navigate = useNavigate();
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(message);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  const needsKeyConfig = message.toLowerCase().includes('key') || message.toLowerCase().includes('auth') || message.toLowerCase().includes('provider') || message.toLowerCase().includes('unauthorized');
-
-  // Short, clean, elegant summary text (ChatGPT style)
-  const cleanSummary = (() => {
-    const m = message.toLowerCase();
-    if (m.includes('missing api key') || m.includes('missing or unconfigured api key'))
-      return 'API key required for the selected model';
-    if (m.includes('invalid api key') || m.includes('invalid key') || m.includes('verification failed'))
-      return 'Invalid API key. Please check your key in Settings';
-    if (m.includes('quota') || m.includes('402') || m.includes('credits'))
-      return 'Provider billing quota or credits exceeded';
-    if (m.includes('429') || m.includes('rate limit'))
-      return 'Rate limit reached. Please wait a moment';
-    if (m.includes('backend unavailable') || m.includes('failed to connect') || m.includes('connection lost'))
-      return 'Unable to connect to the server';
-    return 'There was an error generating a response';
-  })();
-
-  return (
-    <div className="my-3 flex flex-col items-start gap-2.5 text-left">
-      <p className="text-sm font-medium text-foreground/90 tracking-tight leading-relaxed">
-        {cleanSummary}
-      </p>
-
-      <div className="flex items-center gap-2 flex-wrap">
-        {onRetry && (
-          <button
-            onClick={onRetry}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-md shadow-emerald-900/20 transition-all hover:scale-[1.02] active:scale-[0.98]"
-          >
-            <RefreshCw className="w-3.5 h-3.5" />
-            Regenerate
-          </button>
-        )}
-
-        {needsKeyConfig && (
-          <button
-            onClick={() => navigate('/settings?tab=models')}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-xs font-semibold shadow-md shadow-violet-900/20 transition-all hover:scale-[1.02] active:scale-[0.98]"
-          >
-            <KeyRound className="w-3.5 h-3.5" />
-            Configure Key
-          </button>
-        )}
-
-        <button
-          onClick={() => setShowDetails(!showDetails)}
-          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium text-muted-foreground hover:text-foreground transition-colors"
-        >
-          {showDetails ? 'Hide details' : 'Details'}
-        </button>
-      </div>
-
-      {showDetails && (
-        <div className="mt-1 w-full max-w-xl rounded-xl border border-border bg-black/40 p-3 font-mono text-[11px] text-muted-foreground leading-relaxed overflow-x-auto relative group">
-          <div className="flex items-center justify-between gap-2 mb-1.5 pb-1 border-b border-white/10">
-            <span className="text-[10px] uppercase font-semibold text-rose-400">Technical Details</span>
-            <button
-              onClick={handleCopy}
-              className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors"
-            >
-              {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-              {copied ? 'Copied' : 'Copy Trace'}
-            </button>
-          </div>
-          <p className="whitespace-pre-wrap break-words">{message}</p>
-        </div>
-      )}
-    </div>
-  );
-}
 
 // ─────────────────────────────────────────────────────────────
 //  Main ChatPage
@@ -632,26 +660,21 @@ export default function ChatPage() {
     if (!hasLocal && !backendSaved) {
       return `Authentication failed - Missing or empty API key for provider ${providerId.toUpperCase()}. Update it in Settings.`;
     }
-    const normalizedModel = modelId.toLowerCase();
-    const isGeminiModel = normalizedModel.includes('gemini');
-    const isOpenAIModel = normalizedModel.includes('gpt') || normalizedModel.includes('o1-');
-    const isClaudeModel = normalizedModel.includes('claude');
-    const isDeepseekModel = normalizedModel.includes('deepseek');
-    const isGroqModel = normalizedModel.includes('llama') || normalizedModel.includes('mixtral');
-    if (providerId === 'google' && !isGeminiModel) {
-      return `Provider mismatch - Model "${modelId}" does not belong to provider GOOGLE/GEMINI.`;
-    }
-    if (providerId === 'openai' && !isOpenAIModel) {
-      return `Provider mismatch - Model "${modelId}" does not belong to provider OPENAI.`;
-    }
-    if (providerId === 'anthropic' && !isClaudeModel) {
-      return `Provider mismatch - Model "${modelId}" does not belong to provider ANTHROPIC.`;
-    }
-    if (providerId === 'deepseek' && !isDeepseekModel) {
-      return `Provider mismatch - Model "${modelId}" does not belong to provider DEEPSEEK.`;
-    }
-    if (providerId === 'groq' && !isGroqModel) {
-      return `Provider mismatch - Model "${modelId}" does not belong to provider GROQ.`;
+    // ── Real-time provider/model validation using live API data ──────────────
+    // If the provider has a live model list fetched from the API, verify the
+    // selected model actually belongs there. Skip keyword-matching entirely —
+    // models like "deep-research-max-preview-04-2026" have no provider keywords.
+    if (matchingProv && matchingProv.availableModels && matchingProv.availableModels.length > 0) {
+      if (!matchingProv.availableModels.includes(modelId)) {
+        // Model not in provider's live list — check all other verified providers
+        const ownerProv = providers.find(
+          (p) => p.status === 'VERIFIED' && p.availableModels.includes(modelId)
+        );
+        if (ownerProv && ownerProv.id !== providerId) {
+          return `Provider mismatch - Model "${modelId}" belongs to provider ${ownerProv.id.toUpperCase()}, not ${providerId.toUpperCase()}. Please select the correct provider.`;
+        }
+        // Model not found in any provider — could be a custom/new model, allow it through
+      }
     }
     return null;
   }, [token, providers]);
@@ -673,8 +696,10 @@ export default function ChatPage() {
   const [editingMsgId, setEditingMsgId]           = useState<string | null>(null);
   const [selectedUserFile, setSelectedUserFile]   = useState<{ name: string; content: string } | null>(null);
   const [editValue, setEditValue]                 = useState('');
+  const [editImages, setEditImages]               = useState<{ id: string; base64: string; mimeType: string; previewUrl: string }[]>([]);
   const [connectedChat, setConnectedChat]         = useState<{ id: string; title: string } | null>(null);
   const editTextareaRef                           = useRef<HTMLTextAreaElement>(null);
+  const editFileInputRef                          = useRef<HTMLInputElement>(null);
   // Guard: prevent concurrent new-chat creation
   const creatingChatRef                        = useRef(false);
   const skipFetchRef                           = useRef(false);
@@ -684,10 +709,6 @@ export default function ChatPage() {
   const [questionsPopupOpen, setQuestionsPopupOpen] = useState(false);
   const popupLeaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [highlightedMsgId, setHighlightedMsgId] = useState<string | null>(null);
-  // ── Chat minimap scroll state ─────────────────────────────────
-  const [minimapThumbTop, setMinimapThumbTop]   = useState(0);
-  const [minimapThumbHeight, setMinimapThumbHeight] = useState(20);
-  const minimapTrackRef                         = useRef<HTMLDivElement>(null);
   // ── Per-chat document list ────────────────────────────────────
   const [chatDocuments, setChatDocuments]       = useState<any[]>([]);
 
@@ -714,6 +735,7 @@ export default function ChatPage() {
   // ── More Dropdowns & Archiving ───────────────────────────────
   const [menuOpen, setMenuOpen]               = useState(false);
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
+  const [modelSearchQuery, setModelSearchQuery]   = useState('');
   const [archivedChats, setArchivedChats]     = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem('omni_archived_chats') || '[]'); } catch { return []; }
   });
@@ -848,11 +870,10 @@ export default function ChatPage() {
         setChats(loadedChats);
 
         // Active conversation restoration logic on initial page load:
-        if (urlChatId && loadedChats.some((c: any) => c.id === urlChatId)) {
+        if (urlChatId) {
           setActiveChatId(urlChatId);
-        } else if (urlChatId && !loadedChats.some((c: any) => c.id === urlChatId)) {
+        } else {
           setActiveChatId(null);
-          navigate('/', { replace: true });
         }
       })
       .catch(() => {});
@@ -861,10 +882,11 @@ export default function ChatPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
-  // Route URL synchronization for browser Back/Forward navigation
+  // Route URL synchronization for browser navigation and URL params
   useEffect(() => {
-    if (urlChatId && urlChatId !== activeChatId) {
-      setActiveChatId(urlChatId);
+    const targetChatId = urlChatId || null;
+    if (targetChatId !== activeChatId) {
+      setActiveChatId(targetChatId);
     }
   }, [urlChatId, activeChatId, setActiveChatId]);
 
@@ -909,16 +931,6 @@ export default function ChatPage() {
                 : m.imagePreviewUrls,
           }));
 
-          const liveMsgs = useChatStore.getState().messages;
-          const cachedMsgs = useChatStore.getState().messageCache[activeChatId];
-          const hasLocalContent = (liveMsgs && liveMsgs.length > 0) || (cachedMsgs && cachedMsgs.length > 0);
-
-          // DO NOT overwrite active in-memory messages if backend returns fewer messages than local
-          if (hasLocalContent && hydratedMsgs.length < (liveMsgs?.length || 0)) {
-            setMessagesLoading(false);
-            return;
-          }
-
           setMessagesForChat(activeChatId, hydratedMsgs);
           setMessagesLoading(false);
         })
@@ -950,17 +962,11 @@ export default function ChatPage() {
     if (!lastAssistantMsg) setSelectedMessageId(null);
   }, [messages, isStreaming, lastAssistantMsg, selectedMessageId]);
 
-  // ── Scroll detection + minimap sync ──────────────────────────
+  // ── Scroll detection ─────────────────────────────────────────
   const handleScroll = () => {
     const el = chatScrollRef.current;
     if (!el) return;
     setShowScrollBtn(el.scrollHeight - el.scrollTop - el.clientHeight > 120);
-    // Update minimap thumb
-    const scrollable = el.scrollHeight - el.clientHeight;
-    const scrollFrac = scrollable > 0 ? el.scrollTop / scrollable : 0;
-    const thumbH = Math.max(16, (el.clientHeight / el.scrollHeight) * 100);
-    setMinimapThumbHeight(thumbH);
-    setMinimapThumbTop(scrollFrac * (100 - thumbH));
   };
   const scrollToBottom = () => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
 
@@ -972,16 +978,6 @@ export default function ChatPage() {
       setHighlightedMsgId(msgId);
       setTimeout(() => setHighlightedMsgId(null), 1200);
     }
-  }, []);
-
-  // ── Minimap click-to-scroll ───────────────────────────────────
-  const handleMinimapClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    const el = chatScrollRef.current;
-    const track = minimapTrackRef.current;
-    if (!el || !track) return;
-    const rect = track.getBoundingClientRect();
-    const frac = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
-    el.scrollTop = frac * (el.scrollHeight - el.clientHeight);
   }, []);
 
   // ── User questions list (for Q&A nav) ────────────────────────
@@ -1058,9 +1054,18 @@ export default function ChatPage() {
   const handleStopGeneration = () => { abortControllerRef.current?.abort(); setIsStreaming(false); };
 
   // ── Send message ─────────────────────────────────────────────
-  const handleSendMessage = useCallback(async (text: string, imagesToSend: { base64: string; mimeType: string }[] = []) => {
-    const trimmed = text.trim();
-    if ((!trimmed && imagesToSend.length === 0) || isStreaming) return;
+  const handleSendMessage = useCallback(async (
+    text: string,
+    imagesToSend: { base64: string; mimeType: string }[] = [],
+    attachedFiles: File[] = []
+  ) => {
+    let trimmed = text.trim();
+    if ((!trimmed && imagesToSend.length === 0 && attachedFiles.length === 0) || isStreaming) return;
+
+    if (!trimmed && attachedFiles.length > 0) {
+      const fileNames = attachedFiles.map((f) => f.name).join(', ');
+      trimmed = `[Uploaded Document: ${fileNames}] Please analyze and summarize the attached document content.`;
+    }
 
     let chatId = activeChatId;
     let isNewChat = false;
@@ -1069,6 +1074,26 @@ export default function ChatPage() {
       if (creatingChatRef.current) return;
       creatingChatRef.current = true;
       isNewChat = true;
+    }
+
+    setIsStreaming(true);
+
+    if (isNewChat) {
+      try {
+        const initialTitle = formatShortTitle(trimmed);
+        const nc = await apiRequest('/chats', { method: 'POST', json: { title: initialTitle } });
+        addChat(nc);
+        chatId = nc.id;
+        skipFetchRef.current = true;
+        setActiveChatId(chatId);
+        navigate(`/c/${chatId}`, { replace: true });
+      } catch (err) {
+        creatingChatRef.current = false;
+        setIsStreaming(false);
+        return;
+      } finally {
+        creatingChatRef.current = false;
+      }
     }
 
     const userMsgId = crypto.randomUUID();
@@ -1083,6 +1108,7 @@ export default function ChatPage() {
       tool_calls: null,
       developer_metrics: null,
       created_at: new Date().toISOString(),
+      images: imagesToSend,
       imagePreviewUrls: imagesToSend.length > 0
         ? imagesToSend.map((img) => `data:${img.mimeType};base64,${img.base64}`)
         : undefined,
@@ -1100,59 +1126,55 @@ export default function ChatPage() {
       created_at: new Date().toISOString(),
     });
 
-    setIsStreaming(true);
-
-    if (isNewChat) {
+    // ── Upload any attached document files or images to Documents API ─────────────
+    if ((attachedFiles.length > 0 || imagesToSend.length > 0) && chatId) {
       try {
-        const initialTitle = formatShortTitle(trimmed);
-        const nc = await apiRequest('/chats', { method: 'POST', json: { title: initialTitle } });
-        addChat(nc);
-        chatId = nc.id;
-        skipFetchRef.current = true;
-        setActiveChatId(chatId);
-        navigate(`/c/${chatId}`, { replace: true });
-      } catch (err) {
-        creatingChatRef.current = false;
-        setIsStreaming(false);
-        updateMessage(asstMsgId, { content: '*[Failed to create conversation session]*' });
-        return;
-      } finally {
-        creatingChatRef.current = false;
-      }
-    }
+        const uploads: Promise<any>[] = [];
 
-    // ── Background-upload any attached images to Documents API ─────────────
-    // This makes images show up in the Files section of the chat.
-    if (imagesToSend.length > 0 && chatId) {
-      (async () => {
-        try {
-          for (const img of imagesToSend) {
-            const mimeToExt: Record<string, string> = {
-              'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif',
-              'image/bmp': '.bmp', 'image/tiff': '.tiff', 'image/webp': '.png',
-            };
-            const ext = mimeToExt[img.mimeType] || '.png';
-            const byteChars = atob(img.base64);
-            const byteArr = new Uint8Array(byteChars.length);
-            for (let i = 0; i < byteChars.length; i++) byteArr[i] = byteChars.charCodeAt(i);
-            const blob = new Blob([byteArr], { type: img.mimeType });
-            const filename = `image_${Date.now()}${ext}`;
-            const file = new File([blob], filename, { type: img.mimeType });
-            const fd = new FormData();
-            fd.append('file', file);
-            fd.append('chat_id', chatId!);
-            await fetch('/api/v1/documents/upload', {
+        // Upload document files (PDFs, DOCX, XLSX, PPTX, TXT, etc.)
+        for (const docFile of attachedFiles) {
+          const fd = new FormData();
+          fd.append('file', docFile);
+          fd.append('chat_id', chatId);
+          uploads.push(
+            fetch('/api/v1/documents/upload', {
               method: 'POST',
               headers: { Authorization: `Bearer ${token}` },
               body: fd,
-            });
-          }
-          // Refresh the files list so the Files badge and modal update
-          if (chatId) fetchChatDocuments(chatId);
-        } catch {
-          // silently ignore — not critical path
+            })
+          );
         }
-      })();
+
+        // Upload images
+        for (const img of imagesToSend) {
+          const mimeToExt: Record<string, string> = {
+            'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif',
+            'image/bmp': '.bmp', 'image/tiff': '.tiff', 'image/webp': '.png',
+          };
+          const ext = mimeToExt[img.mimeType] || '.png';
+          const byteChars = atob(img.base64);
+          const byteArr = new Uint8Array(byteChars.length);
+          for (let i = 0; i < byteChars.length; i++) byteArr[i] = byteChars.charCodeAt(i);
+          const blob = new Blob([byteArr], { type: img.mimeType });
+          const filename = `image_${Date.now()}${ext}`;
+          const file = new File([blob], filename, { type: img.mimeType });
+          const fd = new FormData();
+          fd.append('file', file);
+          fd.append('chat_id', chatId);
+          uploads.push(
+            fetch('/api/v1/documents/upload', {
+              method: 'POST',
+              headers: { Authorization: `Bearer ${token}` },
+              body: fd,
+            })
+          );
+        }
+
+        await Promise.all(uploads);
+        if (chatId) fetchChatDocuments(chatId);
+      } catch (err) {
+        console.error('Document upload error:', err);
+      }
     }
 
     const resolvedProv = currentModel?.apiProvider || resolveProvider(activeModel);
@@ -1169,6 +1191,15 @@ export default function ChatPage() {
 
     try {
       let payloadContent = language && language !== 'Auto-detect' ? `${trimmed}\n\n(Note: Please reply in ${language})` : trimmed;
+      const isLocationOn = localStorage.getItem('omni_location_enabled') !== 'false';
+      const userLoc = localStorage.getItem('omni_user_location');
+      if (isLocationOn && userLoc) {
+        payloadContent = `[User Location Context: ${userLoc}]\n${payloadContent}`;
+      }
+      // Always inject the real current datetime so the AI gives accurate time answers
+      const _now = new Date();
+      const _dateCtx = `[System Context: The current date and time is ${_now.toLocaleString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true })} (UTC${_now.getTimezoneOffset() <= 0 ? '+' : '-'}${String(Math.floor(Math.abs(_now.getTimezoneOffset()) / 60)).padStart(2,'0')}:${String(Math.abs(_now.getTimezoneOffset()) % 60).padStart(2,'0')})]`;
+      payloadContent = `${_dateCtx}\n${payloadContent}`;
       if (connectedChat) {
         let refMsgs = useChatStore.getState().messageCache[connectedChat.id];
         if (!refMsgs) {
@@ -1185,17 +1216,25 @@ export default function ChatPage() {
           payloadContent = `[Connected Reference Context from Chat: "${connectedChat.title}"]\n${summaryLines}\n[End of Referenced Context]\n\n${payloadContent}`;
         }
       }
+      const isTelemetryOn = localStorage.getItem('omni_improve_model') !== 'false';
       const allKeys = ProviderKeyManager.refresh();
       const headersInit: Record<string, string> = {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`,
         'x-api-keys': JSON.stringify(allKeys),
+        'x-telemetry-enabled': String(isTelemetryOn),
       };
 
       let res = await fetch(`/api/v1/chats/${chatId}/messages`, {
         method: 'POST',
         headers: headersInit,
-        body: JSON.stringify({ content: payloadContent, model: activeModel, parent_message_id: userMsg.parent_id, images: imagesToSend }),
+        body: JSON.stringify({
+          content: payloadContent,
+          model: activeModel,
+          parent_message_id: userMsg.parent_id,
+          images: imagesToSend,
+          telemetry: isTelemetryOn,
+        }),
         signal: controller.signal,
       });
 
@@ -1248,7 +1287,7 @@ export default function ChatPage() {
             } else if (parsed.event === 'title') {
               const { chats: liveChats, updateChat: liveUpdateChat } = useChatStore.getState();
               const liveChat = liveChats.find((c: any) => c.id === chatId);
-              if (liveChat) liveUpdateChat({ ...liveChat, title: parsed.title });
+              if (liveChat) liveUpdateChat({ ...liveChat, title: formatChatTitle(parsed.title) });
             } else if (parsed.event === 'error') {
               asstText += `\n\n*[Error: ${parsed.detail || 'Failed to generate response'}]*`;
               updateMessage(asstMsgId, { content: asstText });
@@ -1285,20 +1324,133 @@ export default function ChatPage() {
     });
   };
 
-  const handleStartEdit = (id: string, content: string) => {
-    setEditingMsgId(id); setEditValue(content);
+  const handleStartEdit = (msg: import('../types/chat').Message) => {
+    setEditingMsgId(msg.id);
+    setEditValue(msg.content);
+
+    let initialImages: { id: string; base64: string; mimeType: string; previewUrl: string }[] = [];
+    if (msg.images && msg.images.length > 0) {
+      initialImages = msg.images.map((img) => {
+        const mime = img.mimeType || 'image/png';
+        const rawBase64 = img.base64.startsWith('data:') ? img.base64.split(',')[1] : img.base64;
+        const url = img.base64.startsWith('data:') ? img.base64 : `data:${mime};base64,${img.base64}`;
+        return {
+          id: crypto.randomUUID(),
+          base64: rawBase64,
+          mimeType: mime,
+          previewUrl: url,
+        };
+      });
+    } else if (msg.imagePreviewUrls && msg.imagePreviewUrls.length > 0) {
+      initialImages = msg.imagePreviewUrls.map((url) => {
+        let mime = 'image/png';
+        let rawBase64 = url;
+        if (url.startsWith('data:')) {
+          const parts = url.split(',');
+          mime = parts[0].split(';')[0].replace('data:', '') || 'image/png';
+          rawBase64 = parts[1] || '';
+        }
+        return {
+          id: crypto.randomUUID(),
+          base64: rawBase64,
+          mimeType: mime,
+          previewUrl: url,
+        };
+      });
+    }
+    setEditImages(initialImages);
     setTimeout(() => { editTextareaRef.current?.focus(); editTextareaRef.current?.select(); }, 50);
+  };
+
+  const handleEditFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files) return;
+    const files = Array.from(e.target.files).filter((f) => f.type.startsWith('image/'));
+    files.forEach((file) => {
+      const previewUrl = URL.createObjectURL(file);
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const result = ev.target?.result as string;
+        const base64 = result ? result.split(',')[1] : '';
+        setEditImages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            base64,
+            mimeType: file.type || 'image/png',
+            previewUrl,
+          },
+        ]);
+      };
+      reader.readAsDataURL(file);
+    });
+    e.target.value = '';
+  };
+
+  const handleEditPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const clipboardFiles = Array.from(e.clipboardData.files || []);
+    const clipboardItems = Array.from(e.clipboardData.items || []);
+    const imageFiles: File[] = [];
+
+    for (const f of clipboardFiles) {
+      if (f.type.startsWith('image/')) imageFiles.push(f);
+    }
+    if (imageFiles.length === 0) {
+      for (const item of clipboardItems) {
+        if (item.type.startsWith('image/')) {
+          const f = item.getAsFile();
+          if (f) imageFiles.push(f);
+        }
+      }
+    }
+
+    if (imageFiles.length > 0) {
+      e.preventDefault();
+      imageFiles.forEach((file) => {
+        const previewUrl = URL.createObjectURL(file);
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          const result = ev.target?.result as string;
+          const base64 = result ? result.split(',')[1] : '';
+          setEditImages((prev) => [
+            ...prev,
+            {
+              id: crypto.randomUUID(),
+              base64,
+              mimeType: file.type || 'image/png',
+              previewUrl,
+            },
+          ]);
+        };
+        reader.readAsDataURL(file);
+      });
+    }
   };
 
   const handleSubmitEdit = async (msgId: string) => {
     const newText = editValue.trim();
-    if (!newText || !activeChatId || isStreaming) { setEditingMsgId(null); return; }
+    if ((!newText && editImages.length === 0) || !activeChatId || isStreaming) {
+      setEditingMsgId(null);
+      setEditImages([]);
+      return;
+    }
     const editIdx = messages.findIndex((m) => m.id === msgId);
-    if (editIdx === -1) { setEditingMsgId(null); return; }
+    if (editIdx === -1) {
+      setEditingMsgId(null);
+      setEditImages([]);
+      return;
+    }
 
+    const currentEditImages = [...editImages];
     setEditingMsgId(null);
+    setEditImages([]);
 
     const trimmedMessages = messages.slice(0, editIdx);
+
+    const imagesToSend = currentEditImages.map((img) => ({
+      base64: img.base64,
+      mimeType: img.mimeType,
+    }));
+    const imagePreviewUrls = currentEditImages.map((img) => img.previewUrl);
 
     // Build the new user message and empty assistant placeholder
     const newUserMsg = {
@@ -1310,6 +1462,8 @@ export default function ChatPage() {
       tool_calls: null,
       developer_metrics: null,
       created_at: new Date().toISOString(),
+      images: imagesToSend,
+      imagePreviewUrls: imagePreviewUrls.length > 0 ? imagePreviewUrls : undefined,
     };
     const asstId = crypto.randomUUID();
     const newAsstMsg = {
@@ -1341,7 +1495,9 @@ export default function ChatPage() {
     let asstText = '';
 
     try {
-      const payloadContent = language && language !== 'Auto-detect' ? `${newText}\n\n(Note: Please reply in ${language})` : newText;
+      const _editNow = new Date();
+      const _editDateCtx = `[System Context: The current date and time is ${_editNow.toLocaleString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true })} (UTC${_editNow.getTimezoneOffset() <= 0 ? '+' : '-'}${String(Math.floor(Math.abs(_editNow.getTimezoneOffset()) / 60)).padStart(2,'0')}:${String(Math.abs(_editNow.getTimezoneOffset()) % 60).padStart(2,'0')})]`;
+      const payloadContent = `${_editDateCtx}\n${language && language !== 'Auto-detect' ? `${newText}\n\n(Note: Please reply in ${language})` : newText}`;
       const allKeys = ProviderKeyManager.getAllKeys();
       const headersInit: Record<string, string> = {
         'Content-Type': 'application/json',
@@ -1352,7 +1508,7 @@ export default function ChatPage() {
       let res = await fetch(`/api/v1/chats/${activeChatId}/messages`, {
         method: 'POST',
         headers: headersInit,
-        body: JSON.stringify({ content: payloadContent, model: activeModel, parent_message_id: newUserMsg.parent_id, images: [] }),
+        body: JSON.stringify({ content: payloadContent, model: activeModel, parent_message_id: newUserMsg.parent_id, images: imagesToSend }),
         signal: controller.signal,
       });
 
@@ -1367,7 +1523,7 @@ export default function ChatPage() {
             res = await fetch(`/api/v1/chats/${activeChatId}/messages`, {
               method: 'POST',
               headers: headersInit,
-              body: JSON.stringify({ content: payloadContent, model: activeModel, parent_message_id: newUserMsg.parent_id, images: [] }),
+              body: JSON.stringify({ content: payloadContent, model: activeModel, parent_message_id: newUserMsg.parent_id, images: imagesToSend }),
               signal: controller.signal,
             });
           }
@@ -1419,7 +1575,7 @@ export default function ChatPage() {
     }
   };
 
-  const handleCancelEdit = () => { setEditingMsgId(null); setEditValue(''); };
+  const handleCancelEdit = () => { setEditingMsgId(null); setEditValue(''); setEditImages([]); };
 
   const handleRetry = async (assistantMsgIdx: number) => {
     if (isStreaming || !activeChatId) return;
@@ -1431,7 +1587,8 @@ export default function ChatPage() {
     }
     if (userMsgIdx === -1) return;
 
-    const retryText      = messages[userMsgIdx].content;
+    const origUserMsg    = messages[userMsgIdx];
+    const retryText      = origUserMsg.content;
     const trimmedMsgs    = messages.slice(0, userMsgIdx);
 
     // Build replacement user + placeholder assistant messages
@@ -1440,6 +1597,8 @@ export default function ChatPage() {
       parent_id: trimmedMsgs.length > 0 ? trimmedMsgs[trimmedMsgs.length - 1].id : null,
       role: 'user' as const, content: retryText,
       tool_calls: null, developer_metrics: null, created_at: new Date().toISOString(),
+      images: origUserMsg.images,
+      imagePreviewUrls: origUserMsg.imagePreviewUrls,
     };
     const retryAsstId = crypto.randomUUID();
     const newAsstMsg = {
@@ -1465,7 +1624,9 @@ export default function ChatPage() {
     let retryAsstText = '';
 
     try {
-      const payloadContent = language && language !== 'Auto-detect' ? `${retryText}\n\n(Note: Please reply in ${language})` : retryText;
+      const _retryNow = new Date();
+      const _retryDateCtx = `[System Context: The current date and time is ${_retryNow.toLocaleString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true })} (UTC${_retryNow.getTimezoneOffset() <= 0 ? '+' : '-'}${String(Math.floor(Math.abs(_retryNow.getTimezoneOffset()) / 60)).padStart(2,'0')}:${String(Math.abs(_retryNow.getTimezoneOffset()) % 60).padStart(2,'0')})]`;
+      const payloadContent = `${_retryDateCtx}\n${language && language !== 'Auto-detect' ? `${retryText}\n\n(Note: Please reply in ${language})` : retryText}`;
       const allKeys = ProviderKeyManager.getAllKeys();
       const headersInit: Record<string, string> = {
         'Content-Type': 'application/json',
@@ -1480,7 +1641,8 @@ export default function ChatPage() {
         headers: headersInit,
         body: JSON.stringify({
           content: payloadContent, model: activeModel,
-          parent_message_id: newUserMsg.parent_id, images: [],
+          parent_message_id: newUserMsg.parent_id,
+          images: origUserMsg.images || [],
         }),
         signal: controller.signal,
       });
@@ -1717,7 +1879,7 @@ export default function ChatPage() {
           </head>
           <body>
             <div class="header">
-              <div class="brand">Omni AI Chatbot</div>
+              <div class="brand">openChat AI</div>
               <h1 class="title">${escapeHtml(title)}</h1>
               <div class="meta">Exported: ${formattedDate}</div>
             </div>
@@ -1789,7 +1951,7 @@ export default function ChatPage() {
             <div className="p-3 space-y-2 flex-shrink-0 bg-surface">
               {/* Header: Omni Branding Logo & Search / Collapse controls */}
               <div className="flex items-center justify-between px-1 py-1">
-                <Tooltip content="Omni AI" side="bottom">
+                <Tooltip content="openChat AI" side="bottom">
                   <button onClick={() => setConvoOpen(true)} className="flex items-center gap-2 outline-none">
                     <Logo size={22} collapsed />
                   </button>
@@ -1877,7 +2039,7 @@ export default function ChatPage() {
             </div>
 
             {/* Conversation List Container */}
-            <div className="flex-1 overflow-y-auto scrollbar-hide py-2">
+            <div className="flex-1 overflow-y-auto custom-sidebar-scrollbar py-2">
               {/* Group: Pinned */}
               {pinnedList.length > 0 && (
                 <div className="mb-3">
@@ -2064,51 +2226,89 @@ export default function ChatPage() {
             {/* Model Dropdown Selection (Top Left) */}
             <div className="relative">
               <button 
-                onClick={() => setModelDropdownOpen((v) => !v)}
-                className="flex items-center gap-1.5 px-2 py-1 rounded-lg border border-border bg-surface-2/65 hover:bg-surface-3 hover:border-accent/35 text-xs font-semibold text-foreground transition-all duration-150 active:scale-[0.97] outline-none"
+                onClick={() => {
+                  setModelDropdownOpen((v) => !v);
+                  setModelSearchQuery('');
+                }}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-border/60 bg-surface-2/70 hover:bg-surface-3 hover:border-accent/40 text-xs font-semibold text-foreground transition-all duration-200 active:scale-[0.97] outline-none shadow-xs backdrop-blur-md"
               >
-                {currentModel.icon && <currentModel.icon className="w-3 h-3 text-accent" />}
-                <span className="truncate max-w-[100px] sm:max-w-[150px]">{currentModel.name || 'Select Model'}</span>
-                <ChevronDown className="w-3.5 h-3.5 text-foreground-3" />
+                {currentModel.icon && <currentModel.icon className="w-3.5 h-3.5 text-accent flex-shrink-0" />}
+                <span className="truncate max-w-[110px] sm:max-w-[150px] tracking-tight text-xs font-medium">{currentModel.name || 'Select Model'}</span>
+                <ChevronDown className={`w-3.5 h-3.5 text-foreground-3 transition-transform duration-200 flex-shrink-0 ${modelDropdownOpen ? 'rotate-180 text-foreground' : ''}`} />
               </button>
+
               {modelDropdownOpen && (
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => setModelDropdownOpen(false)} />
-                  <div className="absolute left-0 top-full mt-1.5 w-64 max-h-[300px] overflow-y-auto bg-surface border border-border-2 rounded-2xl shadow-2xl p-1.5 z-50 animate-scale-in space-y-0.5">
-                    <div className="px-2 py-1 text-[9px] font-bold text-foreground-3 uppercase tracking-wider">
-                      Verified Keys Models
-                    </div>
-                    {models.length === 0 ? (
-                      <div className="px-2 py-2 text-xs text-foreground-3 italic">
-                        No verified API keys. Add in Settings.
+                  <div className="absolute left-0 top-full mt-2 w-[220px] bg-surface border border-border/80 rounded-2xl shadow-2xl p-1.5 z-50 animate-scale-in flex flex-col gap-1 overflow-hidden backdrop-blur-2xl">
+                    
+                    {/* Header with Search Input */}
+                    <div className="p-1 space-y-1.5 border-b border-border/40 pb-2">
+                      <div className="flex items-center justify-between px-1">
+                        <span className="text-[9px] font-bold text-foreground-3 uppercase tracking-wider">Models</span>
+                        <span className="text-[9px] font-medium text-foreground-3 bg-surface-2 px-1.5 py-0.2 rounded-full">{models.length}</span>
                       </div>
-                    ) : (
-                      models.map((m) => {
-                        const IconComponent = m.icon;
-                        const isSelected = m.id === activeModel;
-                        return (
-                          <button
-                            key={m.id}
-                            onClick={() => {
-                              setActiveModel(m.id);
-                              setModelDropdownOpen(false);
-                            }}
-                            className={`w-full flex flex-col items-start px-2.5 py-1.5 rounded-xl text-left transition-all duration-150 ${
-                              isSelected 
-                                ? 'bg-accent/10 text-accent font-semibold' 
-                                : 'text-foreground hover:bg-surface-2'
-                            }`}
+                      {models.length > 5 && (
+                        <div className="relative">
+                          <Search className="w-3 h-3 absolute left-2 top-1/2 -translate-y-1/2 text-foreground-3 pointer-events-none" />
+                          <input 
+                            type="text"
+                            value={modelSearchQuery}
+                            onChange={(e) => setModelSearchQuery(e.target.value)}
+                            placeholder="Filter models..."
+                            className="w-full bg-surface-2/80 border border-border/50 rounded-lg pl-7 pr-2 py-1 text-[11px] text-foreground placeholder:text-foreground-3/60 focus:outline-none focus:border-accent/50"
+                            autoFocus
+                          />
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Scrollable Model List (Inside isolated overflow container to prevent scrollbar bleed) */}
+                    <div className="max-h-[220px] overflow-y-auto pr-0.5 space-y-0.5 custom-scrollbar">
+                      {models.length === 0 ? (
+                        <div className="px-3 py-3 text-center text-xs text-foreground-3 italic">
+                          No verified models.<br/>
+                          <button 
+                            onClick={() => { setModelDropdownOpen(false); navigate('/settings?tab=models'); }}
+                            className="mt-1.5 text-[10px] font-semibold text-accent hover:underline not-italic"
                           >
-                            <div className="flex items-center gap-1.5 w-full">
-                              {IconComponent && <IconComponent className={`w-3.5 h-3.5 ${isSelected ? 'text-accent' : 'text-foreground-3'}`} />}
-                              <span className="text-xs truncate flex-1">{m.name}</span>
-                              {isSelected && <Check className="w-3 h-3 text-accent" />}
-                            </div>
-                            <span className="text-[8px] text-foreground-3 font-medium uppercase tracking-wide mt-0.5">{m.provider}</span>
+                            Add API Keys →
                           </button>
-                        );
-                      })
-                    )}
+                        </div>
+                      ) : (
+                        models
+                          .filter(m => m.name.toLowerCase().includes(modelSearchQuery.toLowerCase()) || m.provider.toLowerCase().includes(modelSearchQuery.toLowerCase()))
+                          .map((m) => {
+                            const IconComponent = m.icon;
+                            const isSelected = m.id === activeModel;
+                            return (
+                              <button
+                                key={m.id}
+                                onClick={() => {
+                                  setActiveModel(m.id);
+                                  setModelDropdownOpen(false);
+                                }}
+                                className={`w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg text-left transition-all duration-150 group ${
+                                  isSelected 
+                                    ? 'bg-accent/15 text-foreground font-semibold' 
+                                    : 'text-foreground-2 hover:text-foreground hover:bg-surface-2/80'
+                                }`}
+                              >
+                                <div className="flex items-center gap-2 min-w-0 flex-1">
+                                  {IconComponent && (
+                                    <IconComponent className={`w-3.5 h-3.5 flex-shrink-0 transition-colors ${isSelected ? 'text-accent' : 'text-foreground-3 group-hover:text-foreground-2'}`} />
+                                  )}
+                                  <div className="min-w-0 flex-1">
+                                    <div className="text-[11px] truncate leading-tight font-medium text-foreground">{m.name}</div>
+                                    <div className="text-[8.5px] text-foreground-3 font-normal truncate mt-0.5">{m.provider}</div>
+                                  </div>
+                                </div>
+                                {isSelected && <Check className="w-3 h-3 text-accent flex-shrink-0 stroke-[2.5]" />}
+                              </button>
+                            );
+                          })
+                      )}
+                    </div>
                   </div>
                 </>
               )}
@@ -2141,24 +2341,39 @@ export default function ChatPage() {
                 </button>
 
                 {questionsPopupOpen && (
-                  <div className="questions-popup">
-                    <div className="questions-popup-header">Follow-ups</div>
-                    <div className="questions-popup-list">
-                      {userQuestions.map((q) => (
-                        <button
-                          key={q.id}
-                          className={`questions-popup-item ${highlightedMsgId === q.id ? 'active' : ''}`}
-                          onClick={() => {
-                            jumpToMessage(q.id);
-                            setQuestionsPopupOpen(false);
-                          }}
-                        >
-                          <span className="questions-popup-item-num">{q.index}</span>
-                          <span className="questions-popup-item-text">{q.content}</span>
-                        </button>
-                      ))}
+                  <>
+                    <div className="fixed inset-0 z-40 bg-black/20 backdrop-blur-[1px] animate-fade-in" onClick={() => setQuestionsPopupOpen(false)} />
+                    <div className="questions-popup animate-popover-in z-50">
+                      <div className="questions-popup-header flex items-center justify-between">
+                        <span>Follow-ups</span>
+                        <span className="text-[9px] font-bold text-zinc-400 bg-white/10 px-2 py-0.5 rounded-full">
+                          {userQuestions.length}
+                        </span>
+                      </div>
+                      <div className="questions-popup-list">
+                        {userQuestions.map((q) => {
+                          const cleanText = q.content
+                            .replace(/&#x27;/g, "'")
+                            .replace(/&quot;/g, '"')
+                            .replace(/&amp;/g, '&')
+                            .replace(/&#39;/g, "'");
+                          return (
+                            <button
+                              key={q.id}
+                              className={`questions-popup-item ${highlightedMsgId === q.id ? 'active' : ''}`}
+                              onClick={() => {
+                                jumpToMessage(q.id);
+                                setQuestionsPopupOpen(false);
+                              }}
+                            >
+                              <span className="questions-popup-item-num">{q.index}</span>
+                              <span className="questions-popup-item-text">{cleanText}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
-                  </div>
+                  </>
                 )}
               </div>
             )}
@@ -2180,8 +2395,8 @@ export default function ChatPage() {
 
                 {menuOpen && (
                   <>
-                    <div className="fixed inset-0 z-40" onClick={() => setMenuOpen(false)} />
-                    <div className="absolute right-0 top-full mt-1.5 w-72 bg-surface border border-border-2 rounded-2xl shadow-2xl p-1.5 z-50 animate-scale-in space-y-0.5">
+                    <div className="fixed inset-0 z-40 bg-black/20 backdrop-blur-[1px] animate-fade-in" onClick={() => setMenuOpen(false)} />
+                    <div className="more-options-popup animate-popover-in z-50 w-72 p-2 space-y-0.5">
 
                       {/* ── Dev HUD ── */}
                       <button onClick={() => { toggleDeveloperMode(); setMenuOpen(false); }}
@@ -2330,9 +2545,6 @@ export default function ChatPage() {
               </div>
             )}
           </div>
-
-
-
         </header>
 
         {messagesLoading ? (
@@ -2358,9 +2570,9 @@ export default function ChatPage() {
             <div className="welcome-orb welcome-orb-1" aria-hidden />
             <div className="welcome-orb welcome-orb-2" aria-hidden />
             <div className="w-full max-w-chat flex flex-col items-center gap-10 relative z-10">
-              <div className="welcome-content">
-                <div className="welcome-logo-ring" aria-hidden>
-                  <Logo size={28} collapsed />
+              <div className="welcome-content flex flex-col items-center">
+                <div className="welcome-logo-ring cursor-pointer" aria-hidden>
+                  <Logo size={36} collapsed isStreaming={isStreaming} />
                 </div>
                 <h2 className="welcome-headline">{greeting.headline}</h2>
                 <p className="welcome-sub">{greeting.sub}</p>
@@ -2373,8 +2585,7 @@ export default function ChatPage() {
                 isStreaming={isStreaming}
                 onStop={handleStopGeneration}
                 activeModel={activeModel}
-                onOpenShortcuts={() => setShortcutsOpen(true)}
-                placeholder="Message Omni…"
+                placeholder="Ask anything"
                 className="w-full"
                 chats={chats}
                 connectedChat={connectedChat}
@@ -2383,209 +2594,256 @@ export default function ChatPage() {
             </div>
           </div>
         ) : (
-          /* ── CHAT STATE: scrollable messages + bottom footer ── */
-          <>
-            <div ref={chatScrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-4 py-8 space-y-6" style={{ scrollBehavior: 'smooth' }}>
+          /* ── CHAT STATE: full height scrollable messages + floating input ── */
+          <div className="flex-1 flex flex-col min-h-0 relative overflow-hidden">
+            <div ref={chatScrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-4 pt-6 pb-36 space-y-6" style={{ scrollBehavior: 'smooth' }}>
               <div className="max-w-chat mx-auto space-y-5">
+                {messages.map((m, idx) => {
+                  if (m.role === 'system' || m.role === 'tool') return null;
+                  const isUser          = m.role === 'user';
+                  const isLastAsst      = !isUser && idx === messages.length - 1;
+                  const isStreamingThis = isStreaming && isLastAsst && m.content === '';
+                  const isEditing       = editingMsgId === m.id;
+                  const sources: SourceDocument[] = !isUser
+                    ? (m.developer_metrics?.source_documents?.filter(s => s.used !== false) ?? [])
+                    : [];
 
+                  const responseMeta = !isUser && !isStreamingThis ? getResponseMeta(m.content) : null;
 
-              {messages.map((m, idx) => {
-                if (m.role === 'system' || m.role === 'tool') return null;
-                const isUser          = m.role === 'user';
-                const isLastAsst      = !isUser && idx === messages.length - 1;
-                const isStreamingThis = isStreaming && isLastAsst && m.content === '';
-                const isEditing       = editingMsgId === m.id;
-                // SOURCE ATTRIBUTION FIX:
-                // Read from `source_documents` (CRAG-validated, used=true only)
-                // NOT from `retrieved_context` (which contains ALL retrieved chunks
-                // including ones rejected by CRAG or below the similarity threshold).
-                // Bug: previously showed Resume.pdf/Aptitude.pdf for 'LeetCode 23'
-                // because retrieved_context had all chunks regardless of relevance.
-                const sources: SourceDocument[] = !isUser
-                  ? (m.developer_metrics?.source_documents?.filter(s => s.used !== false) ?? [])
-                  : [];
-
-                const responseMeta = !isUser && !isStreamingThis ? getResponseMeta(m.content) : null;
-
-                return (
-                  <div
-                    key={m.id}
-                    ref={(el) => { messageRefs.current[m.id] = el; }}
-                    className={`flex gap-4 group/msg animate-message-in ${isUser ? 'justify-end' : 'justify-start'} message-gap ${
-                      highlightedMsgId === m.id ? 'message-highlight' : ''
-                    }`}
-                  >
-                    <div className={`max-w-[85%] flex flex-col gap-1 ${isUser ? 'items-end' : 'items-start'}`}>
-                      {/* User message block */}
-                      {isUser && (
-                        isEditing ? (
-                          <div className="w-full min-w-[280px] space-y-2">
-                            <textarea ref={editTextareaRef} value={editValue} onChange={(e) => setEditValue(e.target.value)}
-                              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmitEdit(m.id); } if (e.key === 'Escape') handleCancelEdit(); }}
-                              rows={Math.max(2, editValue.split('\n').length)}
-                              className="w-full rounded-xl px-3.5 py-2.5 text-sm text-foreground bg-surface border border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent resize-none leading-relaxed"
-                              style={{ minHeight: '72px', maxHeight: '240px' }} />
-                            <div className="flex items-center gap-1.5 justify-end">
-                              <button onClick={handleCancelEdit} className="px-3 py-1.5 rounded-lg text-[11px] font-medium text-foreground-3 hover:text-foreground bg-surface-2 hover:bg-surface-3 border border-border transition-all">Cancel</button>
-                              <button onClick={() => handleSubmitEdit(m.id)} disabled={!editValue.trim()}
-                                className="px-3 py-1.5 rounded-lg text-[11px] font-semibold text-white bg-accent hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-all flex items-center gap-1.5">
-                                <Send className="w-3 h-3" /> Send
-                              </button>
-                            </div>
-                          </div>
-                        ) : (() => {
-                          const { prompt: userPrompt, files: userAttachedFiles, refTitle } = parseUserMessageFiles(m.content);
-                          return (
-                            <div className="user-bubble rounded-2xl rounded-tr-sm px-4 py-3 text-sm flex flex-col gap-2">
-                              {refTitle && (
-                                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/10 border border-white/15 text-[11px] font-medium text-white/90 mb-0.5 w-fit">
-                                  <Link className="w-3 h-3 text-white/70" />
-                                  <span>Reference: <strong className="font-semibold text-white">{refTitle}</strong></span>
-                                </div>
-                              )}
-                              {m.imagePreviewUrls && m.imagePreviewUrls.length > 0 && (
-                                <div className="flex flex-wrap gap-1.5 mb-1">
-                                  {m.imagePreviewUrls.map((url, idx) => (
-                                    <img key={idx} src={url} alt="attached image" className="max-w-[200px] max-h-[150px] rounded-lg object-contain border border-white/10" />
-                                  ))}
-                                </div>
-                              )}
-                              {userAttachedFiles.length > 0 && (
-                                <div className="flex flex-col gap-2 my-1">
-                                  {userAttachedFiles.map((file, fIdx) => (
-                                    <div key={fIdx} className="flex items-center justify-between gap-3 p-2.5 rounded-xl bg-white/10 border border-white/15">
-                                      <div className="flex items-center gap-2 min-w-0">
-                                        <FileText className="w-4 h-4 text-white/90" />
-                                        <div className="min-w-0">
-                                          <p className="text-xs font-semibold text-white truncate">{file.name}</p>
-                                          <p className="text-[10px] text-white/70">{file.content.length.toLocaleString()} chars</p>
-                                        </div>
-                                      </div>
+                  return (
+                    <div
+                      key={m.id}
+                      ref={(el) => { messageRefs.current[m.id] = el; }}
+                      className={`flex gap-4 group/msg animate-message-in ${isUser ? 'justify-end' : 'justify-start'} message-gap ${
+                        highlightedMsgId === m.id ? 'message-highlight' : ''
+                      }`}
+                    >
+                      <div className={`max-w-[85%] flex flex-col gap-1 ${isUser ? 'items-end' : 'items-start'}`}>
+                        {/* User message block */}
+                        {isUser && (
+                          isEditing ? (
+                            <div className="w-full min-w-[320px] sm:min-w-[480px] md:min-w-[560px] bg-[#2b2b2e] border border-white/10 rounded-3xl p-4 shadow-xl animate-fade-in-up">
+                              {/* Image previews inside edit box */}
+                              {editImages.length > 0 && (
+                                <div className="flex flex-wrap gap-2 mb-3">
+                                  {editImages.map((img) => (
+                                    <div key={img.id} className="relative group/editImg">
+                                      <img
+                                        src={img.previewUrl}
+                                        alt="attached image"
+                                        className="w-16 h-16 rounded-xl object-cover border border-white/20"
+                                      />
                                       <button
                                         type="button"
-                                        onClick={() => setSelectedUserFile(file)}
-                                        className="px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-white/20 hover:bg-white/30 text-white transition-all flex items-center gap-1"
+                                        onClick={() => setEditImages((prev) => prev.filter((i) => i.id !== img.id))}
+                                        className="absolute -top-1.5 -right-1.5 p-1 rounded-full bg-black/80 hover:bg-red-600 text-white border border-white/20 transition-all shadow-md"
+                                        title="Remove image"
                                       >
-                                        View File
+                                        <X className="w-3 h-3" />
                                       </button>
                                     </div>
                                   ))}
                                 </div>
                               )}
-                              {userPrompt && <p className="whitespace-pre-wrap break-words leading-relaxed text-foreground">{userPrompt}</p>}
+
+                              <textarea
+                                ref={editTextareaRef}
+                                value={editValue}
+                                onChange={(e) => setEditValue(e.target.value)}
+                                onPaste={handleEditPaste}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter' && !e.shiftKey) {
+                                    e.preventDefault();
+                                    handleSubmitEdit(m.id);
+                                  }
+                                  if (e.key === 'Escape') handleCancelEdit();
+                                }}
+                                rows={Math.max(2, editValue.split('\n').length)}
+                                className="w-full bg-transparent text-sm text-white placeholder-zinc-400 focus:outline-none resize-none leading-relaxed border-none p-0 focus:ring-0"
+                                style={{ minHeight: '60px', maxHeight: '220px' }}
+                                placeholder="Edit message…"
+                              />
+
+                              <input
+                                ref={editFileInputRef}
+                                type="file"
+                                multiple
+                                accept="image/*"
+                                className="hidden"
+                                onChange={handleEditFileSelect}
+                              />
+
+                              <div className="flex items-center justify-between gap-2 mt-3 pt-2 border-t border-white/10">
+                                <button
+                                  type="button"
+                                  onClick={() => editFileInputRef.current?.click()}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium text-white/80 hover:text-white bg-white/10 hover:bg-white/15 border border-white/10 transition-all"
+                                  title="Add image"
+                                >
+                                  <Plus className="w-3.5 h-3.5" />
+                                  <span>Add image</span>
+                                </button>
+
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={handleCancelEdit}
+                                    className="inline-flex items-center justify-center px-4 py-1.5 rounded-full text-xs font-semibold text-white bg-[#1e1e20] hover:bg-[#18181a] border border-white/10 transition-all active:scale-[0.96] flex-shrink-0 whitespace-nowrap"
+                                  >
+                                    Cancel
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSubmitEdit(m.id)}
+                                    disabled={!editValue.trim() && editImages.length === 0}
+                                    className="inline-flex items-center justify-center px-5 py-1.5 rounded-full text-xs font-bold text-black bg-white hover:bg-zinc-200 disabled:opacity-40 disabled:cursor-not-allowed transition-all active:scale-[0.96] shadow-sm flex-shrink-0 whitespace-nowrap min-w-[68px]"
+                                  >
+                                    Send
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          ) : (() => {
+                            const { prompt: userPrompt, files: userAttachedFiles, refTitle } = parseUserMessageFiles(m.content);
+                            const displayImageUrls = (m.imagePreviewUrls && m.imagePreviewUrls.length > 0)
+                              ? m.imagePreviewUrls
+                              : (m.images && m.images.length > 0
+                                ? m.images.map((img) => img.base64.startsWith('data:') ? img.base64 : `data:${img.mimeType || 'image/png'};base64,${img.base64}`)
+                                : []);
+
+                            return (
+                              <div className="user-bubble rounded-2xl rounded-tr-sm px-4 py-3 text-sm flex flex-col gap-2">
+                                {refTitle && (
+                                  <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/10 border border-white/15 text-[11px] font-medium text-white/90 mb-0.5 w-fit">
+                                    <Link className="w-3 h-3 text-white/70" />
+                                    <span>Reference: <strong className="font-semibold text-white">{refTitle}</strong></span>
+                                  </div>
+                                )}
+                                {displayImageUrls.length > 0 && (
+                                  <div className="flex flex-wrap gap-1.5 mb-1">
+                                    {displayImageUrls.map((url, idx) => (
+                                      <img key={idx} src={url} alt="attached image" className="max-w-[200px] max-h-[150px] rounded-lg object-contain border border-white/10 cursor-pointer hover:opacity-90 transition-opacity" onClick={() => window.open(url, '_blank')} />
+                                    ))}
+                                  </div>
+                                )}
+                                {userAttachedFiles.length > 0 && (
+                                  <div className="flex flex-col gap-2 my-1">
+                                    {userAttachedFiles.map((file, fIdx) => (
+                                      <div key={fIdx} className="flex items-center justify-between gap-3 p-2.5 rounded-xl bg-white/10 border border-white/15">
+                                        <div className="flex items-center gap-2 min-w-0">
+                                          <FileText className="w-4 h-4 text-white/90" />
+                                          <div className="min-w-0">
+                                            <p className="text-xs font-semibold text-white truncate">{file.name}</p>
+                                            <p className="text-[10px] text-white/70">{file.content.length.toLocaleString()} chars</p>
+                                          </div>
+                                        </div>
+                                        <button
+                                          type="button"
+                                          onClick={() => setSelectedUserFile(file)}
+                                          className="px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-white/20 hover:bg-white/30 text-white transition-all flex items-center gap-1"
+                                        >
+                                          View File
+                                        </button>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                                {userPrompt && <p className="whitespace-pre-wrap break-words leading-relaxed text-foreground">{userPrompt}</p>}
+                              </div>
+                            );
+                          })()
+                        )}
+
+                        {/* Assistant message block */}
+                        {!isUser && (() => {
+                          if (isStreamingThis) return <TypingIndicator />;
+                          const { clean, error } = parseErrorFromContent(m.content);
+                          const displayContent = clean || m.content;
+                          // Find the actual last user message before this assistant reply (skip system/tool)
+                          let prevUserMsg = '';
+                          for (let i = idx - 1; i >= 0; i--) {
+                            if (messages[i].role === 'user') {
+                              // Strip injected location/context suffix before matching
+                              prevUserMsg = (messages[i].content || '')
+                                .replace(/\[User Location Context:[^\]]*\]/gi, '')
+                                .trim()
+                                .toLowerCase();
+                              break;
+                            }
+                          }
+                          const isTimeQuery =
+                            /\b(time|date|clock|day|hour|minute|today|when)\b/i.test(prevUserMsg) &&
+                            /\b(current|now|what|tell|show|is it|right now|local|today|give me)\b/i.test(prevUserMsg);
+
+                          return (
+                            <div className="assistant-bubble text-foreground rounded-2xl rounded-bl-sm px-4 py-3 text-sm w-full">
+                              {/* Response meta bar — premium editorial style */}
+                              {responseMeta?.isLong && !isStreaming && (
+                                <div className="response-meta-bar">
+                                  <span className="response-meta-dot" />
+                                  <span className="response-meta-text">
+                                    {responseMeta.words.toLocaleString()} words
+                                  </span>
+                                  <span className="response-meta-sep">&middot;</span>
+                                  <span className="response-meta-text">
+                                    {responseMeta.readTime}
+                                  </span>
+                                  {responseMeta.sections > 0 && (
+                                    <>
+                                      <span className="response-meta-sep">&middot;</span>
+                                      <span className="response-meta-text">
+                                        {responseMeta.sections} section{responseMeta.sections !== 1 ? 's' : ''}
+                                      </span>
+                                    </>
+                                  )}
+                                </div>
+                              )}
+                              {isTimeQuery && <TimeWidget />}
+                              {displayContent ? (
+                                <CitedContent
+                                  content={displayContent}
+                                  sources={sources}
+                                  isStreaming={isStreaming && isLastAsst && m.content !== ''}
+                                />
+                              ) : error ? (
+                                <p className="text-sm text-foreground-2 leading-relaxed">{error}</p>
+                              ) : null}
                             </div>
                           );
-                        })()
-                      )}
+                        })()}
 
-                      {/* Assistant message block */}
-                      {!isUser && (() => {
-                        if (isStreamingThis) return <TypingIndicator />;
-                        const { clean, error } = parseErrorFromContent(m.content);
-                        // Pure error — no real content
-                        if (!clean && error) return (
-                          <div className="assistant-bubble text-foreground rounded-2xl rounded-bl-sm px-4 py-3 text-sm w-full">
-                            <ErrorCard message={error} onRetry={() => {
-                              const lastUser = [...messages].reverse().find(x => x.role === 'user');
-                              if (lastUser) handleSendMessage(lastUser.content);
-                            }} />
-                          </div>
-                        );
-                        return (
-                          <div className="assistant-bubble text-foreground rounded-2xl rounded-bl-sm px-4 py-3 text-sm w-full">
-                            {/* Response meta bar — premium editorial style */}
-                            {responseMeta?.isLong && !isStreaming && (
-                              <div className="response-meta-bar">
-                                <span className="response-meta-dot" />
-                                <span className="response-meta-text">
-                                  {responseMeta.words.toLocaleString()} words
-                                </span>
-                                <span className="response-meta-sep">&middot;</span>
-                                <span className="response-meta-text">
-                                  {responseMeta.readTime}
-                                </span>
-                                {responseMeta.sections > 0 && (
-                                  <>
-                                    <span className="response-meta-sep">&middot;</span>
-                                    <span className="response-meta-text">
-                                      {responseMeta.sections} section{responseMeta.sections !== 1 ? 's' : ''}
-                                    </span>
-                                  </>
-                                )}
-                              </div>
-                            )}
-                            <CitedContent
-                              content={clean || m.content}
-                              sources={sources}
-                              isStreaming={isStreaming && isLastAsst && m.content !== ''}
-                            />
-                            {error && <ErrorCard message={error} onRetry={() => {
-                              const lastUser = [...messages].reverse().find(x => x.role === 'user');
-                              if (lastUser) handleSendMessage(lastUser.content);
-                            }} />}
-                          </div>
-                        );
-                      })()}
-
-                      {/* Action trigger bars */}
-                      <div className="message-action-bar mt-1">
-                        {isUser && !isEditing && (
-                          <>
-                            <ActionBtn icon={copiedMsgId === m.id ? Check : Copy} label={copiedMsgId === m.id ? 'Copied' : 'Copy'} onClick={() => handleCopyMessage(m.id, m.content)} active={copiedMsgId === m.id} />
-                            <ActionBtn icon={Pencil} label="Edit" onClick={() => handleStartEdit(m.id, m.content)} />
-                            <ActionBtn icon={Trash2} label="Delete" danger onClick={() => handleDeleteMessage(m.id)} />
-                          </>
-                        )}
-                        {!isUser && m.content && !isStreamingThis && (
-                          <>
-                            <ActionBtn icon={copiedMsgId === m.id ? Check : Copy} label={copiedMsgId === m.id ? 'Copied' : 'Copy'} onClick={() => handleCopyMessage(m.id, m.content)} active={copiedMsgId === m.id} />
-                            <div className="w-px h-3.5 bg-border mx-0.5" />
-                            <ActionBtn icon={RefreshCw} label="Regenerate" onClick={() => handleRetry(idx)} />
-                            <div className="w-px h-3.5 bg-border mx-0.5" />
-                            <ActionBtn icon={GitBranch} label="Branch in new chat" onClick={() => {
-                              if (activeChat) {
-                                setConnectedChat({ id: activeChat.id, title: activeChat.title || 'Untitled Chat' });
-                                handleCreateChat();
-                              }
-                            }} />
-                          </>
-                        )}
+                        {/* Action trigger bars */}
+                        <div className="message-action-bar mt-1">
+                          {isUser && !isEditing && (
+                            <>
+                              <ActionBtn icon={copiedMsgId === m.id ? Check : Copy} label={copiedMsgId === m.id ? 'Copied' : 'Copy'} onClick={() => handleCopyMessage(m.id, m.content)} active={copiedMsgId === m.id} />
+                              <ActionBtn icon={Pencil} label="Edit" onClick={() => handleStartEdit(m)} />
+                              <ActionBtn icon={Trash2} label="Delete" danger onClick={() => handleDeleteMessage(m.id)} />
+                            </>
+                          )}
+                          {!isUser && m.content && !isStreamingThis && (
+                            <>
+                              <ActionBtn icon={copiedMsgId === m.id ? Check : Copy} label={copiedMsgId === m.id ? 'Copied' : 'Copy'} onClick={() => handleCopyMessage(m.id, m.content)} active={copiedMsgId === m.id} />
+                              <div className="w-px h-3.5 bg-border mx-0.5" />
+                              <ActionBtn icon={RefreshCw} label="Regenerate" onClick={() => handleRetry(idx)} />
+                              <div className="w-px h-3.5 bg-border mx-0.5" />
+                              <ActionBtn icon={GitBranch} label="Branch in new chat" onClick={() => {
+                                if (activeChat) {
+                                  setConnectedChat({ id: activeChat.id, title: activeChat.title || 'Untitled Chat' });
+                                  handleCreateChat();
+                                }
+                              }} />
+                            </>
+                          )}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
               </div>
               <div ref={messagesEndRef} />
             </div>
 
-            {/* Chat Minimap — outside scroll area, fixed to right edge of chat column */}
-            {messages.filter((m) => m.role !== 'system' && m.role !== 'tool').length > 3 && (() => {
-              const visibleMsgs = messages.filter((m) => m.role !== 'system' && m.role !== 'tool');
-              const total = visibleMsgs.length;
-              return (
-                <div
-                  className="chat-minimap"
-                  aria-hidden
-                  onClick={handleMinimapClick}
-                  style={{ bottom: '72px' }}
-                >
-                  <div ref={minimapTrackRef} className="chat-minimap-track" title="Click to jump">
-                    {visibleMsgs.map((m, i) => (
-                      <div
-                        key={m.id}
-                        className={`chat-minimap-dot ${m.role}`}
-                        style={{ top: `${(i / total) * 100}%` }}
-                      />
-                    ))}
-                    <div
-                      className="chat-minimap-thumb"
-                      style={{ top: `${minimapThumbTop}%`, height: `${minimapThumbHeight}%` }}
-                    />
-                  </div>
-                </div>
-              );
-            })()}
             {showScrollBtn && (
               <button onClick={scrollToBottom}
                 className="scroll-btn p-2.5 rounded-full bg-surface border border-border shadow-lg text-foreground-2 hover:text-foreground hover:bg-surface-2 transition-all animate-fade-in"
@@ -2594,24 +2852,24 @@ export default function ChatPage() {
               </button>
             )}
 
-            {/* Input Bar Footer */}
-            <footer className="px-4 py-4 flex-shrink-0 border-t border-border/30 bg-gradient-to-t from-background to-background/60 backdrop-blur-sm">
-              <ChatInput
-                onSend={(text, images) => handleSendMessage(text, images)}
-                isLocked={isLocked}
-                isStreaming={isStreaming}
-                onStop={handleStopGeneration}
-                activeModel={activeModel}
-                onOpenShortcuts={() => setShortcutsOpen(true)}
-                placeholder="Message Omni…"
-                className="max-w-chat mx-auto"
-                chats={chats}
-                connectedChat={connectedChat}
-                onSelectConnectedChat={setConnectedChat}
-              />
+            {/* Input Bar Floating Footer */}
+            <footer className="absolute bottom-0 left-0 right-0 p-4 pointer-events-none bg-gradient-to-t from-background via-background/80 to-transparent">
+              <div className="pointer-events-auto max-w-chat mx-auto">
+                <ChatInput
+                  onSend={(text, images) => handleSendMessage(text, images)}
+                  isLocked={isLocked}
+                  isStreaming={isStreaming}
+                  onStop={handleStopGeneration}
+                  activeModel={activeModel}
+                  placeholder="Ask anything"
+                  className="w-full"
+                  chats={chats}
+                  connectedChat={connectedChat}
+                  onSelectConnectedChat={setConnectedChat}
+                />
+              </div>
             </footer>
-            {/* (Questions sidebar replaced by hover popup on toolbar button) */}
-          </>
+          </div>
         )}
       </div>
 
@@ -2815,7 +3073,12 @@ export default function ChatPage() {
         ) : (
           <div className="relative flex items-center">
             <button
-              onClick={() => { setActiveChatId(c.id); navigate(`/c/${c.id}`); }}
+              onClick={() => {
+                if (activeChatId !== c.id) {
+                  setActiveChatId(c.id);
+                }
+                navigate(`/c/${c.id}`);
+              }}
               className={`w-full min-h-[36px] px-3 py-1.5 rounded-[12px] flex items-center justify-between text-left transition-all duration-150 ease-in-out ${
                 active
                   ? 'bg-surface-3/90 text-foreground font-semibold shadow-sm'
@@ -3099,7 +3362,7 @@ function ChatFilesModal({ onClose, documents, onRefresh, token, chatId, onSucces
               <RefreshCw className="w-8 h-8 text-accent animate-spin" />
               <div className="text-center">
                 <p className="text-xs font-semibold text-foreground">Uploading file...</p>
-                <p className="text-[10px] text-foreground-3 mt-1">Omni is running security scans and indexing contents</p>
+                <p className="text-[10px] text-foreground-3 mt-1">openChat is running security scans and indexing contents</p>
               </div>
             </div>
           ) : (

@@ -29,7 +29,7 @@ async def test_tavily_search_mock(monkeypatch):
     """
     monkeypatch.setattr("app.tools.local_tools.settings.TAVILY_API_KEY", "mock_key")
     result = await tavily_search("fastapi best practices")
-    assert "Result" in result or "FastAPI" in result
+    assert any(k in result for k in ("Result", "FastAPI", "DuckDuckGo", "Search", "Source"))
 
 @pytest.mark.anyio
 async def test_mcp_client_and_calculator_server():

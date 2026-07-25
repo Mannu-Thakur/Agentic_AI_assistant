@@ -102,12 +102,27 @@ class GroqProvider(BaseLLMProvider):
         "Content-Type": "application/json"
     }
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-      response = await client.post(url, json=payload, headers=headers)
-      if response.status_code != 200:
-        raise Exception(f"Groq API returned error {response.status_code}: {response.text}")
-      
-      data = response.json()
+    max_retries = 3
+    initial_delay = 1.0
+    data = None
+
+    for attempt in range(max_retries + 1):
+      async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(url, json=payload, headers=headers)
+        if response.status_code == 200:
+          data = response.json()
+          break
+        elif response.status_code in (429, 500, 502, 503, 504) and attempt < max_retries:
+          delay = initial_delay * (2 ** attempt)
+          await asyncio.sleep(delay)
+          continue
+        elif response.status_code == 429:
+          raise Exception(
+              "Groq rate limit exceeded (HTTP 429). "
+              "You have reached the API request limit. Please wait a moment before trying again or switch to another model."
+          )
+        else:
+          raise Exception(f"Groq API returned error {response.status_code}: {response.text}")
       
       choice = data["choices"][0]["message"]
       text = choice.get("content") or ""
@@ -172,35 +187,9 @@ class GroqProvider(BaseLLMProvider):
         }
         return
 
-      mock_text = f"Hello from Omni Agent Workspace! This is a real-time streamed response from the **Groq Llama-3 Adapter**. You selected the model **{model}**.\n\nHere is a code snippet demonstration:\n```python\ndef run_sandbox():\n    print('Sandboxed computation complete!')\n```"
-      words = mock_text.split(" ")
-      input_tokens = len(str(messages)) // 4
-      output_tokens = 0
-      
-      start_time = time.time()
-      for i, word in enumerate(words):
-        await asyncio.sleep(0.04)
-        text_chunk = word + (" " if i < len(words) - 1 else "")
-        output_tokens += len(text_chunk) // 4
-        yield {
-            "event": "chunk",
-            "text": text_chunk
-        }
-      
-      latency_ms = int((time.time() - start_time) * 1000)
-      yield {
-          "event": "metrics",
-          "metrics": {
-              "model_used": model,
-              "latency_ms": latency_ms,
-              "tokens_input": input_tokens,
-              "tokens_output": output_tokens + 5,
-              "cost_estimate": (input_tokens * 0.00005 + output_tokens * 0.00015) / 1000,
-              "confidence_score": 0.88,
-              "memory_hits": 1
-          }
-      }
-      return
+      raise Exception(
+          "Groq API key missing or invalid. Please configure your Groq API key in Settings to stream real-time responses."
+      )
 
     payload = {
         "model": model,
@@ -234,49 +223,65 @@ class GroqProvider(BaseLLMProvider):
     start_time = time.time()
     accumulated_tool_calls = {}
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-      async with client.stream("POST", url, json=payload, headers=headers) as response:
-        if response.status_code != 200:
-          raise Exception(f"Groq streaming API returned error {response.status_code}")
-          
-        async for line in response.aiter_lines():
-          line = line.strip()
-          if not line:
-            continue
-            
-          if line.startswith("data: "):
-            raw_data = line[6:]
-            if raw_data == "[DONE]":
-              break
-              
-            try:
-              parsed = json.loads(raw_data)
-              delta = parsed["choices"][0]["delta"]
-              
-              chunk_text = delta.get("content", "")
-              if chunk_text:
-                output_text += chunk_text
-                yield {
-                    "event": "chunk",
-                    "text": chunk_text
-                }
-              
-              tool_calls_delta = delta.get("tool_calls", [])
-              for tc in tool_calls_delta:
-                  idx = tc.get("index", 0)
-                  if idx not in accumulated_tool_calls:
-                      accumulated_tool_calls[idx] = {
-                          "name": "",
-                          "arguments": ""
-                      }
-                  
-                  func_delta = tc.get("function", {})
-                  if "name" in func_delta:
-                      accumulated_tool_calls[idx]["name"] = func_delta["name"]
-                  if "arguments" in func_delta:
-                      accumulated_tool_calls[idx]["arguments"] += func_delta["arguments"]
-            except (KeyError, IndexError, json.JSONDecodeError):
+    max_retries = 3
+    initial_delay = 1.0
+
+    for attempt in range(max_retries + 1):
+      async with httpx.AsyncClient(timeout=30.0) as client:
+        async with client.stream("POST", url, json=payload, headers=headers) as response:
+          if response.status_code in (429, 500, 502, 503, 504):
+            if attempt < max_retries:
+              delay = initial_delay * (2 ** attempt)
+              await asyncio.sleep(delay)
               continue
+            else:
+              raise Exception(
+                  "Groq streaming API rate limit exceeded (HTTP 429). "
+                  "You have reached the API request limit. Please wait a moment before trying again or switch to another model."
+              )
+          elif response.status_code != 200:
+            raise Exception(f"Groq streaming API returned error {response.status_code}")
+          
+          async for line in response.aiter_lines():
+            line = line.strip()
+            if not line:
+              continue
+              
+            if line.startswith("data: "):
+              raw_data = line[6:]
+              if raw_data == "[DONE]":
+                break
+                
+              try:
+                parsed = json.loads(raw_data)
+                delta = parsed["choices"][0]["delta"]
+                
+                chunk_text = delta.get("content", "")
+                if chunk_text:
+                  output_text += chunk_text
+                  yield {
+                      "event": "chunk",
+                      "text": chunk_text
+                  }
+                
+                tool_calls_delta = delta.get("tool_calls", [])
+                for tc in tool_calls_delta:
+                    idx = tc.get("index", 0)
+                    if idx not in accumulated_tool_calls:
+                        accumulated_tool_calls[idx] = {
+                            "name": "",
+                            "arguments": ""
+                        }
+                    
+                    func_delta = tc.get("function", {})
+                    if "name" in func_delta:
+                        accumulated_tool_calls[idx]["name"] = func_delta["name"]
+                    if "arguments" in func_delta:
+                        accumulated_tool_calls[idx]["arguments"] += func_delta["arguments"]
+              except (KeyError, IndexError, json.JSONDecodeError):
+                continue
+          
+          break
               
     # Yield tool calls if any were parsed
     tool_calls = []

@@ -29,7 +29,7 @@ class UserPreference(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True)
-    default_model = Column(String(100), default="gemini-3.5-flash")
+    default_model = Column(String(100), nullable=True)
     theme = Column(String(20), default="dark")
     system_prompt_override = Column(String(2000), nullable=True)
     developer_mode = Column(Boolean, default=False)

@@ -57,9 +57,9 @@ function applyAccentColor(accent: AccentColorType) {
     root.style.setProperty('--accent', '263 70% 60%');
     root.style.setProperty('--accent-glow', 'rgba(139, 92, 246, 0.35)');
   } else {
-    // Default blue accent
-    root.style.setProperty('--accent', '217 91% 60%');
-    root.style.setProperty('--accent-glow', 'rgba(59, 130, 246, 0.35)');
+    // Default sleek neutral monochrome accent (ChatGPT theme)
+    root.style.setProperty('--accent', '0 0% 90%');
+    root.style.setProperty('--accent-glow', 'rgba(255, 255, 255, 0.2)');
   }
 }
 

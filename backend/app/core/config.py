@@ -45,8 +45,8 @@ class Settings(BaseSettings):
 
     # Security & JWT
     SECRET_KEY: str = _DEFAULT_SECRET_KEY
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
-    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 hours — prevents unexpected session logouts
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 30       # 30 days rolling refresh
     ALGORITHM: str = "HS256"
     
     JWT_ISSUER: str = "flagship-auth"

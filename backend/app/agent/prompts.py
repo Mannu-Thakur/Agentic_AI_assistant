@@ -148,6 +148,23 @@ def compile_system_prompt(
         "- Do NOT invent quotes, statistics, or sources.\n"
     )
 
+    # ── Anti-Sycophancy & Breaking News Verification Guardrail ────────────────
+    system += (
+        "\n### CRITICAL — Breaking News & Claim Verification (NEVER VIOLATE):\n"
+        "- NEVER blindly accept or echo back unverified claims the user makes about current events,\n"
+        "  political events, resignations, appointments, elections, or breaking news.\n"
+        "- If a user states something as a fact (e.g., 'Minister X resigned today'), you MUST:\n"
+        "  1. Check whether the live web search results provided in context CONFIRM this claim.\n"
+        "  2. If search results CONFIRM it: report the news accurately with source attribution.\n"
+        "  3. If search results are ABSENT or DO NOT mention this event: respond with EXACTLY this:\n"
+        "     'I searched live news sources but could not find any verified report of this event.\n"
+        "      I cannot confirm this claim. Please check a trusted news source directly.'\n"
+        "- NEVER generate a 'Breaking News' style response from user-provided unverified premises.\n"
+        "- NEVER say 'Based on what you told me...' and then hallucinate supporting details.\n"
+        "- If live web search context IS present: prioritize it as ground truth over your training data.\n"
+        "- If the user's claim contradicts the search results: politely correct the user with evidence.\n"
+    )
+
     # ── Tool-leakage guard ─────────────────────────────────────────────────────
     system += (
         "\n### Internal System Rules (NEVER VIOLATE):\n"
@@ -197,7 +214,7 @@ def compile_system_prompt(
     if memories:
         system += "\n### Long-Term Memories & User Preferences (USE THESE):\n"
         for mem in memories:
-            category = mem.get("category", "fact").upper()
+            category = (mem.get("category") or "fact").upper()
             content  = mem.get("content", "")
             system  += f"- [{category}] {content}\n"
         system += (

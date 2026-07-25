@@ -99,11 +99,26 @@ openrouter_provider = OpenRouterProvider()
 def get_provider(model: str):
     if model.startswith("openrouter/"):
         return openrouter_provider
-    elif "gemini" in model:
+    elif "gemini" in model or "google" in model:
         return gemini_provider
-    elif "llama" in model or "mixtral" in model:
+    elif "gpt" in model or "o1-" in model or "o3-" in model or "o4-" in model:
+        # OpenAI models — routed through openrouter since we have no direct openai provider instance
+        return openrouter_provider
+    elif "claude" in model:
+        # Anthropic models — routed through openrouter
+        return openrouter_provider
+    elif "deepseek" in model:
+        # DeepSeek models — routed through openrouter
+        return openrouter_provider
+    elif "llama" in model or "mixtral" in model or "groq" in model:
         return groq_provider
-    return openrouter_provider
+    elif "qwen" in model or "glm" in model:
+        # Alibaba/GLM — routed through openrouter
+        return openrouter_provider
+    # Unknown model name (e.g. deep-research-max-preview-04-2026) —
+    # default to gemini_provider since Gemini is the most common Google provider
+    # and _best_api_key will select the right key based on available keys
+    return gemini_provider
 
 
 def _extract_api_keys(config: dict) -> dict:
@@ -125,9 +140,9 @@ def _extract_api_keys(config: dict) -> dict:
 def _best_api_key(keys: dict, model: str) -> Optional[str]:
     if model.startswith("openrouter/"):
         return keys.get("openrouter")
-    if "gemini" in model:
+    if "gemini" in model or "google" in model:
         return keys.get("gemini") or keys.get("google")
-    if "gpt" in model:
+    if "gpt" in model or "o1-" in model or "o3-" in model or "o4-" in model:
         return keys.get("openai")
     if "claude" in model:
         return keys.get("anthropic")
@@ -139,7 +154,13 @@ def _best_api_key(keys: dict, model: str) -> Optional[str]:
         return keys.get("glm")
     if "llama" in model or "mixtral" in model:
         return keys.get("groq")
-    return keys.get("openrouter")
+    # Unknown model name — fall back to any available key in priority order
+    # (Google first since it supports the most model variants)
+    return (
+        keys.get("gemini") or keys.get("google") or
+        keys.get("openai") or keys.get("anthropic") or
+        keys.get("openrouter")
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -198,8 +219,8 @@ async def _call_llm_judge(prompt: str, config: dict) -> Optional[dict]:
 
     for provider, key_name, model in [
         (gemini_provider,     "gemini",     "gemini-2.5-flash"),
-        (groq_provider,       "groq",       "llama-3.1-8b-instant"),
         (openrouter_provider, "openrouter", "google/gemini-2.5-flash"),
+        (groq_provider,       "groq",       "llama-3.1-8b-instant"),
     ]:
         api_key = keys.get(key_name)
         try:
@@ -245,8 +266,8 @@ async def _call_llm_text(prompt: str, config: dict, max_tokens: int = 256) -> Op
 
     for provider, key_name, model in [
         (gemini_provider,     "gemini",     "gemini-2.5-flash"),
-        (groq_provider,       "groq",       "llama-3.1-8b-instant"),
         (openrouter_provider, "openrouter", "google/gemini-2.5-flash"),
+        (groq_provider,       "groq",       "llama-3.1-8b-instant"),
     ]:
         api_key = keys.get(key_name)
         try:
@@ -547,10 +568,12 @@ async def classify_intent_node(
                 # Dynamic financial data
                 "weather", "temperature", "forecast", "stock", "price", "bitcoin",
                 "crypto", "exchange rate", "market", "ipo", "sensex", "nifty",
-                # Current facts
+                # Current facts & political news
                 "population", "capital of", "president", "prime minister", "pm of",
-                "ceo", "governor", "minister", "champion", "winner", "who won",
-                "election", "results", "score", "ranking", "richest", "gdp",
+                "ceo", "governor", "minister", "resignation", "resigned", "cabinet",
+                "government", "parliament", "politics", "protest", "headline",
+                "champion", "winner", "who won", "election", "results", "score",
+                "ranking", "richest", "gdp",
                 # Search phrases
                 "search for", "look up", "find me", "what's happening",
                 "who is the current", "latest version of",
@@ -570,6 +593,12 @@ async def classify_intent_node(
             elif any(s in q_lower for s in code_signals):
                 intent = INTENT_COMPLEX
             # else stays NORMAL_CHAT
+
+    # High-confidence explicit news & search keyword override
+    if last_query and intent in (INTENT_NORMAL_CHAT, INTENT_DOCUMENT_QA) and not is_private_doc_query:
+        q_low = last_query.lower()
+        if any(k in q_low for k in ("news", "resignation", "resigned", "minister", "breaking", "latest update", "current news")):
+            intent = INTENT_WEB_SEARCH
 
     # ── Re-apply image override if LLM incorrectly overrode it ───────────────
     # If images were present but LLM returned a non-VISION intent for an
@@ -839,7 +868,7 @@ def _log_rag_audit(
     for ch in docs_rejected:
         lines.append(f"    ✗ {ch.get('filename','?')}")
     lines += [
-        f"  Generation Mode       : {generation_mode.upper()}",
+        f"  Generation Mode       : {(generation_mode or 'UNKNOWN').upper()}",
         f"  Sources Returned (UI) : {len(sources_returned)}",
     ]
     for s in sources_returned:
@@ -1143,6 +1172,39 @@ async def grade_documents_node(
     memory_items = [d for d in retrieved_docs if d.get("type") != "chunk"]
 
     if not doc_chunks:
+        # For WEB_SEARCH intent (or COMPLEX), still attempt live web search
+        # even when the vector DB returned no document chunks.
+        if not is_private and intent in (INTENT_WEB_SEARCH, INTENT_COMPLEX):
+            if last_query:
+                logger.info(
+                    f"CRAG: No doc chunks, but intent={intent} → forcing web search fallback."
+                )
+                try:
+                    web_result = await tavily_search(last_query)
+                    web_chunk = {
+                        "type":     "chunk",
+                        "content":  web_result,
+                        "filename": "Web Search Results",
+                        "distance": 0.0,
+                    }
+                    steps.append("grade_documents")
+                    return {
+                        "document_relevance":   "web_fallback",
+                        "no_doc_answer":        False,
+                        "retrieved_documents":  retrieved_docs + [web_chunk],
+                        "source_documents":     [{
+                            "index": 1,
+                            "filename": "Web Search Results",
+                            "content": web_result,
+                            "distance": 0.0,
+                        }],
+                        "retrieval_confidence": 0.9,
+                        "generation_mode":      "web_search",
+                        "steps":                steps,
+                    }
+                except Exception as e:
+                    logger.error(f"CRAG web search on empty docs failed: {e}")
+
         steps.append("grade_documents")
         return {
             "document_relevance":  "no_docs",
@@ -1206,11 +1268,14 @@ async def grade_documents_node(
     )
 
     should_search_web = False
-    # Allow web search if not a private document query, OR if it's a COMPLEX intent
-    # query that explicitly spans RAG + web search/tools.
-    if (not is_private) or (intent == INTENT_COMPLEX):
-        # Perform web verification only when freshness is actually required
-        if freshness_required and (has_outdated or not relevant_chunks):
+    # Allow web search if not a private document query, OR if it's a COMPLEX/WEB_SEARCH intent.
+    if (not is_private) or (intent in (INTENT_COMPLEX, INTENT_WEB_SEARCH)):
+        if intent == INTENT_WEB_SEARCH:
+            # WEB_SEARCH intent: ALWAYS perform live web search (this is the primary path)
+            should_search_web = True
+        elif freshness_required and (has_outdated or not relevant_chunks):
+            # All other intents: only fire web search when freshness is required
+            # AND chunks are either outdated or missing — preserves original behaviour.
             should_search_web = True
 
     # 5. Handle web fallback
@@ -1411,7 +1476,12 @@ async def generate_response_node(
       Gemini, returns a graceful user-facing message instead of silently dropping.
     """
     config          = config or {}
-    model           = state.get("active_model", "gemini-2.5-flash")
+    model           = state.get("active_model") or ""
+    if not model:
+        logger.error("generate_response_node: no active_model in state — cannot proceed")
+        if config.get("configurable", {}).get("on_token"):
+            await config["configurable"]["on_token"]("*[Error: No model selected. Please select a model from the model picker.]*")
+        return {**state, "response_text": "*[Error: No model selected. Please select a model from the model picker.]*"}
     model_aliases = {
         "gemini-1.5-flash":                     "gemini-2.5-flash",
         "gemini-1.5-pro":                       "gemini-2.5-pro",
@@ -1443,7 +1513,15 @@ async def generate_response_node(
 
     # ── Image-provider mismatch guard ─────────────────────────────────────────
     actual_model_id = model[11:] if model.startswith("openrouter/") else model
-    is_gemini_model = "gemini" in actual_model_id
+    # Check if the model runs on Gemini provider — either by name keyword
+    # or because it was resolved to the Gemini provider (e.g. deep-research-max-preview-04-2026)
+    is_gemini_model = (
+        "gemini" in actual_model_id or
+        "google" in actual_model_id or
+        bool(keys.get("gemini") or keys.get("google"))  # If a Google key exists and no other keyword matches, assume Gemini
+        if not any(kw in actual_model_id for kw in ["gpt", "claude", "deepseek", "llama", "mixtral", "qwen", "glm"])
+        else False
+    )
     if images and not is_gemini_model:
         warning_text = (
             "⚠️ Image analysis requires a Gemini model. "
@@ -1567,11 +1645,47 @@ async def generate_response_node(
             )
             attempts.append((prov_inst, target_model, target_key))
 
-    generic_fallbacks = [
-        ("gemini",     gemini_provider,     "gemini-2.5-flash"),
-        ("openrouter", openrouter_provider, "google/gemini-2.5-flash"),
-        ("groq",       groq_provider,       "llama-3.1-8b-instant"),
-    ]
+    model_lower = (actual_model_id or "").lower()
+    if "gemini" in model_lower or "google" in model_lower:
+        generic_fallbacks = [
+            ("gemini",     gemini_provider,     "gemini-2.5-flash"),
+            ("openrouter", openrouter_provider, "google/gemini-2.5-flash"),
+        ]
+    elif "gpt" in model_lower or "o1-" in model_lower or "o3-" in model_lower or "o4-" in model_lower:
+        generic_fallbacks = [
+            ("openai",     openrouter_provider, f"openai/{actual_model_id}"),
+            ("openrouter", openrouter_provider, f"openai/{actual_model_id}"),
+        ]
+    elif "claude" in model_lower:
+        generic_fallbacks = [
+            ("anthropic",  openrouter_provider, f"anthropic/{actual_model_id}"),
+            ("openrouter", openrouter_provider, f"anthropic/{actual_model_id}"),
+        ]
+    elif "deepseek" in model_lower:
+        generic_fallbacks = [
+            ("deepseek",   openrouter_provider, f"deepseek/{actual_model_id}"),
+            ("openrouter", openrouter_provider, f"deepseek/{actual_model_id}"),
+        ]
+    elif "llama" in model_lower or "groq" in model_lower or "mixtral" in model_lower:
+        generic_fallbacks = [
+            ("groq",       groq_provider,       "llama-3.1-8b-instant"),
+            ("openrouter", openrouter_provider, "meta-llama/llama-3.1-8b-instruct"),
+        ]
+    else:
+        # Unknown model — dynamically choose fallback based on what keys are available.
+        # Priority: google (most likely for unknown non-keyword models like deep-research),
+        # then openrouter as a universal router.
+        generic_fallbacks = []
+        if keys.get("gemini") or keys.get("google"):
+            generic_fallbacks.append(("gemini", gemini_provider, actual_model_id))
+        if keys.get("openrouter"):
+            generic_fallbacks.append(("openrouter", openrouter_provider, actual_model_id))
+        # Last resort fallback to gemini-2.5-flash if the model itself isn't available
+        if not generic_fallbacks:
+            generic_fallbacks = [
+                ("gemini",     gemini_provider,     "gemini-2.5-flash"),
+                ("openrouter", openrouter_provider, "google/gemini-2.5-flash"),
+            ]
     for prov_name, prov_inst, model_id in generic_fallbacks:
         key = keys.get(prov_name)
         if key and not any(p == prov_inst and m == model_id for p, m, _ in attempts):
@@ -1585,7 +1699,7 @@ async def generate_response_node(
     async def _stream(prov, mod, api_k):
         nonlocal full_response
         t_calls: List[dict] = []
-        provider_images = images if ("gemini" in mod and images) else []
+        provider_images = images if (("gemini" in mod or "google" in mod or isinstance(prov, GeminiProvider)) and images) else []
 
         import inspect
         sig = inspect.signature(prov.generate_stream)
@@ -1671,23 +1785,53 @@ async def generate_response_node(
 
         return t_calls
 
-    for current_provider, current_model, current_key in attempts:
+    primary_error = None
+    for attempt_idx, (current_provider, current_model, current_key) in enumerate(attempts):
         try:
             tool_calls = await _stream(current_provider, current_model, current_key)
             success = True
             break
         except Exception as e:
+            err_str = str(e).lower()
+            is_payment_error = any(code in err_str for code in ["402", "403", "payment required", "insufficient credits", "quota"])
             logger.error(json.dumps({
                 "event": "provider_call_failed",
                 "model": current_model,
-                "error": str(e)
+                "error": str(e),
+                "is_payment_error": is_payment_error,
+                "attempt": attempt_idx
             }))
+            if attempt_idx == 0:
+                primary_error = e  # always remember the primary attempt's error
             last_error = e
             if full_response:
+                # Already streamed some content — cannot silently retry
                 raise e
+            if is_payment_error and attempt_idx > 0:
+                # Skip fallback providers with billing/quota issues silently
+                logger.warning(f"Skipping fallback provider {current_model} due to payment/quota error — trying next")
+                continue
+            if attempt_idx == 0 and not is_payment_error:
+                # Primary provider failed with a real error — still try fallbacks
+                continue
 
     if not success:
-        raise last_error or Exception("No active provider models were able to process the request.")
+        err_msg = str(primary_error or last_error or "")
+        if "429" in err_msg or "rate limit" in err_msg.lower() or "quota" in err_msg.lower():
+            friendly_msg = (
+                "⚠️ **Rate Limit Exceeded (HTTP 429)**\n\n"
+                "The API request limit or quota for the active model has been reached. "
+                "Please wait a moment before trying again, or select a different model from the top bar."
+            )
+            if on_token and not full_response:
+                try:
+                    await on_token(friendly_msg)
+                except Exception:
+                    pass
+            full_response = friendly_msg
+        else:
+            # Surface the primary provider's error if it failed, otherwise use last error
+            raise (primary_error or last_error or Exception("No active provider models were able to process the request."))
 
     # ── Sanitize response before returning ────────────────────────────────────
     full_response = _sanitize_response(full_response)
@@ -2025,7 +2169,9 @@ async def evidence_checker_node(
             "ux_stage":                 UX_STAGE_GENERATING,
         }
 
-    # Skip deep verification for memory/chat intents (not document-grounded)
+    # Skip deep verification ONLY for memory/chat intents.
+    # WEB_SEARCH and COMPLEX are included so search-grounded answers get verified
+    # against retrieved web context, preventing sycophantic hallucination.
     skip_intents = {INTENT_MEMORY_WRITE, INTENT_NORMAL_CHAT}
     if intent in skip_intents:
         steps.append("evidence_checker")
@@ -2038,7 +2184,7 @@ async def evidence_checker_node(
             "ux_stage":                 UX_STAGE_GENERATING,
         }
 
-    # Build evidence text from retrieved doc chunks
+    # Build evidence text from retrieved doc/web chunks
     doc_chunks = [d for d in retrieved if d.get("type") == "chunk"]
     evidence_text = ""
     for idx, chunk in enumerate(doc_chunks[:10], start=1):

@@ -48,12 +48,27 @@ class OpenRouterProvider(BaseLLMProvider):
         "X-Title": "Omni Agentic Workspace"
     }
 
-    async with httpx.AsyncClient(timeout=45.0) as client:
-      response = await client.post(url, json=payload, headers=headers)
-      if response.status_code != 200:
-        raise Exception(f"OpenRouter API returned error {response.status_code}: {response.text}")
-      
-      data = response.json()
+    max_retries = 3
+    initial_delay = 1.0
+    data = None
+
+    for attempt in range(max_retries + 1):
+      async with httpx.AsyncClient(timeout=45.0) as client:
+        response = await client.post(url, json=payload, headers=headers)
+        if response.status_code == 200:
+          data = response.json()
+          break
+        elif response.status_code in (429, 500, 502, 503, 504) and attempt < max_retries:
+          delay = initial_delay * (2 ** attempt)
+          await asyncio.sleep(delay)
+          continue
+        elif response.status_code == 429:
+          raise Exception(
+              "OpenRouter rate limit exceeded (HTTP 429). "
+              "You have reached the API request limit. Please wait a moment before trying again or switch to another model."
+          )
+        else:
+          raise Exception(f"OpenRouter API returned error {response.status_code}: {response.text}")
       text = data["choices"][0]["message"]["content"]
       input_tokens = data.get("usage", {}).get("prompt_tokens", 0)
       output_tokens = data.get("usage", {}).get("completion_tokens", 0)
@@ -78,35 +93,9 @@ class OpenRouterProvider(BaseLLMProvider):
     is_mock_run = not key_to_use or key_to_use.startswith("mock_")
 
     if is_mock_run:
-      mock_text = f"Hello from Omni Agent Workspace! This is a real-time streamed response from the **OpenRouter Adapter**. You selected the model **{model}**.\n\nHere is a code snippet demonstration:\n```python\nprint('Hello OpenRouter!')\n```"
-      words = mock_text.split(" ")
-      input_tokens = len(str(messages)) // 4
-      output_tokens = 0
-      
-      start_time = time.time()
-      for i, word in enumerate(words):
-        await asyncio.sleep(0.04)
-        text_chunk = word + (" " if i < len(words) - 1 else "")
-        output_tokens += len(text_chunk) // 4
-        yield {
-            "event": "chunk",
-            "text": text_chunk
-        }
-      
-      latency_ms = int((time.time() - start_time) * 1000)
-      yield {
-          "event": "metrics",
-          "metrics": {
-              "model_used": model,
-              "latency_ms": latency_ms,
-              "tokens_input": input_tokens,
-              "tokens_output": output_tokens + 5,
-              "cost_estimate": (input_tokens * 0.00015 + output_tokens * 0.00045) / 1000,
-              "confidence_score": 0.90,
-              "memory_hits": 1
-          }
-      }
-      return
+      raise Exception(
+          "OpenRouter API key missing or invalid. Please configure your OpenRouter API key in Settings to stream real-time responses."
+      )
 
     payload = {
         "model": model,
@@ -128,32 +117,48 @@ class OpenRouterProvider(BaseLLMProvider):
     output_text = ""
     start_time = time.time()
 
-    async with httpx.AsyncClient(timeout=45.0) as client:
-      async with client.stream("POST", url, json=payload, headers=headers) as response:
-        if response.status_code != 200:
-          raise Exception(f"OpenRouter streaming API returned error {response.status_code}")
-          
-        async for line in response.aiter_lines():
-          line = line.strip()
-          if not line:
-            continue
-            
-          if line.startswith("data: "):
-            raw_data = line[6:]
-            if raw_data == "[DONE]":
-              break
-              
-            try:
-              parsed = json.loads(raw_data)
-              chunk_text = parsed["choices"][0]["delta"].get("content", "")
-              if chunk_text:
-                output_text += chunk_text
-                yield {
-                    "event": "chunk",
-                    "text": chunk_text
-                }
-            except (KeyError, IndexError, json.JSONDecodeError):
+    max_retries = 3
+    initial_delay = 1.0
+
+    for attempt in range(max_retries + 1):
+      async with httpx.AsyncClient(timeout=45.0) as client:
+        async with client.stream("POST", url, json=payload, headers=headers) as response:
+          if response.status_code in (429, 500, 502, 503, 504):
+            if attempt < max_retries:
+              delay = initial_delay * (2 ** attempt)
+              await asyncio.sleep(delay)
               continue
+            else:
+              raise Exception(
+                  "OpenRouter streaming API rate limit exceeded (HTTP 429). "
+                  "You have reached the API request limit. Please wait a moment before trying again or switch to another model."
+              )
+          elif response.status_code != 200:
+            raise Exception(f"OpenRouter streaming API returned error {response.status_code}")
+          
+          async for line in response.aiter_lines():
+            line = line.strip()
+            if not line:
+              continue
+              
+            if line.startswith("data: "):
+              raw_data = line[6:]
+              if raw_data == "[DONE]":
+                break
+                
+              try:
+                parsed = json.loads(raw_data)
+                chunk_text = parsed["choices"][0]["delta"].get("content", "")
+                if chunk_text:
+                  output_text += chunk_text
+                  yield {
+                      "event": "chunk",
+                      "text": chunk_text
+                  }
+              except (KeyError, IndexError, json.JSONDecodeError):
+                continue
+          
+          break
               
     latency_ms = int((time.time() - start_time) * 1000)
     out_tokens = len(output_text) // 4

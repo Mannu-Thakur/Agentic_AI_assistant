@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, memo } from 'react';
+import { useState, useEffect, useRef, useCallback, memo, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useUIStore } from '../store/uiStore';
 import { useAuthStore } from '../store/authStore';
@@ -14,7 +14,7 @@ import {
   RefreshCw, ArrowLeft, FolderClosed, UploadCloud, CheckCircle2,
   XCircle, FileText, FileCode, Sparkles, Calendar, Info, ChevronRight,
   Database, Layers, Scissors, HardDrive, Plus, Monitor,
-  Sun, Moon, Globe, Type
+  Sun, Moon, Globe, Type, Archive, Link2, RotateCcw
 } from 'lucide-react';
 import { apiRequest } from '../services/api';
 import { ProviderKeyManager } from '../services/providerKeyManager';
@@ -23,11 +23,12 @@ import { ProviderKeyManager } from '../services/providerKeyManager';
 // Types & Constants
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-type SettingsTab = 'general' | 'models' | 'generation' | 'features' | 'documents' | 'memories' | 'account';
+type SettingsTab = 'general' | 'datacontrols' | 'models' | 'generation' | 'features' | 'documents' | 'memories' | 'account';
 
 const TABS: { id: SettingsTab | 'chat'; label: string; icon: React.ElementType }[] = [
   { id: 'chat',       label: 'Back to Chat',    icon: ArrowLeft   },
   { id: 'general',    label: 'General',         icon: Sliders     },
+  { id: 'datacontrols', label: 'Data controls', icon: Database    },
   { id: 'models',     label: 'AI Models',       icon: Cpu         },
   { id: 'generation', label: 'Generation',      icon: Zap         },
   { id: 'features',   label: 'AI Features',     icon: Brain       },
@@ -108,6 +109,42 @@ const ALL_MODELS = [
   { id: 'qwen-turbo', label: 'Qwen Turbo', provider: 'Alibaba', apiProvider: 'alibaba' },
 ];
 
+async function detectUserLocation(): Promise<string> {
+  if ('geolocation' in navigator) {
+    try {
+      const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 6000, enableHighAccuracy: true });
+      });
+      const { latitude, longitude } = pos.coords;
+      const res = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${latitude}&lon=${longitude}&format=json`);
+      if (res.ok) {
+        const data = await res.json();
+        const address = data.address || {};
+        const parts = [
+          address.suburb || address.neighbourhood || address.residential || address.village,
+          address.city || address.town || address.county,
+          address.state,
+          address.country
+        ].filter(Boolean);
+        if (parts.length > 0) return parts.join(', ');
+      }
+    } catch (e) {
+      console.warn('Geolocation API unavailable or permission denied, trying IP fallback:', e);
+    }
+  }
+
+  try {
+    const ipRes = await fetch('https://ipapi.co/json/').catch(() => null);
+    if (ipRes && ipRes.ok) {
+      const ipData = await ipRes.json();
+      const parts = [ipData.city, ipData.region, ipData.country_name].filter(Boolean);
+      if (parts.length > 0) return parts.join(', ');
+    }
+  } catch { /* fallback */ }
+
+  return 'Mithapur, Bihar, India';
+}
+
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // â”€â”€ Premium Toggle Switch â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -134,26 +171,23 @@ const Toggle = memo(function Toggle({
       role="switch"
       aria-checked={checked}
       aria-label={label}
-      onClick={() => onChange(!checked)}
-      onKeyDown={handleKeyDown}
-      className={`relative inline-flex w-10 h-[22px] rounded-full flex-shrink-0 cursor-pointer
-        transition-all duration-200 ease-[cubic-bezier(0.4,0,0.2,1)] outline-none
-        focus-visible:ring-2 focus-visible:ring-accent/40 active:scale-[0.98]
-        ${checked
-          ? 'shadow-[0_0_8px_var(--accent-glow)]'
-          : 'bg-surface-3 border-none'
-        }`}
-      style={{
-        backgroundColor: checked ? 'hsl(var(--accent))' : undefined
+      onClick={(e) => {
+        e.stopPropagation();
+        onChange(!checked);
       }}
+      onKeyDown={handleKeyDown}
+      className={`relative inline-flex w-11 h-6 rounded-full flex-shrink-0 cursor-pointer p-0.5
+        transition-colors duration-200 ease-in-out outline-none
+        focus-visible:ring-2 focus-visible:ring-emerald-500/40 active:scale-[0.96]
+        ${checked
+          ? 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.4)]'
+          : 'bg-zinc-800 border border-zinc-700/80 hover:bg-zinc-700'
+        }`}
     >
       <span
-        className={`absolute top-[3px] w-4 h-4 rounded-full bg-white shadow-md
-          transition-all duration-200 ease-[cubic-bezier(0.4,0,0.2,1)]
-          ${checked
-            ? 'left-[22px] shadow-[0_1px_4px_rgba(0,0,0,0.15)]'
-            : 'left-[3px] shadow-[0_1px_3px_rgba(0,0,0,0.2)]'
-          }`}
+        className={`pointer-events-none inline-block w-5 h-5 rounded-full bg-white shadow-md transform
+          transition-transform duration-200 ease-in-out
+          ${checked ? 'translate-x-5' : 'translate-x-0'}`}
       />
     </button>
   );
@@ -292,7 +326,7 @@ const PipelineExplainer = memo(function PipelineExplainer() {
         <div className="px-4 pb-4 space-y-3 animate-slide-up">
           <div className="h-px bg-border" />
           <p className="text-[11px] text-foreground-2 leading-relaxed">
-            When you upload a document, Omni runs a multi-stage ingestion pipeline to make it searchable by the AI:
+            When you upload a document, openChat runs a multi-stage ingestion pipeline to make it searchable by the AI:
           </p>
           <div className="grid gap-2">
             {[
@@ -629,13 +663,112 @@ export default function SettingsPage() {
 
 
 
-  // â”€â”€ UI state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── UI state ──────────────────────────────────────────────
   const [saved, setSaved]               = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
-  const { toasts, removeToast } = useToast();
+  const { toasts, removeToast, addToast } = useToast();
   const [editModes, setEditModes]       = useState<Record<string, boolean>>({});
   const [refreshing, setRefreshing]     = useState(false);
   const providerCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
+
+  // ── Data Controls state ───────────────────────────────────────
+  const [improveModel, setImproveModel] = useState<boolean>(
+    () => localStorage.getItem('omni_improve_model') !== 'false',
+  );
+  const [locationEnabled, setLocationEnabled] = useState<boolean>(
+    () => localStorage.getItem('omni_location_enabled') !== 'false',
+  );
+  const [userLocation, setUserLocation] = useState<string | null>(
+    () => localStorage.getItem('omni_user_location')
+  );
+  const [locationLoading, setLocationLoading] = useState<boolean>(false);
+  const [showSharedLinksModal, setShowSharedLinksModal] = useState(false);
+  const [showArchivedChatsModal, setShowArchivedChatsModal] = useState(false);
+  const [archiveRefresh, setArchiveRefresh] = useState(0); // forces re-read of localStorage
+
+  const toggleImproveModel = useCallback((v: boolean) => {
+    localStorage.setItem('omni_improve_model', String(v));
+    setImproveModel(v);
+    addToast(
+      v
+        ? 'Model telemetry enabled. Anonymous logs optimize response quality.'
+        : 'Model telemetry disabled.',
+      'info'
+    );
+  }, [addToast]);
+
+  const toggleLocationEnabled = useCallback(async (active: boolean) => {
+    localStorage.setItem('omni_location_enabled', String(active));
+    setLocationEnabled(active);
+
+    if (active) {
+      setLocationLoading(true);
+      try {
+        const loc = await detectUserLocation();
+        localStorage.setItem('omni_user_location', loc);
+        setUserLocation(loc);
+        addToast(`Location context active: ${loc}`, 'success');
+      } catch {
+        const fallback = 'Mithapur, Bihar, India';
+        localStorage.setItem('omni_user_location', fallback);
+        setUserLocation(fallback);
+        addToast(`Location set to: ${fallback}`, 'info');
+      } finally {
+        setLocationLoading(false);
+      }
+    } else {
+      localStorage.removeItem('omni_user_location');
+      setUserLocation(null);
+      addToast('Location context disabled.', 'info');
+    }
+  }, [addToast]);
+
+  useEffect(() => {
+    if (locationEnabled && !userLocation && !locationLoading) {
+      setLocationLoading(true);
+      detectUserLocation().then((loc) => {
+        localStorage.setItem('omni_user_location', loc);
+        setUserLocation(loc);
+        setLocationLoading(false);
+      });
+    }
+  }, [locationEnabled, userLocation, locationLoading]);
+
+  const archivedChatIds: string[] = useMemo(() => {
+    try {
+      return JSON.parse(localStorage.getItem('omni_archived_chats') || '[]');
+    } catch {
+      return [];
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chats, archiveRefresh]);
+
+  const archivedChatsList = useMemo(() => {
+    return chats.filter((c) => archivedChatIds.includes(c.id));
+  }, [chats, archivedChatIds]);
+
+  const handleUnarchiveChat = useCallback((chatId: string) => {
+    const updated = archivedChatIds.filter((id) => id !== chatId);
+    localStorage.setItem('omni_archived_chats', JSON.stringify(updated));
+    setArchiveRefresh((n) => n + 1);
+    addToast('Chat unarchived.', 'success');
+  }, [archivedChatIds, addToast]);
+
+  const handleDeleteArchivedChat = useCallback((chatId: string) => {
+    useChatStore.getState().removeChat(chatId);
+    const updated = archivedChatIds.filter((id) => id !== chatId);
+    localStorage.setItem('omni_archived_chats', JSON.stringify(updated));
+    setArchiveRefresh((n) => n + 1);
+    addToast('Chat deleted.', 'success');
+  }, [archivedChatIds, addToast]);
+
+  const handleArchiveAllChats = useCallback(() => {
+    const allIds = chats.map((c) => c.id);
+    localStorage.setItem('omni_archived_chats', JSON.stringify(allIds));
+    setArchiveRefresh((n) => n + 1);
+    addToast('All active chats have been archived.', 'success');
+  }, [chats, addToast]);
+
 
   // â”€â”€ Documents state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const [documents, setDocuments]         = useState<DocumentFile[]>([]);
@@ -1060,7 +1193,7 @@ export default function SettingsPage() {
                     />
                   </SettingRow>
 
-                  <SettingRow label="Higher intelligence" desc="Omni can automatically use a higher intelligence setting when you ask a complex question.">
+                  <SettingRow label="Higher intelligence" desc="openChat can automatically use a higher intelligence setting when you ask a complex question.">
                     <Toggle label="Higher intelligence" checked={higherIntelligence} onChange={setHigherIntelligence} />
                   </SettingRow>
 
@@ -1073,6 +1206,106 @@ export default function SettingsPage() {
                   </SettingRow>
                 </SectionCard>
               </>
+            )}
+
+            {/* ── Data controls tab ── */}
+            {tab === 'datacontrols' && (
+              <div className="space-y-4">
+                <SectionCard title="Privacy">
+                  <SettingRow
+                    label="Improve the model for everyone"
+                    desc={
+                      improveModel
+                        ? 'Active: Anonymous chat telemetry enabled to optimize model quality & accuracy.'
+                        : 'Disabled: No chat telemetry or conversation data will be shared.'
+                    }
+                  >
+                    <Toggle
+                      label="Improve the model"
+                      checked={improveModel}
+                      onChange={toggleImproveModel}
+                    />
+                  </SettingRow>
+
+                  <SettingRow
+                    label="Location"
+                    desc={
+                      locationLoading
+                        ? 'Detecting your device location...'
+                        : locationEnabled && userLocation
+                        ? `Active context: ${userLocation}`
+                        : 'Allow openChat to use your device\'s location context when providing local responses.'
+                    }
+                  >
+                    <div className="flex items-center gap-2.5">
+                      {locationLoading && (
+                        <div className="flex items-center gap-1 text-[11px] text-blue-400 font-medium">
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          <span>Locating...</span>
+                        </div>
+                      )}
+                      <Toggle
+                        label="Location context"
+                        checked={locationEnabled}
+                        onChange={toggleLocationEnabled}
+                      />
+                    </div>
+                  </SettingRow>
+                </SectionCard>
+
+                <SectionCard title="Conversations">
+                  <SettingRow
+                    label="Shared links"
+                    desc="Manage public snapshots and shared links created for your conversations."
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setShowSharedLinksModal(true)}
+                      className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full
+                        bg-surface-2 hover:bg-surface-3 border border-border
+                        text-xs font-semibold text-foreground
+                        transition-all duration-150 active:scale-[0.97] shadow-sm"
+                    >
+                      <Link2 className="w-3 h-3" />
+                      Manage
+                    </button>
+                  </SettingRow>
+
+                  <SettingRow
+                    label="Archived chats"
+                    desc="View, restore, or delete conversations you have previously archived."
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setShowArchivedChatsModal(true)}
+                      className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full
+                        bg-surface-2 hover:bg-surface-3 border border-border
+                        text-xs font-semibold text-foreground
+                        transition-all duration-150 active:scale-[0.97] shadow-sm"
+                    >
+                      <FolderClosed className="w-3 h-3" />
+                      Manage
+                    </button>
+                  </SettingRow>
+
+                  <SettingRow
+                    label="Archive all chats"
+                    desc="Move all current active conversations into archived chats."
+                  >
+                    <button
+                      type="button"
+                      onClick={handleArchiveAllChats}
+                      className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full
+                        bg-surface-2 hover:bg-surface-3 border border-border
+                        text-xs font-semibold text-foreground
+                        transition-all duration-150 active:scale-[0.97] shadow-sm"
+                    >
+                      <Archive className="w-3 h-3" />
+                      Archive all
+                    </button>
+                  </SettingRow>
+                </SectionCard>
+              </div>
             )}
 
             {/* â”€â”€ AI Models tab â”€â”€ */}
@@ -1146,7 +1379,7 @@ export default function SettingsPage() {
                           User Keys
                         </h2>
                         <p className="text-xs text-foreground-2 mt-1 leading-relaxed">
-                          Use your own LLM tokens by connecting 3rd-party API keys on Omni.
+                          Use your own LLM tokens by connecting 3rd-party API keys on openChat.
                         </p>
                       </div>
 
@@ -1320,7 +1553,7 @@ export default function SettingsPage() {
                         <span>Ingest Document</span>
                       </h3>
                       <p className="text-foreground-2 text-[10px] leading-relaxed">
-                        Upload PDF, TXT, DOCX, or Excel sheets. Omni parses, chunks, embeds, and indexes the content into the vector store automatically.
+                        Upload PDF, TXT, DOCX, or Excel sheets. openChat parses, chunks, embeds, and indexes the content into the vector store automatically.
                       </p>
 
                       <label className={`w-full flex flex-col items-center justify-center border-2 border-dashed rounded-xl p-6 cursor-pointer transition-all duration-150
@@ -1610,6 +1843,154 @@ export default function SettingsPage() {
           </div>
         </div>
       </div>
+
+      {/* Shared Links Modal */}
+      {showSharedLinksModal && (
+        <div
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in"
+          onClick={(e) => { if (e.target === e.currentTarget) setShowSharedLinksModal(false); }}
+        >
+          <div className="bg-surface border border-border rounded-2xl max-w-md w-full shadow-2xl overflow-hidden">
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-border bg-surface-2/40">
+              <div className="flex items-center gap-2">
+                <div className="w-7 h-7 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-center justify-center">
+                  <Link2 className="w-3.5 h-3.5 text-blue-400" />
+                </div>
+                <h3 className="font-bold text-sm text-foreground">Shared Links</h3>
+              </div>
+              <button
+                onClick={() => setShowSharedLinksModal(false)}
+                className="p-1.5 rounded-lg text-foreground-3 hover:text-foreground hover:bg-surface-3 transition-colors"
+              >
+                <XCircle className="w-4 h-4" />
+              </button>
+            </div>
+            {/* Body */}
+            <div className="p-5 space-y-2 max-h-72 overflow-y-auto">
+              {chats.filter(c => c.title?.includes('[Shared]') || localStorage.getItem(`shared_link_${c.id}`)).length === 0 ? (
+                <div className="flex flex-col items-center gap-2 py-8">
+                  <Globe className="w-8 h-8 text-foreground-3/40" />
+                  <p className="text-xs text-foreground-3 italic">No active shared public links found.</p>
+                </div>
+              ) : (
+                chats
+                  .filter(c => c.title?.includes('[Shared]') || localStorage.getItem(`shared_link_${c.id}`))
+                  .map((c) => (
+                    <div key={c.id} className="flex items-center justify-between p-3 rounded-xl bg-surface-2 border border-border hover:border-border-2 transition-colors">
+                      <div className="flex items-center gap-2 min-w-0 flex-1 pr-2">
+                        <Link2 className="w-3 h-3 text-foreground-3 flex-shrink-0" />
+                        <span className="text-xs text-foreground font-medium truncate">{c.title || 'Untitled Snapshot'}</span>
+                      </div>
+                      <button
+                        onClick={() => {
+                          localStorage.removeItem(`shared_link_${c.id}`);
+                          addToast('Shared link revoked.', 'success');
+                        }}
+                        className="inline-flex items-center gap-1 text-[11px] text-rose-400 hover:text-rose-300
+                          font-semibold px-2.5 py-1 rounded-lg hover:bg-rose-950/20
+                          border border-transparent hover:border-rose-900/30 transition-all flex-shrink-0"
+                      >
+                        <XCircle className="w-3 h-3" /> Revoke
+                      </button>
+                    </div>
+                  ))
+              )}
+            </div>
+            {/* Footer */}
+            <div className="flex justify-end px-5 py-3 border-t border-border bg-surface-2/20">
+              <button
+                onClick={() => setShowSharedLinksModal(false)}
+                className="px-4 py-1.5 rounded-lg bg-surface-2 hover:bg-surface-3 border border-border
+                  text-foreground text-xs font-semibold transition-all active:scale-[0.97]"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Archived Chats Modal */}
+      {showArchivedChatsModal && (
+        <div
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in"
+          onClick={(e) => { if (e.target === e.currentTarget) setShowArchivedChatsModal(false); }}
+        >
+          <div className="bg-surface border border-border rounded-2xl max-w-md w-full shadow-2xl overflow-hidden">
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-border bg-surface-2/40">
+              <div className="flex items-center gap-2">
+                <div className="w-7 h-7 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center">
+                  <Archive className="w-3.5 h-3.5 text-amber-400" />
+                </div>
+                <h3 className="font-bold text-sm text-foreground">
+                  Archived Chats
+                  {archivedChatsList.length > 0 && (
+                    <span className="ml-2 bg-surface-3 text-foreground-2 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+                      {archivedChatsList.length}
+                    </span>
+                  )}
+                </h3>
+              </div>
+              <button
+                onClick={() => setShowArchivedChatsModal(false)}
+                className="p-1.5 rounded-lg text-foreground-3 hover:text-foreground hover:bg-surface-3 transition-colors"
+              >
+                <XCircle className="w-4 h-4" />
+              </button>
+            </div>
+            {/* Body */}
+            <div className="p-5 space-y-2 max-h-72 overflow-y-auto">
+              {archivedChatsList.length === 0 ? (
+                <div className="flex flex-col items-center gap-2 py-8">
+                  <Archive className="w-8 h-8 text-foreground-3/40" />
+                  <p className="text-xs text-foreground-3 italic">No archived conversations.</p>
+                </div>
+              ) : (
+                archivedChatsList.map((c: any) => (
+                  <div key={c.id} className="flex items-center justify-between p-3 rounded-xl bg-surface-2 border border-border hover:border-border-2 transition-colors">
+                    <div className="flex items-center gap-2 min-w-0 flex-1 pr-2">
+                      <FolderClosed className="w-3 h-3 text-foreground-3 flex-shrink-0" />
+                      <span className="text-xs text-foreground font-medium truncate">{c.title || 'Untitled Chat'}</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      <button
+                        onClick={() => handleUnarchiveChat(c.id)}
+                        className="inline-flex items-center gap-1 text-[11px] text-blue-400 hover:text-blue-300
+                          font-semibold px-2.5 py-1 rounded-lg hover:bg-blue-950/20
+                          border border-transparent hover:border-blue-900/30 transition-all"
+                      >
+                        <RotateCcw className="w-3 h-3" /> Unarchive
+                      </button>
+                      <button
+                        onClick={() => handleDeleteArchivedChat(c.id)}
+                        className="inline-flex items-center gap-1 text-[11px] text-rose-400 hover:text-rose-300
+                          font-semibold px-2.5 py-1 rounded-lg hover:bg-rose-950/20
+                          border border-transparent hover:border-rose-900/30 transition-all"
+                      >
+                        <Trash2 className="w-3 h-3" /> Delete
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+            {/* Footer */}
+            <div className="flex justify-end px-5 py-3 border-t border-border bg-surface-2/20">
+              <button
+                onClick={() => setShowArchivedChatsModal(false)}
+                className="px-4 py-1.5 rounded-lg bg-surface-2 hover:bg-surface-3 border border-border
+                  text-foreground text-xs font-semibold transition-all active:scale-[0.97]"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete All Chats Confirmation Modal — kept for internal use */}
     </div>
   );
 }

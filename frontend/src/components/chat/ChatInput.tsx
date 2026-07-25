@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Plus, Mic, ArrowUp, Square, HelpCircle, FileText, X, Eye, Undo2, Sparkles, Link, GitBranch, Search, MessageSquare } from 'lucide-react';
+import { Plus, Mic, ArrowUp, Square, FileText, X, Eye, Undo2, Sparkles, Link, GitBranch, Search, MessageSquare } from 'lucide-react';
 import { useUIStore } from '../../store/uiStore';
 
 /** Models (or model-name fragments) known to support vision / image input. */
@@ -43,7 +43,7 @@ export interface AttachmentItem {
 }
 
 interface ChatInputProps {
-  onSend: (text: string, images: { base64: string; mimeType: string }[]) => void;
+  onSend: (text: string, images: { base64: string; mimeType: string }[], attachedFiles?: File[]) => void;
   isLocked: boolean;
   isStreaming: boolean;
   onStop: () => void;
@@ -62,8 +62,7 @@ export const ChatInput = React.memo(function ChatInput({
   isStreaming,
   onStop,
   activeModel = '',
-  onOpenShortcuts,
-  placeholder = 'Message Omni…',
+  placeholder = 'Ask anything',
   className = '',
   chats = [],
   connectedChat = null,
@@ -116,9 +115,64 @@ export const ChatInput = React.memo(function ChatInput({
     setAttachments((prev) => [...prev, item]);
   }, []);
 
-  // Intercept long paste events
+  // Intercept long paste events & clipboard image paste
   const handlePaste = useCallback(
     (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      // ── 1. Image paste from clipboard (screenshot / copied photo / file manager) ──
+      const clipboardFiles = Array.from(e.clipboardData.files || []);
+      const clipboardItems = Array.from(e.clipboardData.items || []);
+      const imageFiles: File[] = [];
+
+      for (const file of clipboardFiles) {
+        if (file.type.startsWith('image/')) imageFiles.push(file);
+      }
+      if (imageFiles.length === 0) {
+        for (const item of clipboardItems) {
+          if (item.type.startsWith('image/')) {
+            const f = item.getAsFile();
+            if (f) imageFiles.push(f);
+          }
+        }
+      }
+
+      if (imageFiles.length > 0) {
+        e.preventDefault();
+        imageFiles.forEach((file) => {
+          const ext = file.type.split('/')[1] || 'png';
+          const named = file.name ? file : new File(
+            [file],
+            `pasted-image-${Date.now()}.${ext}`,
+            { type: file.type }
+          );
+          const previewUrl = URL.createObjectURL(named);
+          const item: AttachmentItem = {
+            id: crypto.randomUUID(),
+            file: named,
+            mimeType: named.type,
+            progress: 0,
+            status: 'uploading',
+            previewUrl,
+          };
+          setAttachments((prev) => [...prev, item]);
+
+          const reader = new FileReader();
+          reader.onload = (ev) => {
+            const result = ev.target?.result as string;
+            const base64 = result ? result.split(',')[1] : '';
+            setAttachments((prev) =>
+              prev.map((att) =>
+                att.id === item.id
+                  ? { ...att, base64, progress: 100, status: 'done' }
+                  : att
+              )
+            );
+          };
+          reader.readAsDataURL(named);
+        });
+        return;
+      }
+
+      // ── 2. Long text → convert to snippet attachment ──
       const pasted = e.clipboardData.getData('text');
       if (pasted && (pasted.length > 350 || pasted.split('\n').length > 5)) {
         e.preventDefault();
@@ -165,12 +219,17 @@ export const ChatInput = React.memo(function ChatInput({
         finalPrompt = finalPrompt ? `${finalPrompt}\n\n${snippetPayload}` : snippetPayload;
       }
 
+      // Capture non-image document files attached by user
+      const attachedFiles = attachments
+        .filter((a) => !a.base64 && !a.isTextSnippet && a.file)
+        .map((a) => a.file);
+
       // Synchronously clear input and attachments
       setText('');
       setAttachments([]);
 
-      // Submit prompt to parent
-      onSend(finalPrompt, imagesToSend);
+      // Submit prompt and files to parent
+      onSend(finalPrompt, imagesToSend, attachedFiles);
 
       // Reset submission guard
       setTimeout(() => {
@@ -407,7 +466,7 @@ export const ChatInput = React.memo(function ChatInput({
         type="file"
         multiple
         className="hidden"
-        accept="image/*,.pdf,.txt,.md,.csv,.json"
+        accept="image/*,.pdf,.docx,.doc,.xlsx,.xls,.pptx,.ppt,.txt,.md,.csv,.json,.py,.js,.ts,.html,.css"
         onChange={handleFileSelect}
       />
 
@@ -528,7 +587,7 @@ export const ChatInput = React.memo(function ChatInput({
           placeholder={isLocked ? 'Configure API keys to unlock…' : placeholder}
           disabled={isLocked}
           rows={1}
-          className="flex-1 bg-transparent resize-none text-sm text-foreground placeholder:text-foreground-3/60 focus:outline-none leading-relaxed disabled:cursor-not-allowed py-1"
+          className="flex-1 bg-transparent resize-none text-sm text-foreground placeholder:text-foreground-3/60 focus:outline-none leading-relaxed disabled:cursor-not-allowed py-1 custom-scrollbar"
           style={{ maxHeight: '180px', minHeight: '24px' }}
           aria-label="Message input"
         />
@@ -575,32 +634,30 @@ export const ChatInput = React.memo(function ChatInput({
         </div>
       </div>
 
-      <div className="flex items-center justify-between text-[10px] text-foreground-3/40 px-1 pt-0.5">
-        <span>Enter to send · Shift+Enter for newline · Long text auto-attaches as file</span>
-        {onOpenShortcuts && (
-          <button
-            type="button"
-            onClick={onOpenShortcuts}
-            className="flex items-center gap-1 hover:text-foreground-3 transition-all"
-          >
-            <HelpCircle className="w-3 h-3" /> Shortcuts
-          </button>
-        )}
+      <div className="flex items-center justify-center text-[11px] text-zinc-500 px-1 pt-1.5 font-normal tracking-wide">
+        <span>openChat can make mistakes. Check important info.</span>
       </div>
 
       {/* Snippet Viewer Modal */}
       {viewingSnippet && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
-          <div className="bg-surface border border-border-2 rounded-2xl max-w-2xl w-full p-5 space-y-4 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-border pb-3">
-              <div className="flex items-center gap-2">
-                <FileText className="w-4 h-4 text-accent" />
-                <span className="font-bold text-sm text-foreground">{viewingSnippet.file.name}</span>
-                <span className="text-xs text-foreground-3">({viewingSnippet.charCount?.toLocaleString()} chars)</span>
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-[#18181f] border border-white/10 rounded-2xl max-w-3xl w-full p-6 space-y-4 shadow-[0_25px_60px_rgba(0,0,0,0.8)]">
+            <div className="flex items-center justify-between border-b border-white/10 pb-3.5">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-white/10 border border-white/15 text-white">
+                  <FileText className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-sm text-white tracking-wide">{viewingSnippet.file.name}</h3>
+                  <p className="text-[11px] text-zinc-400 font-mono">
+                    {viewingSnippet.charCount?.toLocaleString()} chars &middot; {viewingSnippet.wordCount?.toLocaleString()} words
+                  </p>
+                </div>
               </div>
               <button
+                type="button"
                 onClick={() => setViewingSnippet(null)}
-                className="p-1 rounded-lg text-foreground-3 hover:text-foreground hover:bg-surface-2"
+                className="p-1.5 rounded-xl text-zinc-400 hover:text-white hover:bg-white/10 transition-all"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -623,14 +680,15 @@ export const ChatInput = React.memo(function ChatInput({
                 );
                 setViewingSnippet((prev) => (prev ? { ...prev, textContent: val, charCount: val.length } : null));
               }}
-              rows={12}
-              className="w-full rounded-xl bg-surface-2 p-3 text-xs font-mono text-foreground border border-border focus:outline-none focus:border-accent resize-y"
+              rows={14}
+              className="w-full rounded-xl bg-[#0f0f13] p-4 text-xs font-mono text-zinc-200 border border-white/10 focus:outline-none focus:border-white/20 resize-y custom-scrollbar leading-relaxed"
             />
-            <div className="flex justify-end gap-2">
+            <div className="flex items-center justify-between pt-1">
+              <span className="text-[11px] text-zinc-500">Editable preview snippet</span>
               <button
                 type="button"
                 onClick={() => setViewingSnippet(null)}
-                className="px-4 py-1.5 rounded-lg bg-accent text-white text-xs font-semibold hover:opacity-90 transition-all"
+                className="px-5 py-2 rounded-xl bg-white text-black hover:bg-zinc-200 text-xs font-bold transition-all active:scale-[0.97] shadow-md"
               >
                 Done
               </button>

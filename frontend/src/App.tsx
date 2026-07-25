@@ -36,7 +36,7 @@ function App() {
           <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-violet-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-violet-900/20">
             <Cpu className="w-5 h-5 text-white" />
           </div>
-          <span className="font-semibold text-lg tracking-tight">Omni Agentic Workspace</span>
+          <span className="font-semibold text-lg tracking-tight">openChat Workspace</span>
         </div>
         <button 
           onClick={toggleTheme}
@@ -92,7 +92,7 @@ function App() {
 
       {/* Footer */}
       <footer className="border-t border-border py-4 px-6 text-center text-xs text-muted-foreground bg-card/20">
-        &copy; {new Date().getFullYear()} Omni Systems. Production flagship release.
+        &copy; {new Date().getFullYear()} openChat Systems. Production flagship release.
       </footer>
     </div>
   );

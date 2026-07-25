@@ -28,7 +28,7 @@ class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 class UserPreferenceOut(BaseModel):
-    default_model: str
+    default_model: Optional[str] = None
     theme: str
     developer_mode: bool
     system_prompt_override: Optional[str] = None

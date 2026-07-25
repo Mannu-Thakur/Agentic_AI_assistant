@@ -57,17 +57,17 @@ export async function apiRequest<T = any>(
 ): Promise<T> {
   const { token, isAuthenticated, isTokenExpiringSoon } = useAuthStore.getState();
 
-  // --- Proactive token refresh (if expiring within 60 s) ---
+  // --- Proactive token refresh (if expiring within 5 minutes) ---
   // Only attempt proactive refresh when the user IS authenticated and we're
   // not already inside a refresh call.
   let activeToken = token;
-  if (!options._skipRefresh && isAuthenticated && token && isTokenExpiringSoon(60)) {
+  if (!options._skipRefresh && isAuthenticated && token && isTokenExpiringSoon(300)) {
     const newToken = await attemptTokenRefresh();
     if (newToken) {
       activeToken = newToken;
     }
-    // If refresh failed silently here, we'll still try the request with the
-    // old token; the 401 handler below will do a final attempt.
+    // If refresh failed, still try with the old token — the 401 handler below
+    // will make a final reactive attempt before giving up.
   }
 
   const headers = new Headers(options.headers || {});
@@ -109,8 +109,13 @@ export async function apiRequest<T = any>(
       headers.set('Authorization', `Bearer ${newToken}`);
       response = await fetchWithTimeout(url, { ...options, headers, credentials: 'include' }, timeoutMs);
     } else {
-      // Refresh failed — session is truly dead
-      forceLogout('Session expired. Please log in again.');
+      // Refresh failed — try once more with current token before giving up.
+      // This handles transient network errors on the refresh endpoint.
+      response = await fetchWithTimeout(url, { ...options, headers, credentials: 'include' }, timeoutMs);
+      if (response.status === 401) {
+        // Confirmed dead session — only NOW force logout
+        forceLogout('Session expired. Please log in again.');
+      }
     }
   }
 

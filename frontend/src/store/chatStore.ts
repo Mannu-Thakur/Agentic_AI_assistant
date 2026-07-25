@@ -52,7 +52,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   activeChatId: localStorage.getItem('omni_active_chat_id') || null,
   messages: [],
   messageCache: {},
-  activeModel: localStorage.getItem('active_model') || 'gemini-2.5-flash',
+  activeModel: localStorage.getItem('active_model') || '',
   isStreaming: false,
   providers: [],
   verifiedProviders: [],
@@ -63,22 +63,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setActiveChatId: (id) => {
     if (id) {
       localStorage.setItem('omni_active_chat_id', id);
-    } else {
-      localStorage.removeItem('omni_active_chat_id');
-    }
-    const cache = get().messageCache;
-    const currentMsgs = get().messages;
-    if (id) {
-      const msgsToKeep = (cache[id] && cache[id].length > 0) ? cache[id] : currentMsgs;
-      set((state) => ({
+      const state = get();
+      const cachedMsgs = state.messageCache[id];
+      const msgsToKeep = (cachedMsgs && cachedMsgs.length > 0) ? cachedMsgs : (state.activeChatId === id || state.activeChatId === null ? state.messages : []);
+      set({
         activeChatId: id,
         messages: msgsToKeep,
-        messageCache: {
-          ...state.messageCache,
-          [id]: msgsToKeep,
-        },
-      }));
+        messageCache: msgsToKeep.length > 0 ? { ...state.messageCache, [id]: msgsToKeep } : state.messageCache,
+      });
     } else {
+      localStorage.removeItem('omni_active_chat_id');
       set({
         activeChatId: null,
         messages: [],
@@ -97,19 +91,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   setMessagesForChat: (chatId, messages) => {
-    set((state) => {
-      const existing = state.messageCache[chatId];
-      // Do not overwrite existing cache if new incoming messages array is empty but local state has messages
-      const toStore = (existing && existing.length > 0 && messages.length === 0) ? existing : messages;
-      return {
-        messageCache: { ...state.messageCache, [chatId]: toStore },
-        messages: state.activeChatId === chatId ? toStore : state.messages,
-      };
-    });
+    set((state) => ({
+      messageCache: { ...state.messageCache, [chatId]: messages },
+      messages: state.activeChatId === chatId ? messages : state.messages,
+    }));
   },
 
   hasCachedMessages: (chatId) => {
-    return Boolean(get().messageCache[chatId]);
+    const cached = get().messageCache[chatId];
+    return Array.isArray(cached) && cached.length > 0;
   },
 
   setActiveModel: (model) => {

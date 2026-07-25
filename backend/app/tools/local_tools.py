@@ -54,25 +54,55 @@ def _check_dangerous(code: str) -> Optional[str]:
 #  Web search
 # ─────────────────────────────────────────────────────────────────────────────
 
+async def _ddg_search_fallback(query: str) -> str:
+    """Fallback search using DuckDuckGo (free, live, real-time)."""
+    try:
+        try:
+            from ddgs import DDGS
+        except ImportError:
+            from duckduckgo_search import DDGS
+
+        def _run_ddg():
+            with DDGS() as ddgs:
+                return list(ddgs.text(query, max_results=5))
+
+        loop = asyncio.get_running_loop()
+        results = await loop.run_in_executor(None, _run_ddg)
+        if not results:
+            return f"[System Notice: Real-time search returned 0 results for query '{query}']."
+        
+        lines = []
+        for idx, r in enumerate(results[:5], start=1):
+            title = r.get("title", "")
+            url = r.get("href", r.get("link", ""))
+            snippet = r.get("body", r.get("snippet", ""))
+            lines.append(f"Source [{idx}]: {title}\nURL: {url}\nSnippet: {snippet}\n")
+        
+        return "Live Web Search Results (via DuckDuckGo):\n\n" + "\n".join(lines)
+    except Exception as err:
+        logger.error(f"DuckDuckGo search fallback failed: {err}")
+        return f"[System Notice: Real-time search unavailable. Error: {err}]"
+
+
 async def tavily_search(query: str) -> str:
-    """Search the web using the Tavily API. Returns formatted results.
+    """Search the web using Tavily API, with seamless automatic fallback to DuckDuckGo.
 
     Results are cached for 10 minutes (WebSearchCache TTL) to avoid
     redundant API calls for identical queries within the same session.
     """
-    api_key = settings.TAVILY_API_KEY
-    if not api_key or api_key.startswith("mock_"):
-        logger.info(f"Mock Tavily search: {query}")
-        return (
-            f"[Mock Web Search Result for '{query}']: "
-            "Paris weather is sunny and 22 °C. FastAPI and Flagship AI are performing optimally."
-        )
-
     # ── Cache check ──────────────────────────────────────────────────────────
     cached = await web_search_cache.get(query)
     if cached is not None:
         logger.debug(f"[tavily_search] Cache HIT for query='{query[:60]}'")
         return cached
+
+    api_key = settings.TAVILY_API_KEY
+    # If Tavily key is missing or mock, directly use real live search via DuckDuckGo
+    if not api_key or api_key.startswith("mock_"):
+        logger.info(f"Tavily API key missing/mock -> Using DuckDuckGo fallback for query: '{query}'")
+        res = await _ddg_search_fallback(query)
+        await web_search_cache.set(query, res)
+        return res
 
     url     = "https://api.tavily.com/search"
     payload = {
@@ -89,7 +119,7 @@ async def tavily_search(query: str) -> str:
             data    = response.json()
             results = data.get("results", [])
             lines   = []
-            for idx, r in enumerate(results[:3], start=1):
+            for idx, r in enumerate(results[:5], start=1):
                 lines.append(
                     f"Source [{idx}]: {r.get('title')}\n"
                     f"URL: {r.get('url')}\n"
@@ -101,11 +131,15 @@ async def tavily_search(query: str) -> str:
             # ── Cache store ──────────────────────────────────────────────────
             await web_search_cache.set(query, result)
             return result
-        logger.error(f"Tavily error {response.status_code}: {response.text[:200]}")
-        return f"Web search failed (HTTP {response.status_code})."
+        logger.warning(f"Tavily error {response.status_code}: {response.text[:200]} -> Falling back to DuckDuckGo.")
+        res = await _ddg_search_fallback(query)
+        await web_search_cache.set(query, res)
+        return res
     except Exception as e:
-        logger.error(f"Tavily exception: {e}")
-        return f"Error executing web search: {e}"
+        logger.warning(f"Tavily exception: {e} -> Falling back to DuckDuckGo.")
+        res = await _ddg_search_fallback(query)
+        await web_search_cache.set(query, res)
+        return res
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Python sandbox

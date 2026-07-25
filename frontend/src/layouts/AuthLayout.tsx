@@ -25,7 +25,7 @@ export default function AuthLayout() {
             <div className="mb-1">
               <Logo size={36} />
             </div>
-            <h1 className="text-xl font-semibold text-foreground tracking-tight">Omni AI Workspace</h1>
+            <h1 className="text-xl font-semibold text-foreground tracking-tight">openChat AI Workspace</h1>
             <p className="text-foreground-3 text-xs">Production-grade agent orchestrator</p>
           </div>
 
@@ -33,7 +33,7 @@ export default function AuthLayout() {
         </div>
 
         <p className="text-center text-foreground-3 text-[11px] mt-5">
-          © {new Date().getFullYear()} Omni Systems. All rights reserved.
+          © {new Date().getFullYear()} openChat Systems. All rights reserved.
         </p>
       </div>
     </div>
