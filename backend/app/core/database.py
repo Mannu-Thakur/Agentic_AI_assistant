@@ -111,17 +111,20 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 def run_schema_migrations() -> None:
     """
     Safely perform database schema upgrades:
-    1. Add expires_at, project_id, session_id, and confidence to memories table if missing.
-    2. Add role column to users table if missing.
-    3. Create audit_logs table if it does not exist.
-    4. Add is_verified column to api_keys table if missing, backfill existing rows to True.
+    1. Create all missing tables via Base.metadata.create_all.
+    2. Add expires_at, project_id, session_id, and confidence to memories table if missing.
+    3. Add role column to users table if missing.
+    4. Create audit_logs table if it does not exist.
+    5. Add is_verified column to api_keys table if missing, backfill existing rows to True.
 
     Uses database-agnostic SQLAlchemy inspection.
     Only called explicitly from the application lifespan — NOT on module import.
     """
     from sqlalchemy import inspect
+    import app.models  # Ensure model registries are imported
 
     try:
+        Base.metadata.create_all(bind=engine)
         inspector = inspect(engine)
 
         # 1. Update memories table

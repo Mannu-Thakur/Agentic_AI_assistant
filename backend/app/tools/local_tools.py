@@ -1,25 +1,29 @@
 """
 tools/local_tools.py — Locally-implemented agent tools.
 
-Changes vs original:
-  python_sandbox():
-    • Hard output size limit (64 KB) prevents memory exhaustion.
-    • Kills the subprocess on timeout AND on output-size overflow.
-    • Adds a security warning header when dangerous stdlib modules are imported.
-    • Strips ANSI escape codes from output.
+tavily_search():
+  • Now delegates to app.services.web_search.unified_web_search
+  • Waterfall: Tavily → SerpAPI → Exa AI → DuckDuckGo (free fallback)
+  • BM25-ranks results before returning
+  • api_keys dict accepted so user-supplied keys override .env
 
-tavily_search(): unchanged — only minor formatting cleanup.
+python_sandbox():
+  • Hard output size limit (64 KB) prevents memory exhaustion.
+  • Kills the subprocess on timeout AND on output-size overflow.
+  • Adds a security warning header when dangerous stdlib modules are imported.
+  • Strips ANSI escape codes from output.
 """
 
 import os
 import re
 import sys
-import httpx
 import asyncio
 import logging
 import tempfile
 from typing import Optional
 from app.core.config import settings
+
+
 from app.core.cache_service import web_search_cache
 
 logger = logging.getLogger(__name__)
@@ -55,91 +59,47 @@ def _check_dangerous(code: str) -> Optional[str]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def _ddg_search_fallback(query: str) -> str:
-    """Fallback search using DuckDuckGo (free, live, real-time)."""
-    try:
-        try:
-            from ddgs import DDGS
-        except ImportError:
-            from duckduckgo_search import DDGS
-
-        def _run_ddg():
-            with DDGS() as ddgs:
-                return list(ddgs.text(query, max_results=5))
-
-        loop = asyncio.get_running_loop()
-        results = await loop.run_in_executor(None, _run_ddg)
-        if not results:
-            return f"[System Notice: Real-time search returned 0 results for query '{query}']."
-        
-        lines = []
-        for idx, r in enumerate(results[:5], start=1):
-            title = r.get("title", "")
-            url = r.get("href", r.get("link", ""))
-            snippet = r.get("body", r.get("snippet", ""))
-            lines.append(f"Source [{idx}]: {title}\nURL: {url}\nSnippet: {snippet}\n")
-        
-        return "Live Web Search Results (via DuckDuckGo):\n\n" + "\n".join(lines)
-    except Exception as err:
-        logger.error(f"DuckDuckGo search fallback failed: {err}")
-        return f"[System Notice: Real-time search unavailable. Error: {err}]"
+    from app.services.web_search import search_duckduckgo, format_for_llm
+    results = await search_duckduckgo(query)
+    return format_for_llm(results)
 
 
-async def tavily_search(query: str) -> str:
-    """Search the web using Tavily API, with seamless automatic fallback to DuckDuckGo.
-
-    Results are cached for 10 minutes (WebSearchCache TTL) to avoid
-    redundant API calls for identical queries within the same session.
+async def tavily_search(query: str, api_keys: Optional[dict] = None) -> str:
     """
-    # ── Cache check ──────────────────────────────────────────────────────────
+    Unified web search entry point.
+
+    Delegates to app.services.web_search.unified_web_search which tries
+    providers in priority order (Tavily → SerpAPI → Exa AI → DuckDuckGo)
+    and BM25-ranks results before returning.
+
+    Args:
+        query:    The search query (injected context already stripped by nodes.py).
+        api_keys: Dict of provider keys from the user session.  Server .env
+                  keys are merged automatically inside unified_web_search.
+
+    Returns:
+        A formatted markdown string ready for LLM consumption.
+    """
+    from app.services.web_search import unified_web_search, format_for_llm
+
+    # Cache check (same TTL as before)
     cached = await web_search_cache.get(query)
     if cached is not None:
         logger.debug(f"[tavily_search] Cache HIT for query='{query[:60]}'")
         return cached
 
-    api_key = settings.TAVILY_API_KEY
-    # If Tavily key is missing or mock, directly use real live search via DuckDuckGo
-    if not api_key or api_key.startswith("mock_"):
-        logger.info(f"Tavily API key missing/mock -> Using DuckDuckGo fallback for query: '{query}'")
-        res = await _ddg_search_fallback(query)
-        await web_search_cache.set(query, res)
-        return res
-
-    url     = "https://api.tavily.com/search"
-    payload = {
-        "api_key":       api_key,
-        "query":         query,
-        "search_depth":  "basic",
-        "include_answer": True,
-    }
+    keys = dict(api_keys or {})
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(url, json=payload)
-        if response.status_code == 200:
-            data    = response.json()
-            results = data.get("results", [])
-            lines   = []
-            for idx, r in enumerate(results[:5], start=1):
-                lines.append(
-                    f"Source [{idx}]: {r.get('title')}\n"
-                    f"URL: {r.get('url')}\n"
-                    f"Snippet: {r.get('content')}\n"
-                )
-            answer = data.get("answer")
-            prefix = f"Summary Answer: {answer}\n\n" if answer else ""
-            result = prefix + "\n".join(lines)
-            # ── Cache store ──────────────────────────────────────────────────
-            await web_search_cache.set(query, result)
-            return result
-        logger.warning(f"Tavily error {response.status_code}: {response.text[:200]} -> Falling back to DuckDuckGo.")
-        res = await _ddg_search_fallback(query)
-        await web_search_cache.set(query, res)
-        return res
-    except Exception as e:
-        logger.warning(f"Tavily exception: {e} -> Falling back to DuckDuckGo.")
-        res = await _ddg_search_fallback(query)
-        await web_search_cache.set(query, res)
-        return res
+        results = await unified_web_search(query, keys)
+        result_text = format_for_llm(results)
+    except Exception as exc:
+        logger.error(f"[tavily_search] unified_web_search failed: {exc}")
+        result_text = f"[System Notice: Web search unavailable. Error: {exc}]"
+
+    await web_search_cache.set(query, result_text)
+    return result_text
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Python sandbox

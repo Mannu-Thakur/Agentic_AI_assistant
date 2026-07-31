@@ -31,18 +31,52 @@ INTENT_MCP_TOOL       = "MCP_TOOL"
 INTENT_DOCUMENT_QA    = "DOCUMENT_QA"
 INTENT_VISION         = "VISION"
 INTENT_COMPLEX        = "COMPLEX"
+INTENT_PROGRAMMING    = "PROGRAMMING"
+INTENT_MATH           = "MATH"
+INTENT_FINANCE        = "FINANCE"
+INTENT_NEWS           = "NEWS"
+INTENT_CURRENT_EVENTS = "CURRENT_EVENTS"
+INTENT_PDF_QA         = "PDF_QA"
+INTENT_DATABASE       = "DATABASE"
+INTENT_SUMMARIZATION  = "SUMMARIZATION"
+INTENT_TRANSLATION    = "TRANSLATION"
+INTENT_REASONING      = "REASONING"
+INTENT_LONG_CONTEXT   = "LONG_CONTEXT"
+INTENT_MULTI_STEP     = "MULTI_STEP"
 
 # Maps each intent to the exact tool names that are allowed for that turn.
 # generate_response_node uses this to inject ONLY the relevant schemas.
 INTENT_TOOL_WHITELIST: Dict[str, List[str]] = {
     INTENT_MEMORY_WRITE:   [],                           # No tools — pure ACK
-    INTENT_NORMAL_CHAT:    [],                           # No tools — pure LLM
+    INTENT_NORMAL_CHAT:    ["tavily_search"],            # Tavily allowed if LLM needs search
     INTENT_WEB_SEARCH:     ["tavily_search"],
     INTENT_CODE_EXECUTION: ["python_sandbox"],
-    INTENT_MCP_TOOL:       ["calculate", "add_expense", "get_expenses", "create_reminder", "send_email"],
+    INTENT_MCP_TOOL:       [
+        "calculate", "add_expense", "get_expenses", "list_expenses",
+        "update_expense", "delete_expense", "search_expenses",
+        "monthly_summary", "category_summary", "top_merchants",
+        "create_reminder", "send_email"
+    ],
     INTENT_DOCUMENT_QA:    [],                           # RAG-only, no tools
     INTENT_VISION:         [],                           # Vision LLM, no tools
-    INTENT_COMPLEX:        ["tavily_search", "python_sandbox", "calculate", "add_expense", "get_expenses", "create_reminder", "send_email"],
+    INTENT_COMPLEX:        [
+        "tavily_search", "python_sandbox", "calculate", "add_expense",
+        "get_expenses", "list_expenses", "update_expense", "delete_expense",
+        "search_expenses", "monthly_summary", "category_summary",
+        "top_merchants", "create_reminder", "send_email"
+    ],
+    INTENT_PROGRAMMING:    ["python_sandbox"],
+    INTENT_MATH:           ["calculate", "python_sandbox"],
+    INTENT_FINANCE:        ["tavily_search", "calculate", "add_expense", "list_expenses", "get_expenses", "monthly_summary", "category_summary", "top_merchants"],
+    INTENT_NEWS:           ["tavily_search"],
+    INTENT_CURRENT_EVENTS: ["tavily_search"],
+    INTENT_PDF_QA:         [],
+    INTENT_DATABASE:       [],
+    INTENT_SUMMARIZATION:  [],
+    INTENT_TRANSLATION:    [],
+    INTENT_REASONING:      ["python_sandbox", "calculate"],
+    INTENT_LONG_CONTEXT:   [],
+    INTENT_MULTI_STEP:     ["tavily_search", "python_sandbox", "calculate"],
 }
 
 
@@ -165,13 +199,16 @@ def compile_system_prompt(
         "- If the user's claim contradicts the search results: politely correct the user with evidence.\n"
     )
 
-    # ── Tool-leakage guard ─────────────────────────────────────────────────────
+    # ── Tool-leakage and execution integrity guard ────────────────────────────
     system += (
-        "\n### Internal System Rules (NEVER VIOLATE):\n"
+        "\n### Internal System & Tool Execution Rules (NEVER VIOLATE):\n"
         "- NEVER mention the names of internal tools or systems in your response.\n"
-        "- Do NOT write phrases like 'I used tavily_search', 'python_sandbox returned', "
-        "'I called calculate', 'the tool returned', or similar.\n"
-        "- Present tool results naturally as your own answer.\n"
+        "- NEVER mention internal tool function names (like 'tavily_search', 'python_sandbox', 'add_expense') directly in conversation.\n"
+        "- When executing an MCP tool (adding/listing/updating/deleting expenses, summary, math, reminders, email), invoke the tool directly.\n"
+        "- NEVER fabricate, invent, or fake tool execution results or data (such as 'I manually added it', "
+        "'Expense ID E001', 'Receipt R001').\n"
+        "- If a tool call fails or returns an error, state the real error clearly to the user: 'Tool execution failed. Server returned: <actual error>'.\n"
+        "- Present real tool output clearly and naturally to the user.\n"
         "- NEVER describe your internal reasoning pipeline, graph steps, or node names.\n"
     )
 
@@ -312,7 +349,7 @@ HAS ATTACHED IMAGES: {has_images}
              "What is 25 * 48?", "Summarize this text", "Write a poem", "Who is Einstein",
              "What is bubble sort", "mu khaeli" (Roman Odia), any language learning question
 
-3. WEB_SEARCH — Requires REAL-TIME or CURRENT information from the internet.
+3. WEB_SEARCH — Requires REAL-TIME or CURRENT information from the internet, or specific problem lookups.
    Triggers (any of these indicate web search needed):
    - Time-sensitive: "today", "latest", "current", "right now", "recent", "this week",
      "news", "update", "live", "breaking", "now", "2024", "2025", "2026"
@@ -321,22 +358,31 @@ HAS ATTACHED IMAGES: {has_images}
    - Current facts: "population", "capital", "president", "prime minister", "PM",
      "CEO", "governor", "minister", "champion", "winner", "who won", "election",
      "results", "score", "ranking", "number one", "richest", "GDP", "currency rate"
-   - Search-intent phrases: "search for", "look up", "find me", "what's happening",
+   - Search-intent & Problem lookups: "search for", "look up", "find me", "fetch that",
+     "LeetCode", "problem statement", "problem details", "what is leetcode X", "fetch",
      "who is the current", "what is the latest version of"
    Examples: "India population 2025", "current PM of India", "Bitcoin price today",
-             "Latest AI news", "weather in Delhi tomorrow", "IPL 2025 winner"
+             "Latest AI news", "leetcode 2849", "fetch leetcode problem statements"
 
 4. CODE_EXECUTION — User wants code to be GENERATED AND EXECUTED/RUN.
    Triggers: "execute", "run this code", "run this script", "plot and show",
              "generate and run", "show the output", "simulate"
    Do NOT use for just explaining code or writing code without running.
 
-5. MCP_TOOL — Action targeting external tool/service.
-   Examples: "Add expense of ₹650", "Create reminder for tomorrow", "Calculate sin(pi/2)"
+5. MCP_TOOL — Action targeting external tool/service or data management via tools (expenses, math, reminders, emails, etc.).
+   Examples: "Add an expense of ₹500 for Groceries at D-Mart today", "List all expenses", "Search groceries", "Monthly summary", "Top merchants", "Update expense ID 1", "Delete expense ID 1", "Calculate sin(pi/2)", "Create reminder for tomorrow", "Send email"
 
-6. DOCUMENT_QA — Question about user's UPLOADED documents.
+6. DOCUMENT_QA — Question about user's UPLOADED documents OR personal profile/resume data.
    Triggers: "my document", "my file", "my notes", "uploaded", "the PDF", "the doc",
              "according to my", "from the file", "in the file", "my cheat sheet"
+   Also triggers for personal data queries (resume/profile):
+     "my projects", "my project", "my cgpa", "my gpa", "my xgpa",
+     "my resume", "my cv", "my skills", "my education", "my degree",
+     "my achievements", "my experience", "my internship", "my grades",
+     "my marks", "my result", "my score", "my background", "my profile",
+     "my qualification", "my college", "my university", "my institute"
+   When a user asks about their own academic or professional information,
+   that data is almost certainly in an uploaded resume/CV/transcript.
 
 7. VISION — Analyze/describe/extract from an ATTACHED IMAGE.
    AUTO-CLASSIFY as VISION if has_images=True AND the query is not clearly about
@@ -348,6 +394,7 @@ HAS ATTACHED IMAGES: {has_images}
 8. COMPLEX — Multi-step query spanning multiple intents (RAG + web, vision + search, etc.)
 
 ====== CLASSIFICATION RULES ======
+- Any query mentioning a LeetCode problem number (e.g. "LeetCode 2849"), problem statement lookup, or "fetch that" → classify as WEB_SEARCH
 - If has_images=True and there is no strong reason to override → classify as VISION
 - "Translate this" / "Translate that" / "Translate into X" → NORMAL_CHAT (no search needed)
 - "Who is X" for a historical/well-known figure → NORMAL_CHAT
@@ -415,15 +462,20 @@ Respond with ONLY valid JSON, no markdown fences, no extra text.
 
 RETRIEVAL_CHECK_PROMPT = """\
 You are a routing assistant. Decide whether the user's query needs to search
-their UPLOADED DOCUMENTS (PDFs, files, notes, cheat sheets, code files, etc.).
+their UPLOADED DOCUMENTS (PDFs, files, notes, cheat sheets, resumes, code files, etc.).
 
-Answer YES (needs_retrieval: true) ONLY when the query is SPECIFICALLY asking
-about content the user likely uploaded:
-  - "in my document", "in the file", "my notes", "my cheat sheet"
-  - asking about a specific file by name
-  - asking about proprietary/personal data or code the user shared
+Answer YES (needs_retrieval: true) when the query is asking about:
+  - Explicit file references: "in my document", "in the file", "my notes", "my cheat sheet",
+    "the PDF", "uploaded file", "from the file", "according to my document"
+  - Personal profile / resume data: "my projects", "my cgpa", "my gpa", "my xgpa",
+    "my resume", "my cv", "my skills", "my education", "my degree",
+    "my achievements", "my experience", "my internship", "my grades",
+    "my marks", "my result", "my score", "my background", "my profile",
+    "my qualification", "my college", "my university"
+  - A specific file by name the user likely shared
+  - Proprietary/personal data or code the user shared
 
-Answer NO (needs_retrieval: false) for EVERYTHING ELSE, including:
+Answer NO (needs_retrieval: false) for:
   - General knowledge questions (history, sports, science, celebrities, news)
   - Conversational / greeting messages
   - Creative writing or brainstorming
@@ -432,8 +484,9 @@ Answer NO (needs_retrieval: false) for EVERYTHING ELSE, including:
   - Translation requests
   - Math calculations
 
-When in doubt, answer NO. The LLM can answer general questions from its own
-training knowledge without needing documents.
+IMPORTANT: If the query uses "my" before an academic or professional term
+(my projects, my CGPA, my skills, my resume), answer YES — these refer to
+personal data likely stored in the user's uploaded documents.
 
 User query: {query}
 

@@ -12,11 +12,14 @@ None / False instead of raising, so the app continues to work without caching.
 
 import json
 import logging
+import time
 from typing import Any, Optional
 
 logger = logging.getLogger("core.redis_client")
 
 _redis_client = None
+_last_failed_time = 0.0
+_FAIL_COOLDOWN_SECONDS = 15.0
 
 
 async def get_redis():
@@ -25,11 +28,15 @@ async def get_redis():
     Import is deferred so the module can be loaded even when redis is not
     installed (though it IS in requirements.txt).
     Only caches the client on a successful connection — failed attempts
-    are retried on the next call rather than permanently disabling Redis.
+    are retried after a 15s cooldown rather than blocking every request.
     """
-    global _redis_client
+    global _redis_client, _last_failed_time
     if _redis_client is not None:
         return _redis_client
+
+    now = time.monotonic()
+    if now - _last_failed_time < _FAIL_COOLDOWN_SECONDS:
+        return None
 
     try:
         import redis.asyncio as aioredis
@@ -39,8 +46,8 @@ async def get_redis():
             settings.REDIS_URL,
             encoding="utf-8",
             decode_responses=True,
-            socket_connect_timeout=2,
-            socket_timeout=2,
+            socket_connect_timeout=1,
+            socket_timeout=1,
             protocol=2,  # Force RESP2 compatibility with Redis 5
         )
         # Verify connection before caching
@@ -49,8 +56,12 @@ async def get_redis():
         logger.info(f"Redis connected: {settings.REDIS_URL}")
     except Exception as e:
         logger.warning(f"Redis unavailable ({e}) — caching disabled.")
-        # Do NOT cache None — allow retry on the next call
         _redis_client = None
+        _last_failed_time = time.monotonic()
+        try:
+            await client.aclose()
+        except Exception:
+            pass
 
     return _redis_client
 

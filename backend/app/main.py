@@ -25,7 +25,8 @@ from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.core.config import settings
-from app.api import auth, chat, documents, memories, api_keys, admin, metrics as metrics_router
+from app.api import auth, chat, documents, memories, api_keys, admin, mcp_servers, metrics as metrics_router
+
 from app.api import health as health_router
 from app.core.database import run_schema_migrations
 from app.core.cache_service import get_all_cache_stats
@@ -178,7 +179,9 @@ app.include_router(api_keys.router,    prefix=settings.API_V1_STR)
 app.include_router(api_keys.providers_router, prefix=settings.API_V1_STR)
 app.include_router(health_router.router, prefix=settings.API_V1_STR)
 app.include_router(admin.router,        prefix=settings.API_V1_STR)
+app.include_router(mcp_servers.router,  prefix=settings.API_V1_STR)
 app.include_router(metrics_router.router, prefix=settings.API_V1_STR)
+
 
 # ── Cache metrics endpoint ─────────────────────────────────────────────────────
 @app.get("/api/v1/metrics/cache", tags=["observability"])

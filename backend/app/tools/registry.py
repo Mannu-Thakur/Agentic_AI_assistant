@@ -3,7 +3,7 @@ import sys
 import logging
 from typing import Dict, Any, List, Optional
 from app.tools.local_tools import tavily_search, python_sandbox
-from app.tools.mcp_client import McpStdioClient
+from app.tools.mcp_client import McpStdioClient, McpHttpClient
 
 logger = logging.getLogger(__name__)
 
@@ -49,14 +49,37 @@ class ToolRegistry:
             }
         }
 
-        self.mcp_clients: Dict[str, McpStdioClient] = {}
+        self.mcp_clients: Dict[str, Any] = {}
         self.mcp_tools_map: Dict[str, str] = {}          # tool_name -> server_name
         self.mcp_tools_schemas: Dict[str, Dict[str, Any]] = {}
         self.is_initialized = False
 
+    async def register_remote_server(self, name: str, url: str, auth_header: Optional[str] = None, transport_type: str = "http_jsonrpc") -> List[Dict[str, Any]]:
+        """
+        Connects to a remote MCP server by URL, registers its tools in the live registry.
+        """
+        server_key = f"remote_{name.replace(' ', '_').lower()}"
+        client = McpHttpClient(url=url, auth_header=auth_header, transport_type=transport_type)
+        await client.connect()
+        self.mcp_clients[server_key] = client
+
+        tools = await client.list_tools()
+        registered_tools = []
+        for tool in tools:
+            t_name = tool["name"]
+            self.mcp_tools_map[t_name] = server_key
+            schema_info = {
+                "description": tool.get("description", ""),
+                "schema": tool.get("inputSchema", {"type": "object"})
+            }
+            self.mcp_tools_schemas[t_name] = schema_info
+            registered_tools.append({"name": t_name, **schema_info})
+            logger.info(f"Registered Remote MCP tool '{t_name}' from '{url}'")
+        return registered_tools
+
     async def initialize(self):
         """
-        Connects to all configured MCP servers, fetches their tool capabilities,
+        Connects to all configured local & remote MCP servers, fetches tool capabilities,
         and builds the routing table.
         """
         if self.is_initialized:
@@ -97,8 +120,35 @@ class ToolRegistry:
                     f"Failed to initialize MCP server '{server_name}': {str(e)}"
                 )
 
+        # Load enabled Remote MCP Servers from database
+        try:
+            from app.core.database import AsyncSessionLocal
+            from app.models.mcp_server import RemoteMcpServer
+            from sqlalchemy import select
+
+            async with AsyncSessionLocal() as session:
+                res = await session.execute(select(RemoteMcpServer).where(RemoteMcpServer.is_enabled == True))
+                db_servers = res.scalars().all()
+                for r_server in db_servers:
+                    try:
+                        await self.register_remote_server(
+                            name=r_server.name,
+                            url=r_server.url,
+                            auth_header=r_server.auth_header,
+                            transport_type=r_server.transport_type
+                        )
+                    except Exception as exc:
+                        logger.error(f"Failed to initialize remote MCP server '{r_server.name}' ({r_server.url}): {exc}")
+        except Exception as db_exc:
+            logger.warning(f"Could not load remote MCP servers from DB: {db_exc}")
+
         self.is_initialized = True
         logger.info("ToolRegistry initialization complete.")
+
+
+    def get_all_mcp_tool_names(self) -> List[str]:
+        """Returns list of all currently registered MCP tool names."""
+        return list(self.mcp_tools_schemas.keys())
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
         """
@@ -131,17 +181,10 @@ class ToolRegistry:
         Intent-gated tool schema injection (P0 fix).
 
         Returns ONLY the tool schemas whose names appear in the allowed_tools
-        whitelist.  An empty whitelist → returns [] (no tools offered to LLM).
-
-        This prevents:
-          • python_sandbox being offered on MEMORY_WRITE / NORMAL_CHAT turns.
-          • tavily_search being offered on private-document queries.
-          • Any tool being offered when the intent does not require it.
+        whitelist. An empty whitelist → returns [] (no tools offered to LLM).
 
         Args:
             allowed_tools: list of tool names whitelisted for this turn
-                           (populated from INTENT_TOOL_WHITELIST by
-                           classify_intent_node).
 
         Returns:
             List of Gemini-compliant tool declaration dicts.
@@ -172,7 +215,12 @@ class ToolRegistry:
 
         return declarations
 
-    async def call_tool(self, name: str, arguments: Dict[str, Any]) -> str:
+    async def call_tool(
+        self,
+        name: str,
+        arguments: Dict[str, Any],
+        api_keys: Optional[Dict[str, Any]] = None,
+    ) -> str:
         """
         Routes the tool invocation to the correct local handler or MCP server.
         Records execution status in Prometheus metrics and audit logs.
@@ -193,12 +241,18 @@ class ToolRegistry:
             logger.info(f"Invoking local tool '{name}' with arguments: {arguments}")
             try:
                 func = self.local_tools[name]["func"]
-                result_str = await func(**arguments)
+                if name == "tavily_search":
+                    kwargs = dict(arguments or {})
+                    if "api_keys" not in kwargs and api_keys:
+                        kwargs["api_keys"] = api_keys
+                    result_str = await func(**kwargs)
+                else:
+                    result_str = await func(**(arguments or {}))
             except Exception as e:
                 status_label = "error"
                 err_msg = str(e)
                 logger.error(f"Error executing local tool '{name}': {str(e)}")
-                result_str = f"Error executing tool: {str(e)}"
+                result_str = f"Tool execution failed. Server returned: {str(e)}"
 
         # 2. Route to MCP tool
         elif name in self.mcp_tools_map:
@@ -209,20 +263,20 @@ class ToolRegistry:
                 f"with arguments: {arguments}"
             )
             try:
-                result_str = await client.call_tool(name, arguments)
+                result_str = await client.call_tool(name, arguments or {})
             except Exception as e:
                 status_label = "error"
                 err_msg = str(e)
                 logger.error(
                     f"Error calling MCP tool '{name}' on server '{server_name}': {str(e)}"
                 )
-                result_str = f"Error calling tool: {str(e)}"
+                result_str = f"Tool execution failed. Server returned: {str(e)}"
 
         else:
             status_label = "error"
-            err_msg = "Tool not registered"
+            err_msg = f"Tool '{name}' is not registered"
             logger.error(f"Tool '{name}' is not registered.")
-            result_str = f"Error: Tool '{name}' is not registered."
+            result_str = f"Tool execution failed. Server returned: Tool '{name}' is not registered."
 
         # Record metrics and log audit events
         metrics_collector.record_tool_call(name, status_label)

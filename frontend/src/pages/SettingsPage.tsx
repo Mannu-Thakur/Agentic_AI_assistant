@@ -23,7 +23,7 @@ import { ProviderKeyManager } from '../services/providerKeyManager';
 // Types & Constants
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-type SettingsTab = 'general' | 'datacontrols' | 'models' | 'generation' | 'features' | 'documents' | 'memories' | 'account';
+type SettingsTab = 'general' | 'datacontrols' | 'models' | 'generation' | 'features' | 'mcpservers' | 'documents' | 'memories' | 'account';
 
 const TABS: { id: SettingsTab | 'chat'; label: string; icon: React.ElementType }[] = [
   { id: 'chat',       label: 'Back to Chat',    icon: ArrowLeft   },
@@ -32,10 +32,12 @@ const TABS: { id: SettingsTab | 'chat'; label: string; icon: React.ElementType }
   { id: 'models',     label: 'AI Models',       icon: Cpu         },
   { id: 'generation', label: 'Generation',      icon: Zap         },
   { id: 'features',   label: 'AI Features',     icon: Brain       },
+  { id: 'mcpservers', label: 'Remote MCP Servers', icon: Link2    },
   { id: 'documents',  label: 'Documents',       icon: FolderClosed},
   { id: 'memories',   label: 'Semantic Memory', icon: Sparkles    },
   { id: 'account',    label: 'Account & Security', icon: User     },
 ];
+
 
 const PROVIDER_METADATA: Record<string, { name: string; label: string; placeholder: string; desc: string }> = {
   alibaba:    { name: 'Alibaba',        label: 'Alibaba API Key',       placeholder: 'Enter Alibaba DashScope API Key...',      desc: 'Flagship Qwen reasoning & chat models' },
@@ -46,6 +48,14 @@ const PROVIDER_METADATA: Record<string, { name: string; label: string; placehold
   glm:        { name: 'GLM',            label: 'GLM API Key',           placeholder: 'Enter GLM API Key (e.g. identifier.secret)...', desc: 'Zhipu AI flagship multilingual chat models' },
   groq:       { name: 'Groq',           label: 'Groq API Key',          placeholder: 'Enter Groq API Key (gsk-...)...',          desc: 'Ultra-fast Llama-3 & Mixtral models' },
   openrouter: { name: 'OpenRouter',     label: 'OpenRouter API Key',    placeholder: 'Enter OpenRouter API Key (sk-or-...)...',  desc: 'Access hundreds of models under a unified API key' },
+};
+
+const SEARCH_PROVIDER_IDS = ['tavily', 'serpapi', 'exa'];
+
+const SEARCH_PROVIDER_METADATA: Record<string, { name: string; label: string; placeholder: string; desc: string; docsUrl: string }> = {
+  tavily:  { name: 'Tavily',  label: 'Tavily API Key',  placeholder: 'tvly-...',             desc: 'AI-curated web search. Best quality results.',      docsUrl: 'https://app.tavily.com/home' },
+  serpapi: { name: 'SerpAPI', label: 'SerpAPI Key',     placeholder: 'Enter SerpAPI key...', desc: 'Real Google Search results via JSON API.',          docsUrl: 'https://serpapi.com/manage-api-key' },
+  exa:     { name: 'Exa AI',  label: 'Exa AI API Key',  placeholder: 'Enter Exa API key...', desc: 'Neural semantic search — best for deep research.',  docsUrl: 'https://dashboard.exa.ai/api-keys' },
 };
 
 interface DocumentFile {
@@ -65,6 +75,19 @@ interface SemanticMemory {
   importance_score: number;
   created_at: string;
 }
+
+interface RemoteMcpServerItem {
+  id: string;
+  name: string;
+  url: string;
+  transport_type: string;
+  auth_header?: string | null;
+  is_enabled: boolean;
+  created_at: string;
+  tool_count: number;
+  discovered_tools?: { name: string; description: string; schema: any }[];
+}
+
 
 type IngestionStep = {
   id: string;
@@ -178,16 +201,16 @@ const Toggle = memo(function Toggle({
       onKeyDown={handleKeyDown}
       className={`relative inline-flex w-11 h-6 rounded-full flex-shrink-0 cursor-pointer p-0.5
         transition-colors duration-200 ease-in-out outline-none
-        focus-visible:ring-2 focus-visible:ring-emerald-500/40 active:scale-[0.96]
+        focus-visible:ring-2 focus-visible:ring-blue-500/40 active:scale-[0.96]
         ${checked
-          ? 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.4)]'
-          : 'bg-zinc-800 border border-zinc-700/80 hover:bg-zinc-700'
+          ? 'bg-blue-600 shadow-[0_0_12px_rgba(37,99,235,0.35)]'
+          : 'bg-[#222225] border border-[#333338] hover:bg-[#2a2a2e]'
         }`}
     >
       <span
         className={`pointer-events-none inline-block w-5 h-5 rounded-full bg-white shadow-md transform
           transition-transform duration-200 ease-in-out
-          ${checked ? 'translate-x-5' : 'translate-x-0'}`}
+          ${checked ? 'translate-x-5' : 'translate-x-0 bg-[#8e8e93]'}`}
       />
     </button>
   );
@@ -597,7 +620,7 @@ export default function SettingsPage() {
     contentRef.current?.scrollTo({ top: 0, behavior: 'instant' });
   }, [tab]);
 
-  // â”€â”€ Global Stores â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ——— Global Stores ——————————————————————————————————————————————
   const {
     theme, setTheme,
     contrastMode, setContrastMode,
@@ -618,7 +641,7 @@ export default function SettingsPage() {
   } = useChatStore();
   const token = useAuthStore((state) => state.token);
 
-  // â”€â”€ Generation settings (persist in localStorage) â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ——— Generation settings (persist in localStorage) ———————————————
   const [temperature, setTemperatureState] = useState<number>(
     () => parseFloat(localStorage.getItem('llm_temperature') || '0.7'),
   );
@@ -629,7 +652,7 @@ export default function SettingsPage() {
     () => localStorage.getItem('llm_streaming') !== 'false',
   );
 
-  // â”€â”€ Feature flags (persist immediately on change) â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ——— Feature flags (persist immediately on change) ———————————————
   const [memoryEnabled, setMemoryState] = useState<boolean>(
     () => localStorage.getItem('feature_memory') !== 'false',
   );
@@ -786,7 +809,18 @@ export default function SettingsPage() {
   const [memImportance, setMemImportance] = useState(5);
   const [memError, setMemError]           = useState<string | null>(null);
 
-  // â”€â”€ Data fetching â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // Remote MCP Servers state
+  const [mcpServers, setMcpServers]               = useState<RemoteMcpServerItem[]>([]);
+  const [isLoadingMcp, setIsLoadingMcp]           = useState(false);
+  const [mcpName, setMcpName]                     = useState('');
+  const [mcpUrl, setMcpUrl]                       = useState('');
+  const [mcpAuth, setMcpAuth]                     = useState('');
+  const [mcpTransport, setMcpTransport]           = useState('http_jsonrpc');
+  const [mcpTestResult, setMcpTestResult]         = useState<any | null>(null);
+  const [isTestingMcp, setIsTestingMcp]           = useState(false);
+  const [isSavingMcp, setIsSavingMcp]             = useState(false);
+
+  // Data fetching
   const fetchDocuments = useCallback(async () => {
     try {
       const data = await apiRequest('/documents');
@@ -805,10 +839,106 @@ export default function SettingsPage() {
     }
   }, []);
 
+  const fetchMcpServers = useCallback(async () => {
+    setIsLoadingMcp(true);
+    try {
+      const data = await apiRequest('/mcp/servers');
+      setMcpServers(data);
+    } catch (err) {
+      console.error('Failed to load MCP servers:', err);
+    } finally {
+      setIsLoadingMcp(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (tab === 'documents') fetchDocuments();
     else if (tab === 'memories') fetchMemories();
-  }, [tab, fetchDocuments, fetchMemories]);
+    else if (tab === 'mcpservers') fetchMcpServers();
+  }, [tab, fetchDocuments, fetchMemories, fetchMcpServers]);
+
+  const handleTestMcpConnection = async () => {
+    if (!mcpUrl.trim()) {
+      addToast('Please enter a remote MCP server URL to test.', 'error');
+      return;
+    }
+    setIsTestingMcp(true);
+    setMcpTestResult(null);
+    try {
+      const result = await apiRequest('/mcp/servers/test', {
+        method: 'POST',
+        json: {
+          url: mcpUrl.trim(),
+          auth_header: mcpAuth.trim() || undefined,
+          transport_type: mcpTransport,
+        }
+      });
+      setMcpTestResult(result);
+      if (result.status === 'success') {
+        addToast(`Connected successfully! Discovered ${result.tool_count} tools (${result.latency_ms}ms)`, 'success');
+      } else {
+        addToast(`Connection test failed: ${result.message}`, 'error');
+      }
+    } catch (err: any) {
+      addToast(err.message || 'Failed to test remote MCP server.', 'error');
+    } finally {
+      setIsTestingMcp(false);
+    }
+  };
+
+  const handleAddMcpServer = async () => {
+    if (!mcpName.trim() || !mcpUrl.trim()) {
+      addToast('Server Name and Server URL are required.', 'error');
+      return;
+    }
+    setIsSavingMcp(true);
+    try {
+      await apiRequest('/mcp/servers', {
+        method: 'POST',
+        json: {
+          name: mcpName.trim(),
+          url: mcpUrl.trim(),
+          auth_header: mcpAuth.trim() || undefined,
+          transport_type: mcpTransport,
+        }
+      });
+      addToast('Remote MCP Server added and tools registered successfully!', 'success');
+      setMcpName('');
+      setMcpUrl('');
+      setMcpAuth('');
+      setMcpTestResult(null);
+      fetchMcpServers();
+    } catch (err: any) {
+      addToast(err.message || 'Failed to register remote MCP server.', 'error');
+    } finally {
+      setIsSavingMcp(false);
+    }
+  };
+
+  const handleToggleMcpServer = async (id: string, currentEnabled: boolean) => {
+    try {
+      await apiRequest(`/mcp/servers/${id}`, {
+        method: 'PATCH',
+        json: { is_enabled: !currentEnabled }
+      });
+      addToast(`Server ${!currentEnabled ? 'enabled' : 'disabled'} successfully.`, 'success');
+      fetchMcpServers();
+    } catch (err: any) {
+      addToast(err.message || 'Failed to update MCP server status.', 'error');
+    }
+  };
+
+  const handleDeleteMcpServer = async (id: string) => {
+    try {
+      await apiRequest(`/mcp/servers/${id}`, { method: 'DELETE' });
+      addToast('Remote MCP Server deleted.', 'success');
+      fetchMcpServers();
+    } catch (err: any) {
+      addToast(err.message || 'Failed to delete MCP server.', 'error');
+    }
+  };
+
+
 
   // Clean up ingestion timer
   useEffect(() => {
@@ -1084,12 +1214,12 @@ export default function SettingsPage() {
   // Render
   // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   return (
-    <div className="h-full overflow-y-auto bg-background text-foreground transition-colors duration-250">
+    <div className="h-full w-full flex flex-col overflow-hidden bg-background text-foreground transition-colors duration-250">
       <ToastContainer toasts={toasts} onRemove={removeToast} />
-      <div className="max-w-6xl mx-auto px-4 py-8 space-y-6 animate-fade-in-up">
+      <div className="w-full max-w-[1400px] mx-auto px-4 md:px-8 py-6 flex-1 flex flex-col min-h-0 space-y-5 animate-fade-in-up">
 
         {/* Header */}
-        <div className="flex justify-between items-center">
+        <div className="flex justify-between items-center flex-shrink-0">
           <div>
             <h1 className="text-xl font-semibold text-foreground tracking-tight">Settings</h1>
             <p className="text-foreground-2 text-xs mt-1">Configure your workspace and AI preferences</p>
@@ -1106,10 +1236,10 @@ export default function SettingsPage() {
           )}
         </div>
 
-        <div className="flex flex-col lg:flex-row gap-0 rounded-2xl border border-border overflow-hidden shadow-2xl bg-surface min-h-[620px] transition-colors duration-250">
+        <div className="flex-1 min-h-0 flex flex-col lg:flex-row gap-0 rounded-2xl border border-border overflow-hidden shadow-2xl bg-surface transition-colors duration-250">
 
-          {/* â”€â”€ Sidebar â”€â”€ */}
-          <aside className="settings-sidebar w-full lg:w-52 flex-shrink-0 flex lg:flex-col gap-1 bg-background p-4 border-r border-border transition-colors duration-250">
+          {/* Sidebar */}
+          <aside className="settings-sidebar w-full lg:w-60 flex-shrink-0 flex lg:flex-col gap-1 bg-background p-4 border-b lg:border-b-0 lg:border-r border-border overflow-y-auto custom-scrollbar transition-colors duration-250">
             {TABS.map(({ id, label, icon: Icon }) => {
               const isChat   = id === 'chat';
               const isActive = !isChat && tab === id;
@@ -1141,11 +1271,11 @@ export default function SettingsPage() {
             })}
           </aside>
 
-          {/* â”€â”€ Content Panel â€” key triggers animate-settings-panel-in on each tab switch â”€â”€ */}
+          {/* Content Panel */}
           <div
             ref={contentRef}
             key={tab}
-            className="flex-1 bg-surface text-foreground p-6 space-y-6 overflow-y-auto min-w-0 animate-settings-panel-in transition-colors duration-250"
+            className="flex-1 bg-surface text-foreground p-6 lg:p-8 space-y-6 overflow-y-auto custom-scrollbar min-w-0 animate-settings-panel-in transition-colors duration-250"
           >
 
             {/* â”€â”€ General tab (Matching ChatGPT Settings layout) â”€â”€ */}
@@ -1392,7 +1522,7 @@ export default function SettingsPage() {
                         </div>
                       ) : (
                         <div className="space-y-4">
-                          {providers.map((prov) => {
+                          {providers.filter((p) => !SEARCH_PROVIDER_IDS.includes(p.id)).map((prov) => {
                             const meta       = PROVIDER_METADATA[prov.id] || { name: prov.id, desc: 'API Provider' };
                             const isVerified = prov.status === 'VERIFIED';
                             const isToggled  = editModes[prov.id] !== undefined ? editModes[prov.id] : (isVerified || prov.saved);
@@ -1444,6 +1574,95 @@ export default function SettingsPage() {
                           })}
                         </div>
                       )}
+
+                      {/* ── Web Search Providers ───────────────────────────── */}
+                      <div className="pt-2">
+                        <div className="flex items-center justify-between mb-1">
+                          <h2 className="text-base font-bold text-foreground flex items-center gap-2">
+                            <Globe className="w-4 h-4 text-violet-400" />
+                            Web Search Providers
+                          </h2>
+                          <span className="text-[9px] font-semibold text-foreground-3 bg-surface-3 border border-border px-2 py-0.5 rounded-full tracking-wide uppercase">
+                            Waterfall: Tavily → SerpAPI → Exa → DDG
+                          </span>
+                        </div>
+                        <p className="text-xs text-foreground-2 mb-3 leading-relaxed">
+                          Keys are tried in priority order — first available provider is used. DuckDuckGo is always the free fallback (no key needed).
+                        </p>
+
+                        <div className="space-y-3">
+                          {providers
+                            .filter((p) => SEARCH_PROVIDER_IDS.includes(p.id))
+                            .map((prov) => {
+                              const sMeta = SEARCH_PROVIDER_METADATA[prov.id];
+                              if (!sMeta) return null;
+                              const isVerified = prov.status === 'VERIFIED';
+                              const isToggled  = editModes[prov.id] !== undefined ? editModes[prov.id] : (isVerified || prov.saved);
+                              const priority   = SEARCH_PROVIDER_IDS.indexOf(prov.id) + 1;
+                              return (
+                                <div
+                                  key={prov.id}
+                                  ref={(el) => { providerCardRefs.current[prov.id] = el; }}
+                                  className={`p-4 rounded-2xl border transition-all duration-200 bg-background
+                                    ${isToggled ? 'border-violet-900/40 shadow-lg shadow-black/10' : 'border-border/60 hover:border-border'}`}
+                                >
+                                  <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-2.5 min-w-0">
+                                      <span className="w-5 h-5 rounded-full bg-violet-500/10 border border-violet-500/20 text-violet-400 text-[9px] font-bold flex items-center justify-center flex-shrink-0">
+                                        {priority}
+                                      </span>
+                                      <p className="text-sm font-semibold text-foreground">{sMeta.name}</p>
+                                      {isVerified && (
+                                        <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full text-[10px] font-bold">
+                                          Active
+                                        </span>
+                                      )}
+                                      {!isVerified && (
+                                        <span className="bg-surface-3 text-foreground-3 border border-border px-2 py-0.5 rounded-full text-[10px] font-semibold">
+                                          {prov.status === 'INVALID' ? 'Invalid Key' : 'Not Configured'}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      <a
+                                        href={sMeta.docsUrl}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-[10px] text-violet-400 hover:text-violet-300 transition-colors flex items-center gap-0.5"
+                                        title={`Get ${sMeta.name} API key`}
+                                      >
+                                        <Link2 className="w-3 h-3" />
+                                        Get key
+                                      </a>
+                                      <Toggle
+                                        label={`Toggle ${sMeta.name} API key`}
+                                        checked={isToggled}
+                                        onChange={(active) => handleToggleProvider(prov.id, active)}
+                                      />
+                                    </div>
+                                  </div>
+                                  <p className="text-[11px] text-foreground-3 mt-1 mb-0 leading-snug">{sMeta.desc}</p>
+                                  {isToggled && (
+                                    <ApiKeyField
+                                      provider={prov.id}
+                                      status={prov.status}
+                                      lastError={prov.lastError || null}
+                                      initialMaskedKey={prov.saved ? '••••••••••••••••' : ''}
+                                      onSaveSuccess={(updated) => {
+                                        setProviders(providers.map((p) => p.id === prov.id ? updated : p));
+                                      }}
+                                      onDeleteSuccess={async () => {
+                                        const refreshed = await apiRequest('/providers');
+                                        setProviders(refreshed);
+                                        setEditModes((prev) => ({ ...prev, [prov.id]: false }));
+                                      }}
+                                    />
+                                  )}
+                                </div>
+                              );
+                            })}
+                        </div>
+                      </div>
 
                       <div className="flex items-start gap-3 p-3.5 rounded-2xl border border-border bg-background text-[11px] text-foreground-2">
                         <Shield className="w-4 h-4 text-blue-500 mt-0.5 flex-shrink-0" />
@@ -1793,8 +2012,198 @@ export default function SettingsPage() {
 
 
 
-            {/* â”€â”€ Account tab â”€â”€ */}
+            {/* ── Remote MCP Servers tab ── */}
+            {tab === 'mcpservers' && (
+              <div className="space-y-6">
+                <SectionCard title="Remote MCP Server Integration">
+                  <div className="p-4 rounded-xl bg-surface-2 border border-border/60 space-y-2">
+                    <div className="flex items-center gap-2 text-primary font-semibold text-sm">
+                      <Sparkles className="w-4 h-4" />
+                      <span>Deploy & Connect Custom Tools</span>
+                    </div>
+                    <p className="text-xs text-foreground-3 leading-relaxed">
+                      Connect your deployed Model Context Protocol (MCP) servers by providing their HTTP or SSE endpoint URL.
+                      The agent performs automatic tool discovery on startup, registers available functions, and routes chat tool calls directly to your remote server.
+                    </p>
+                  </div>
+                </SectionCard>
+
+                <SectionCard title="Add Remote MCP Server">
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-semibold text-foreground-2 mb-1">Server Name *</label>
+                        <input
+                          type="text"
+                          value={mcpName}
+                          onChange={(e) => setMcpName(e.target.value)}
+                          placeholder="e.g. My Custom Weather Tool"
+                          className="w-full px-3 py-2 rounded-xl border border-border bg-background text-foreground text-xs focus:ring-2 focus:ring-primary/50 outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-foreground-2 mb-1">Server Endpoint URL *</label>
+                        <input
+                          type="url"
+                          value={mcpUrl}
+                          onChange={(e) => setMcpUrl(e.target.value)}
+                          placeholder="https://my-mcp-tool.vercel.app/mcp"
+                          className="w-full px-3 py-2 rounded-xl border border-border bg-background text-foreground text-xs focus:ring-2 focus:ring-primary/50 outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-semibold text-foreground-2 mb-1">Authorization Header / Token (Optional)</label>
+                        <input
+                          type="password"
+                          value={mcpAuth}
+                          onChange={(e) => setMcpAuth(e.target.value)}
+                          placeholder="Bearer secret-token or API key"
+                          className="w-full px-3 py-2 rounded-xl border border-border bg-background text-foreground text-xs focus:ring-2 focus:ring-primary/50 outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-foreground-2 mb-1">Transport Protocol</label>
+                        <select
+                          value={mcpTransport}
+                          onChange={(e) => setMcpTransport(e.target.value)}
+                          className="w-full px-3 py-2 rounded-xl border border-border bg-background text-foreground text-xs focus:ring-2 focus:ring-primary/50 outline-none"
+                        >
+                          <option value="http_jsonrpc">HTTP POST (JSON-RPC 2.0)</option>
+                          <option value="http_sse">Server-Sent Events (SSE / Stream)</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Action buttons */}
+                    <div className="flex items-center gap-3 pt-2">
+                      <button
+                        type="button"
+                        onClick={handleTestMcpConnection}
+                        disabled={isTestingMcp}
+                        className="flex items-center gap-1.5 px-4 py-2 rounded-xl border border-border bg-surface-2 hover:bg-surface-3 text-foreground text-xs font-semibold disabled:opacity-50 transition-all cursor-pointer active:scale-95"
+                      >
+                        {isTestingMcp ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5 text-primary" />}
+                        <span>Test Connection</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={handleAddMcpServer}
+                        disabled={isSavingMcp}
+                        className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-primary text-primary-foreground text-xs font-bold hover:brightness-110 disabled:opacity-50 transition-all shadow-sm cursor-pointer active:scale-95"
+                      >
+                        {isSavingMcp ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+                        <span>Save & Register Server</span>
+                      </button>
+                    </div>
+
+
+                    {/* Test result card */}
+                    {mcpTestResult && (
+                      <div className={`p-4 rounded-xl border text-xs space-y-2 ${mcpTestResult.status === 'success' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : 'bg-rose-500/10 border-rose-500/30 text-rose-400'}`}>
+                        <div className="flex items-center justify-between font-bold">
+                          <div className="flex items-center gap-2">
+                            {mcpTestResult.status === 'success' ? <CheckCircle2 className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
+                            <span>{mcpTestResult.status === 'success' ? 'Connection Successful' : 'Connection Failed'}</span>
+                          </div>
+                          <span className="text-[11px] opacity-80">{mcpTestResult.latency_ms}ms latency</span>
+                        </div>
+                        <p className="text-[11px] opacity-90">{mcpTestResult.message}</p>
+                        
+                        {mcpTestResult.tools && mcpTestResult.tools.length > 0 && (
+                          <div className="pt-2">
+                            <span className="font-semibold block mb-1">Exposed Tools ({mcpTestResult.tools.length}):</span>
+                            <div className="flex flex-wrap gap-1.5">
+                              {mcpTestResult.tools.map((t: any) => (
+                                <span key={t.name} className="px-2 py-1 rounded-md bg-emerald-500/20 text-emerald-300 font-mono text-[10px] border border-emerald-500/30">
+                                  ⚡ {t.name}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </SectionCard>
+
+                <SectionCard title="Configured Remote MCP Servers">
+                  {isLoadingMcp ? (
+                    <div className="flex items-center justify-center py-10 text-foreground-3 text-xs gap-2">
+                      <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                      <span>Loading MCP servers...</span>
+                    </div>
+                  ) : mcpServers.length === 0 ? (
+                    <div className="text-center py-12 border border-dashed border-border rounded-2xl bg-background text-foreground-3">
+                      <Link2 className="w-8 h-8 mx-auto mb-2 text-foreground-3 opacity-40" />
+                      <p className="text-xs font-semibold">No Remote MCP Servers Connected</p>
+                      <p className="text-[11px] text-foreground-3 mt-1">Paste your deployed MCP server endpoint URL above to register custom tools.</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {mcpServers.map((srv) => (
+                        <div key={srv.id} className="p-4 rounded-xl border border-border bg-background hover:border-border/80 transition-all">
+                          <div className="flex items-start justify-between gap-4">
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2">
+                                <h4 className="text-xs font-bold text-foreground">{srv.name}</h4>
+                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${srv.is_enabled ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' : 'bg-zinc-500/15 text-zinc-400 border border-zinc-500/30'}`}>
+                                  {srv.is_enabled ? 'Active' : 'Disabled'}
+                                </span>
+                              </div>
+                              <p className="text-[11px] font-mono text-foreground-3 break-all">{srv.url}</p>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              {/* Toggle switch */}
+                              <button
+                                type="button"
+                                onClick={() => handleToggleMcpServer(srv.id, srv.is_enabled)}
+                                className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${srv.is_enabled ? 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20' : 'bg-surface-2 text-foreground-3 hover:bg-surface-3'}`}
+                              >
+                                {srv.is_enabled ? 'Disable' : 'Enable'}
+                              </button>
+
+                              {/* Delete button */}
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteMcpServer(srv.id)}
+                                className="p-1.5 rounded-lg border border-border bg-surface-2 text-foreground-3 hover:text-rose-400 hover:bg-rose-500/10 hover:border-rose-500/20 transition-all"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+
+                          {srv.discovered_tools && srv.discovered_tools.length > 0 && (
+                            <div className="mt-3 pt-3 border-t border-border/60">
+                              <span className="text-[10px] font-semibold text-foreground-3 block mb-1.5">Exposed Tools ({srv.discovered_tools.length}):</span>
+                              <div className="flex flex-wrap gap-1.5">
+                                {srv.discovered_tools.map((t) => (
+                                  <div key={t.name} className="px-2 py-1 rounded-md bg-surface-2 border border-border text-[11px] flex items-center gap-1.5">
+                                    <span className="font-mono text-primary font-bold text-[10px]">⚡ {t.name}</span>
+                                    {t.description && <span className="text-foreground-3 text-[10px] max-w-[200px] truncate">— {t.description}</span>}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </SectionCard>
+              </div>
+            )}
+
+
+
+            {/* ── Account tab ── */}
             {tab === 'account' && (
+
               <>
                 <SectionCard title="Profile">
                   <SettingRow label="Name" desc={user?.full_name || 'Not set'}>

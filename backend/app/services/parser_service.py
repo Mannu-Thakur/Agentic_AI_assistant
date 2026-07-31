@@ -92,7 +92,17 @@ class ParserService:
             text_parts.append(marker)
             char_offset += len(marker)
 
-            page_text = page.extract_text() or ""
+            raw_p_text = page.extract_text() or ""
+            # Fix concatenated words & kerning artifacts for GPA/CGPA/Marks in PDFs
+            page_text = re.sub(r"([a-zA-Z])CGP\s*A\b", r"\1 CGPA (GPA)", raw_p_text, flags=re.I)
+            page_text = re.sub(r"([a-zA-Z])CGPA\b", r"\1 CGPA (GPA)", page_text, flags=re.I)
+            page_text = re.sub(r"([a-zA-Z])GPA\b", r"\1 GPA", page_text, flags=re.I)
+            page_text = re.sub(r"\bCGP\s*A\b", "CGPA (GPA)", page_text, flags=re.I)
+            page_text = re.sub(r"\bC\s*G\s*P\s*A\b", "CGPA (GPA)", page_text, flags=re.I)
+            page_text = re.sub(r"\bG\s*P\s*A\b", "GPA", page_text, flags=re.I)
+            if "CGPA (GPA)" not in page_text:
+                page_text = re.sub(r"\bCGPA\b", "CGPA (GPA)", page_text, flags=re.I)
+
             page_meta.append({"page_number": i, "char_offset": char_offset})
             text_parts.append(page_text)
             char_offset += len(page_text)
@@ -245,54 +255,53 @@ class ParserService:
             )
 
         try:
-            raw_img = Image.open(file_path)
-
-            # Handle multi-page TIFF
-            pages: List[str] = []
-            page_confs: List[float] = []
-            try:
-                page_count = getattr(raw_img, "n_frames", 1)
-            except Exception:
-                page_count = 1
-
-            for page_idx in range(page_count):
+            with Image.open(file_path) as raw_img:
+                # Handle multi-page TIFF
+                pages: List[str] = []
+                page_confs: List[float] = []
                 try:
-                    raw_img.seek(page_idx)
-                except EOFError:
-                    break
-
-                img = cls._preprocess_image_for_ocr(raw_img.copy())
-
-                # ── Text extraction ─────────────────────────────────────
-                page_text = pytesseract.image_to_string(img, config="--oem 3 --psm 6")
-                pages.append(page_text)
-
-                # ── Confidence scoring ──────────────────────────────────
-                try:
-                    data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
-                    confs = [
-                        c for c in data.get("conf", [])
-                        if isinstance(c, (int, float)) and int(c) >= 0
-                    ]
-                    page_confs.append(round(sum(confs) / (len(confs) * 100), 3) if confs else 0.5)
+                    page_count = getattr(raw_img, "n_frames", 1)
                 except Exception:
-                    page_confs.append(0.5)
+                    page_count = 1
 
-            full_text = "\n".join(pages)
-            confidence = round(sum(page_confs) / max(len(page_confs), 1), 3)
+                for page_idx in range(page_count):
+                    try:
+                        raw_img.seek(page_idx)
+                    except EOFError:
+                        break
 
-            # ── Layout detection via HOCR ────────────────────────────────
-            try:
-                hocr = pytesseract.image_to_pdf_or_hocr(
-                    cls._preprocess_image_for_ocr(Image.open(file_path).convert("RGB")),
-                    extension="hocr"
-                ).decode("utf-8", errors="ignore")
-                has_tables = bool(
-                    re.search(r"<span[^>]+class=['\"]ocr_line['\"]", hocr, re.I)
-                    and hocr.count("ocr_line") > 10
-                )
-            except Exception:
-                has_tables = False
+                    img = cls._preprocess_image_for_ocr(raw_img.copy())
+
+                    # ── Text extraction ─────────────────────────────────────
+                    page_text = pytesseract.image_to_string(img, config="--oem 3 --psm 6")
+                    pages.append(page_text)
+
+                    # ── Confidence scoring ──────────────────────────────────
+                    try:
+                        data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
+                        confs = [
+                            c for c in data.get("conf", [])
+                            if isinstance(c, (int, float)) and int(c) >= 0
+                        ]
+                        page_confs.append(round(sum(confs) / (len(confs) * 100), 3) if confs else 0.5)
+                    except Exception:
+                        page_confs.append(0.5)
+
+                full_text = "\n".join(pages)
+                confidence = round(sum(page_confs) / max(len(page_confs), 1), 3)
+
+                # ── Layout detection via HOCR ────────────────────────────────
+                try:
+                    hocr = pytesseract.image_to_pdf_or_hocr(
+                        cls._preprocess_image_for_ocr(raw_img.convert("RGB")),
+                        extension="hocr"
+                    ).decode("utf-8", errors="ignore")
+                    has_tables = bool(
+                        re.search(r"<span[^>]+class=['\"]ocr_line['\"]", hocr, re.I)
+                        and hocr.count("ocr_line") > 10
+                    )
+                except Exception:
+                    has_tables = False
 
             # ── Layout type heuristic ─────────────────────────────────────
             text_lower = full_text.lower()

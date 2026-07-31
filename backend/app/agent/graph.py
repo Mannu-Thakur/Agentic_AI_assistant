@@ -66,6 +66,7 @@ from app.agent.nodes import (
     tool_planner_node,
     parallel_tool_execution_node,
     evidence_checker_node,
+    query_rewriter_node,
 )
 from app.agent.prompts import INTENT_MEMORY_WRITE
 
@@ -148,6 +149,7 @@ workflow.add_node("clarification",             clarification_node)
 workflow.add_node("plan",                      plan_node)
 workflow.add_node("tool_planner",              tool_planner_node)           # Phase 3
 workflow.add_node("parallel_tool_execution",   parallel_tool_execution_node)  # Phase 3
+workflow.add_node("query_rewriter",            query_rewriter_node)
 workflow.add_node("check_retrieval",           check_retrieval_node)
 workflow.add_node("retrieve_context",          retrieve_context_node)
 workflow.add_node("grade_documents",           grade_documents_node)
@@ -180,8 +182,11 @@ workflow.add_edge("plan", "tool_planner")
 # tool_planner → parallel_tool_execution (Phase 3)
 workflow.add_edge("tool_planner", "parallel_tool_execution")
 
-# parallel_tool_execution → check_retrieval
-workflow.add_edge("parallel_tool_execution", "check_retrieval")
+# parallel_tool_execution → query_rewriter
+workflow.add_edge("parallel_tool_execution", "query_rewriter")
+
+# query_rewriter → check_retrieval
+workflow.add_edge("query_rewriter", "check_retrieval")
 
 # check_retrieval → retrieve_context OR grade_documents (Self-RAG)
 workflow.add_conditional_edges(

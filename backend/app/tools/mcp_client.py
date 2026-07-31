@@ -237,3 +237,254 @@ class McpStdioClient:
                 except Exception:
                     pass
             self.proc = None
+
+
+class McpHttpClient:
+    """
+    Remote MCP client using HTTP/JSON-RPC 2.0 (or SSE transport).
+    Connects to deployed MCP server URLs (e.g. https://my-mcp-tool.vercel.app/mcp).
+    """
+
+    def __init__(self, url: str, auth_header: Optional[str] = None, transport_type: str = "http_jsonrpc"):
+        import httpx
+        self.url = url.strip()
+        self.auth_header = auth_header.strip() if auth_header else None
+        self.transport_type = transport_type
+        self.session_id: Optional[str] = None
+        self.is_connected = False
+        self._handshake_done = False   # tracks whether MCP initialize was completed
+        self.next_request_id = 1
+        self._client: Optional[httpx.AsyncClient] = None
+
+    def _get_headers(self) -> Dict[str, str]:
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+            "User-Agent": "Antigravity-AI-Chatbot-MCP-Client/1.0",
+        }
+        if self.session_id:
+            headers["mcp-session-id"] = self.session_id
+        if self.auth_header:
+            if self.auth_header.startswith("Bearer ") or ":" in self.auth_header:
+                if ":" in self.auth_header and not self.auth_header.startswith("Bearer "):
+                    k, v = self.auth_header.split(":", 1)
+                    headers[k.strip()] = v.strip()
+                else:
+                    headers["Authorization"] = self.auth_header
+            else:
+                headers["Authorization"] = f"Bearer {self.auth_header}"
+        return headers
+
+    async def _ensure_client(self):
+        import httpx
+        if self._client is None or self._client.is_closed:
+            # Closed client means the TCP connection was dropped.
+            # Create a new client AND mark handshake as incomplete so
+            # send_request re-runs MCP initialize before the next tool call.
+            self._client = httpx.AsyncClient(timeout=15.0, headers=self._get_headers())
+            self._handshake_done = False
+            self.session_id = None
+            logger.info(f"[McpHttpClient] Re-created HTTP client for {self.url}; will re-handshake.")
+
+    def _parse_response(self, response_text: str) -> Dict[str, Any]:
+        text = response_text.strip()
+        if not text:
+            return {}
+        if text.startswith("{") and text.endswith("}"):
+            return json.loads(text)
+        # Parse SSE lines starting with 'data:'
+        for line in text.splitlines():
+            line = line.strip()
+            if line.startswith("data:"):
+                data_str = line[5:].strip()
+                if data_str:
+                    return json.loads(data_str)
+        try:
+            return json.loads(text)
+        except Exception:
+            return {"result": text}
+
+    def _extract_session_id(self, res) -> Optional[str]:
+        sess_id = (
+            res.headers.get("mcp-session-id") or
+            res.headers.get("Mcp-Session-Id") or
+            res.headers.get("session-id")
+        )
+        return sess_id
+
+    async def send_request(self, method: str, params: Optional[Dict[str, Any]] = None) -> Any:
+        await self._ensure_client()
+
+        # If the client was re-created (handshake lost), re-initialize before
+        # sending any tool/list requests so session_id is valid.
+        if not self._handshake_done and method not in ("initialize", "notifications/initialized"):
+            logger.info(f"[McpHttpClient] Re-running MCP handshake for {self.url}")
+            try:
+                init_params = {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "AntigravityRemoteMcpClient", "version": "1.0.0"},
+                }
+                await self.send_request("initialize", init_params)
+                await self.send_notification("notifications/initialized")
+                self._handshake_done = True
+            except Exception as hs_err:
+                logger.warning(f"[McpHttpClient] Re-handshake warning: {hs_err}")
+                self._handshake_done = True  # proceed anyway; server may not require it
+
+        req_id = self.next_request_id
+        self.next_request_id += 1
+
+        payload = {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "method": method,
+        }
+        if params is not None:
+            payload["params"] = params
+
+        headers = self._get_headers()
+        logger.info(
+            f"[Remote MCP Request] URL: {self.url} | Method: {method} | req_id: {req_id} | "
+            f"session_id: {self.session_id} | payload: {json.dumps(payload)}"
+        )
+
+        try:
+            res = await self._client.post(self.url, json=payload, headers=headers)
+            new_session_id = self._extract_session_id(res)
+            if new_session_id:
+                self.session_id = new_session_id
+                logger.info(f"[Remote MCP Session] Received mcp-session-id: {self.session_id}")
+
+            res.raise_for_status()
+
+            data = self._parse_response(res.text)
+            logger.info(
+                f"[Remote MCP Response] URL: {self.url} | Method: {method} | "
+                f"Status: {res.status_code} | response: {json.dumps(data)[:500]}"
+            )
+
+            if "error" in data:
+                err_info = data["error"]
+                err_text = err_info.get("message", str(err_info)) if isinstance(err_info, dict) else str(err_info)
+                raise Exception(f"Remote MCP Error ({method}): {err_text}")
+            return data.get("result")
+        except Exception as e:
+            logger.error(f"[Remote MCP Failed] URL: {self.url} | Method: {method} | error: {str(e)}")
+            raise e
+
+    async def send_notification(self, method: str, params: Optional[Dict[str, Any]] = None):
+        await self._ensure_client()
+        payload = {
+            "jsonrpc": "2.0",
+            "method": method,
+        }
+        if params is not None:
+            payload["params"] = params
+        try:
+            headers = self._get_headers()
+            logger.info(f"[Remote MCP Notification] URL: {self.url} | Method: {method}")
+            res = await self._client.post(self.url, json=payload, headers=headers)
+            new_session_id = self._extract_session_id(res)
+            if new_session_id:
+                self.session_id = new_session_id
+        except Exception as e:
+            logger.warning(f"Remote MCP notification error ({self.url}): {str(e)}")
+
+    async def connect(self):
+        logger.info(f"[Remote MCP Connect] Initializing connection to URL: {self.url}")
+        try:
+            init_params = {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {
+                    "name": "AntigravityRemoteMcpClient",
+                    "version": "1.0.0"
+                }
+            }
+            await self._ensure_client()
+            try:
+                self._handshake_done = True  # prevent re-entrant re-handshake
+                await self.send_request("initialize", init_params)
+                await self.send_notification("notifications/initialized")
+            except Exception as init_err:
+                logger.warning(f"[Remote MCP Handshake Warning] Handshake warning for {self.url}: {init_err}")
+            self.is_connected = True
+            self._handshake_done = True
+            logger.info(f"[Remote MCP Handshake Successful] Connected to {self.url} with session_id={self.session_id}")
+        except Exception as e:
+            self.is_connected = False
+            self._handshake_done = False
+            logger.error(f"Failed to connect to Remote MCP Server ({self.url}): {e}")
+            raise e
+
+    async def list_tools(self) -> List[Dict[str, Any]]:
+        logger.info(f"[Remote MCP list_tools] Requesting tools/list from {self.url}")
+        result = await self.send_request("tools/list")
+        tools = []
+        if isinstance(result, dict):
+            tools = result.get("tools", [])
+        elif isinstance(result, list):
+            tools = result
+
+        logger.info(f"[Remote MCP list_tools] Discovered {len(tools)} tools: {[t.get('name') for t in tools]}")
+        return tools
+
+    async def call_tool(self, name: str, arguments: Dict[str, Any]) -> str:
+        if arguments is None or not isinstance(arguments, dict):
+            logger.warning(f"[Remote MCP call_tool] Normalizing arguments from {type(arguments)} to dict for tool '{name}'")
+            arguments = {}
+
+        params = {
+            "name": name,
+            "arguments": arguments
+        }
+
+        logger.info(
+            f"[Remote MCP call_tool Request] Tool: {name} | Arguments: {json.dumps(arguments)} | "
+            f"Server URL: {self.url} | Session ID: {self.session_id}"
+        )
+
+        max_retries = 2
+        backoff = 1.0
+        for attempt in range(1, max_retries + 1):
+            try:
+                result = await self.send_request("tools/call", params)
+                if not result:
+                    return f"Tool '{name}' executed with no response content."
+
+                # Check if result indicates error
+                if isinstance(result, dict) and result.get("isError"):
+                    content_items = result.get("content", [])
+                    err_texts = [item.get("text", "") for item in content_items if isinstance(item, dict) and item.get("type") == "text"]
+                    error_msg = "\n".join(err_texts) if err_texts else json.dumps(result)
+                    raise Exception(f"Server returned tool error: {error_msg}")
+
+                content_items = result.get("content", []) if isinstance(result, dict) else []
+                text_responses = []
+                for item in content_items:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        text_responses.append(item.get("text", ""))
+
+                if text_responses:
+                    final_text = "\n".join(text_responses)
+                    logger.info(f"[Remote MCP call_tool Success] Tool: {name} | Result snippet: {final_text[:300]}")
+                    return final_text
+
+                res_str = json.dumps(result) if isinstance(result, (dict, list)) else str(result)
+                logger.info(f"[Remote MCP call_tool Success] Tool: {name} | Result: {res_str[:300]}")
+                return res_str
+            except Exception as e:
+                logger.warning(f"Remote MCP tool call '{name}' attempt {attempt}/{max_retries} failed: {e}")
+                if attempt == max_retries:
+                    raise
+                await asyncio.sleep(backoff)
+                backoff *= 2.0  # exponential backoff: 1s → 2s
+
+    async def close(self):
+        self.is_connected = False
+        if self._client and not self._client.is_closed:
+            await self._client.aclose()
+            self._client = None
+
+

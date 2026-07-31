@@ -11,27 +11,60 @@ class OpenRouterProvider(BaseLLMProvider):
     self.api_key = settings.OPENROUTER_API_KEY
     self.is_mock = not self.api_key or self.api_key.startswith("mock_")
 
+  def _inject_images_into_messages(
+      self,
+      messages: List[Dict[str, Any]],
+      images: Optional[List[Dict[str, str]]],
+  ) -> List[Dict[str, Any]]:
+    """
+    Convert the last user message into an OpenAI-compatible multimodal content
+    array so that vision-capable models on OpenRouter can see the images.
+
+    Each image dict must have keys: ``base64`` (raw base64 string) and
+    ``mimeType`` (e.g. ``"image/jpeg"``).
+
+    Returns a **new** list; original messages are not mutated.
+    """
+    if not images:
+        return messages
+
+    messages = [dict(m) for m in messages]  # shallow copy each message
+
+    # Find last user message and upgrade its content to a multimodal array
+    for i in reversed(range(len(messages))):
+        if messages[i].get("role") == "user":
+            existing_text = messages[i].get("content", "") or ""
+            parts: List[Dict[str, Any]] = [{"type": "text", "text": existing_text}]
+            for img in images:
+                mime = img.get("mimeType", "image/jpeg")
+                b64  = img.get("base64", "")
+                parts.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime};base64,{b64}"}
+                })
+            messages[i]["content"] = parts
+            break
+
+    return messages
+
   async def generate(
       self,
-      messages: List[Dict[str, str]],
+      messages: List[Dict[str, Any]],
       model: str,
       temperature: float = 0.7,
       max_tokens: int = 2048,
       tools: Optional[List[Dict[str, Any]]] = None,
       api_key: Optional[str] = None,
+      images: Optional[List[Dict[str, str]]] = None,
   ) -> Dict[str, Any]:
     key_to_use = api_key or self.api_key
-    is_mock_run = not key_to_use or key_to_use.startswith("mock_")
+    if not key_to_use or str(key_to_use).startswith("mock_"):
+        raise Exception(
+            "OpenRouter API key is missing or invalid. Please configure a valid OpenRouter API key in Settings to run real-time requests."
+        )
 
-    if is_mock_run:
-      await asyncio.sleep(0.5)
-      mock_text = f"[Mock OpenRouter Response for model {model}]: You asked: '{messages[-1]['content']}'"
-      return {
-          "text": mock_text,
-          "input_tokens": 15,
-          "output_tokens": 20,
-          "model": model
-      }
+    # Inject images into the last user turn if provided
+    messages = self._inject_images_into_messages(messages, images)
 
     payload = {
         "model": model,
@@ -69,25 +102,31 @@ class OpenRouterProvider(BaseLLMProvider):
           )
         else:
           raise Exception(f"OpenRouter API returned error {response.status_code}: {response.text}")
-      text = data["choices"][0]["message"]["content"]
-      input_tokens = data.get("usage", {}).get("prompt_tokens", 0)
-      output_tokens = data.get("usage", {}).get("completion_tokens", 0)
-      
-      return {
-          "text": text,
-          "input_tokens": input_tokens,
-          "output_tokens": output_tokens,
-          "model": model
-      }
+
+    if not data:
+      raise Exception("OpenRouter API returned empty response data.")
+
+    text = data["choices"][0]["message"]["content"]
+    input_tokens = data.get("usage", {}).get("prompt_tokens", 0)
+    output_tokens = data.get("usage", {}).get("completion_tokens", 0)
+    
+    return {
+        "text": text,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "model": model
+    }
+
 
   async def generate_stream(
       self,
-      messages: List[Dict[str, str]],
+      messages: List[Dict[str, Any]],
       model: str,
       temperature: float = 0.7,
       max_tokens: int = 2048,
       tools: Optional[List[Dict[str, Any]]] = None,
       api_key: Optional[str] = None,
+      images: Optional[List[Dict[str, str]]] = None,
   ) -> AsyncGenerator[Dict[str, Any], None]:
     key_to_use = api_key or self.api_key
     is_mock_run = not key_to_use or key_to_use.startswith("mock_")
@@ -96,6 +135,9 @@ class OpenRouterProvider(BaseLLMProvider):
       raise Exception(
           "OpenRouter API key missing or invalid. Please configure your OpenRouter API key in Settings to stream real-time responses."
       )
+
+    # Inject images into the last user turn if provided
+    messages = self._inject_images_into_messages(messages, images)
 
     payload = {
         "model": model,

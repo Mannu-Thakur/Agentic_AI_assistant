@@ -197,6 +197,10 @@ class ProviderKeyManagerClass {
     if (m.includes('llama') || m.includes('mixtral')) return 'groq';
     if (m.includes('glm')) return 'glm';
     if (m.includes('qwen')) return 'alibaba';
+    // Search providers
+    if (m === 'tavily' || m.includes('tavily')) return 'tavily';
+    if (m === 'serpapi' || m.includes('serp')) return 'serpapi';
+    if (m === 'exa' || m.includes('exa')) return 'exa';
     return 'google';
   }
 }

@@ -220,6 +220,67 @@ async def verify_alibaba(api_key: str) -> List[str]:
     except httpx.RequestError as e:
         raise Exception(f"Could not connect to Alibaba API: {str(e)}")
 
+# ─── Search Provider Verification ─────────────────────────────────────────────
+
+async def verify_tavily(api_key: str) -> List[str]:
+    """Verify Tavily API key by running a minimal test search."""
+    url = "https://api.tavily.com/search"
+    payload = {"api_key": api_key, "query": "test", "max_results": 1, "search_depth": "basic"}
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.post(url, json=payload)
+            if res.status_code == 200:
+                return ["tavily-search"]
+            detail = "Invalid key"
+            try:
+                err_json = res.json()
+                detail = err_json.get("detail") or err_json.get("message") or err_json.get("error", {}).get("message", detail)
+            except:
+                pass
+            raise Exception(f"Tavily verification failed ({res.status_code}): {detail}")
+    except httpx.RequestError as e:
+        raise Exception(f"Could not connect to Tavily API: {str(e)}")
+
+async def verify_serpapi(api_key: str) -> List[str]:
+    """Verify SerpAPI key via the account endpoint."""
+    url = f"https://serpapi.com/account?api_key={api_key}"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.get(url)
+            if res.status_code == 200:
+                data = res.json()
+                if data.get("account_id") or data.get("email"):
+                    return ["google-search", "bing-search", "youtube-search"]
+            detail = "Invalid key"
+            try:
+                err_json = res.json()
+                detail = err_json.get("error") or err_json.get("message", detail)
+            except:
+                pass
+            raise Exception(f"SerpAPI verification failed ({res.status_code}): {detail}")
+    except httpx.RequestError as e:
+        raise Exception(f"Could not connect to SerpAPI: {str(e)}")
+
+async def verify_exa(api_key: str) -> List[str]:
+    """Verify Exa AI key by running a minimal test search."""
+    url = "https://api.exa.ai/search"
+    headers = {"x-api-key": api_key, "Content-Type": "application/json"}
+    payload = {"query": "test", "numResults": 1}
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.post(url, json=payload, headers=headers)
+            if res.status_code in (200, 201):
+                return ["exa-search", "exa-find-similar"]
+            detail = "Invalid key"
+            try:
+                err_json = res.json()
+                detail = err_json.get("error") or err_json.get("message", detail)
+            except:
+                pass
+            raise Exception(f"Exa AI verification failed ({res.status_code}): {detail}")
+    except httpx.RequestError as e:
+        raise Exception(f"Could not connect to Exa AI API: {str(e)}")
+
 async def verify_provider_api_key_and_fetch_models(provider_name: str, api_key: str) -> List[str]:
     provider = provider_name.lower().strip()
     if provider in ["google", "gemini"]:
@@ -238,6 +299,12 @@ async def verify_provider_api_key_and_fetch_models(provider_name: str, api_key: 
         return await verify_glm(api_key)
     elif provider == "alibaba":
         return await verify_alibaba(api_key)
+    elif provider == "tavily":
+        return await verify_tavily(api_key)
+    elif provider == "serpapi":
+        return await verify_serpapi(api_key)
+    elif provider == "exa":
+        return await verify_exa(api_key)
     else:
         raise Exception(f"Unsupported provider: {provider_name}")
 
@@ -291,7 +358,8 @@ async def save_api_key(
     if provider_name == "gemini":
         provider_name = "google"
 
-    supported = ["google", "groq", "openrouter", "openai", "anthropic", "deepseek", "alibaba", "glm"]
+    supported = ["google", "groq", "openrouter", "openai", "anthropic", "deepseek", "alibaba", "glm",
+                 "tavily", "serpapi", "exa"]
     if provider_name not in supported:
         raise HTTPException(status_code=400, detail="Unsupported provider name.")
 
@@ -410,7 +478,8 @@ async def list_providers(
             name = "google"
         keys_map[name] = k
     
-    supported_providers = ["google", "openai", "anthropic", "deepseek", "groq", "openrouter", "glm", "alibaba"]
+    supported_providers = ["google", "openai", "anthropic", "deepseek", "groq", "openrouter", "glm", "alibaba",
+                           "tavily", "serpapi", "exa"]
     out = []
     for pid in supported_providers:
         db_record = keys_map.get(pid)

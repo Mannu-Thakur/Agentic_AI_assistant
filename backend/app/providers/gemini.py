@@ -122,29 +122,10 @@ class GeminiProvider(BaseLLMProvider):
       images: Optional[List[Dict[str, str]]] = None,
   ) -> Dict[str, Any]:
     key_to_use = api_key or self.api_key
-    is_mock_run = not key_to_use or key_to_use.startswith("mock_")
-
-    if is_mock_run:
-      await asyncio.sleep(0.5)
-      simulated_calls = self._check_mock_tool_call(messages)
-      
-      if simulated_calls:
-          return {
-              "text": "",
-              "input_tokens": 15,
-              "output_tokens": 15,
-              "model": model,
-              "tool_calls": simulated_calls
-          }
-
-      mock_text = f"[Mock Gemini Response for model {model}]: Completed computation. Output matches expectation."
-      return {
-          "text": mock_text,
-          "input_tokens": 15,
-          "output_tokens": 20,
-          "model": model,
-          "tool_calls": []
-      }
+    if not key_to_use or str(key_to_use).startswith("mock_"):
+        raise Exception(
+            "Gemini API key is missing or invalid. Please configure a valid Gemini API key in Settings to run real-time requests."
+        )
 
     contents, system_instruction = self._convert_messages(messages, images=images)
     payload: Dict[str, Any] = {
@@ -191,33 +172,36 @@ class GeminiProvider(BaseLLMProvider):
         else:
           raise Exception(f"Gemini API returned error {response.status_code}: {response.text}")
 
+    if not data:
+      raise Exception("Gemini API returned empty response data.")
+
+    text = ""
+    tool_calls = []
+    try:
+      parts = data["candidates"][0]["content"]["parts"]
+      for part in parts:
+        if "text" in part:
+          text += part["text"]
+        if "functionCall" in part:
+          fc = part["functionCall"]
+          tool_calls.append({
+              "name": fc["name"],
+              "arguments": fc.get("args", {})
+          })
+    except (KeyError, IndexError, TypeError):
+      text = "[No text generated]"
       
-      text = ""
-      tool_calls = []
-      try:
-        parts = data["candidates"][0]["content"]["parts"]
-        for part in parts:
-          if "text" in part:
-            text += part["text"]
-          if "functionCall" in part:
-            fc = part["functionCall"]
-            tool_calls.append({
-                "name": fc["name"],
-                "arguments": fc.get("args", {})
-            })
-      except (KeyError, IndexError):
-        text = "[No text generated]"
-        
-      input_tokens = data.get("usageMetadata", {}).get("promptTokenCount", 0)
-      output_tokens = data.get("usageMetadata", {}).get("candidatesTokenCount", 0)
-      
-      return {
-          "text": text,
-          "input_tokens": input_tokens or len(str(messages)) // 4,
-          "output_tokens": output_tokens or len(text) // 4,
-          "model": model,
-          "tool_calls": tool_calls
-      }
+    input_tokens = data.get("usageMetadata", {}).get("promptTokenCount", 0)
+    output_tokens = data.get("usageMetadata", {}).get("candidatesTokenCount", 0)
+    
+    return {
+        "text": text,
+        "input_tokens": input_tokens or len(str(messages)) // 4,
+        "output_tokens": output_tokens or len(text) // 4,
+        "model": model,
+        "tool_calls": tool_calls
+    }
+
 
   async def generate_stream(
       self,
@@ -230,31 +214,7 @@ class GeminiProvider(BaseLLMProvider):
       images: Optional[List[Dict[str, str]]] = None,
   ) -> AsyncGenerator[Dict[str, Any], None]:
     key_to_use = api_key or self.api_key
-    is_mock_run = not key_to_use or key_to_use.startswith("mock_")
-
-    if is_mock_run:
-      simulated_calls = self._check_mock_tool_call(messages)
-
-      if simulated_calls:
-        # Yield tool calls and exit
-        yield {
-            "event": "tool_calls",
-            "tool_calls": simulated_calls
-        }
-        yield {
-            "event": "metrics",
-            "metrics": {
-                "model_used": model,
-                "latency_ms": 100,
-                "tokens_input": 15,
-                "tokens_output": 15,
-                "cost_estimate": 0.0,
-                "confidence_score": 0.98,
-                "memory_hits": 0
-            }
-        }
-        return
-
+    if not key_to_use or str(key_to_use).startswith("mock_"):
       raise Exception(
           "Gemini API key missing or invalid. Please configure your Gemini API key in Settings to stream real-time responses."
       )

@@ -20,6 +20,11 @@ import { ChatInput } from '../components/chat/ChatInput';
 import { TimeWidget } from '../components/chat/TimeWidget';
 import { ToastContainer } from '../components/ui/Toast';
 import { useToast } from '../hooks/useToast';
+import { ShareModal } from '../components/chat/ShareModal';
+import { SourcesDrawer, SourceItem, ActivityTrace } from '../components/chat/SourcesDrawer';
+import { AnswerContextMenu } from '../components/chat/AnswerContextMenu';
+import { TextSelectionTooltip } from '../components/chat/TextSelectionTooltip';
+import { CanvasPanel } from '../components/chat/CanvasPanel';
 import {
   Upload, Plus, Terminal, Database, Lock,
   Sparkles, Cpu, X, CheckCircle2, Copy, Check,
@@ -27,8 +32,8 @@ import {
   Search, ArrowDown,
   MessageSquare, Pencil, Trash2, Pin,
   BookOpen, Share2, Download, FileJson, FileText,
-  MoreHorizontal, Archive, FolderClosed, ChevronDown, Files,
-  Settings, LogOut, ListOrdered, GitBranch, Link
+  MoreHorizontal, Archive, FolderClosed, ChevronDown, ChevronUp, Files,
+  Settings, LogOut, ListOrdered, GitBranch, Link, PenLine
 } from 'lucide-react';
 
 // ─────────────────────────────────────────────────────────────
@@ -224,6 +229,11 @@ function parseUserMessageFiles(content: string) {
   let cleanPrompt = decodeHtmlEntities(content);
   let refTitle: string | null = null;
 
+  // Strip injected System Context and User Location Context tags
+  cleanPrompt = cleanPrompt.replace(/\[System Context:[^\]]*\]\n?/gi, '');
+  cleanPrompt = cleanPrompt.replace(/\[User Location Context:[^\]]*\]\n?/gi, '');
+  cleanPrompt = cleanPrompt.replace(/<>?\s*\{[^{}]*"query"[^{}]*\}\s*<\/>?/gi, '');
+
   // Extract and strip connected reference context block if present
   const refContextMatch = cleanPrompt.match(/\[Connected Reference Context from Chat:\s*"([^"]+)"\][\s\S]*?\[End of Referenced Context\]\s*/i);
   if (refContextMatch) {
@@ -252,10 +262,20 @@ function parseUserMessageFiles(content: string) {
 // ─────────────────────────────────────────────────────────────
 function CodeBlock({ language, code }: { language: string; code: string }) {
   const [copied, setCopied] = useState(false);
-  const [isCollapsed, setIsCollapsed] = useState(code.split('\n').length > 22);
+  const lineCount = useMemo(() => code.split('\n').length, [code]);
+  const isLong = lineCount > 18;
+  const [userToggled, setUserToggled] = useState<boolean | null>(null);
+
+  const isCollapsed = userToggled !== null ? userToggled : isLong;
+
+  const toggleCollapse = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setUserToggled((prev) => (prev !== null ? !prev : !isLong));
+  }, [isLong]);
 
   return (
-    <div className={`code-block-wrapper ${isCollapsed ? 'collapsed' : ''}`}>
+    <div className={`code-block-wrapper ${isLong && isCollapsed ? 'collapsed' : ''}`}>
       <div className="code-block-header">
         <div className="lang-badge">
           <span className={`lang-dot ${language || 'default'}`} />
@@ -263,6 +283,7 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
         </div>
         <div className="actions">
           <button
+            type="button"
             onClick={() => {
               navigator.clipboard.writeText(code).then(() => {
                 setCopied(true);
@@ -281,19 +302,30 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
         style={oneDark}
         language={language || 'text'}
         PreTag="pre"
-        showLineNumbers={code.split('\n').length > 4}
+        showLineNumbers={lineCount > 4}
         wrapLongLines={false}
         customStyle={{ margin: 0, borderRadius: 0, fontSize: '0.82rem', background: '#0d1117' }}
         codeTagProps={{ style: { fontFamily: "'JetBrains Mono', monospace" } }}
       >
         {code}
       </SyntaxHighlighter>
-      {code.split('\n').length > 22 && (
+      {isLong && (
         <button
-          onClick={() => setIsCollapsed(!isCollapsed)}
-          className="code-block-expand-btn"
+          type="button"
+          onClick={toggleCollapse}
+          className="code-block-expand-btn flex items-center justify-center gap-1 cursor-pointer select-none"
         >
-          {isCollapsed ? 'Expand code block' : 'Collapse code block'}
+          {isCollapsed ? (
+            <>
+              <ChevronDown className="w-3.5 h-3.5" />
+              <span>Expand code block ({lineCount} lines)</span>
+            </>
+          ) : (
+            <>
+              <ChevronUp className="w-3.5 h-3.5" />
+              <span>Collapse code block</span>
+            </>
+          )}
         </button>
       )}
     </div>
@@ -304,74 +336,76 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
 //  Base Markdown renderer — full component override
 // ─────────────────────────────────────────────────────────────
 function MarkdownContent({ content, isStreaming }: { content: string; isStreaming?: boolean }) {
+  const markdownComponents = useMemo(() => ({
+    // Inline & block code
+    code({ className, children, ...props }: any) {
+      const match = /language-(\w+)/.exec(className || '');
+      if (!match) {
+        return (
+          <code className="prose-chat-inline-code" {...props}>
+            {children}
+          </code>
+        );
+      }
+      return <CodeBlock language={match[1]} code={String(children).replace(/\n$/, '')} />;
+    },
+    // Tables — wrap in scrollable container
+    table({ children }: any) {
+      return (
+        <div className="table-wrapper">
+          <table>{children}</table>
+        </div>
+      );
+    },
+    thead({ children }: any) { return <thead>{children}</thead>; },
+    tbody({ children }: any) { return <tbody>{children}</tbody>; },
+    tr({ children }: any)   { return <tr>{children}</tr>; },
+    th({ children, style }: any) {
+      return <th style={style}>{children}</th>;
+    },
+    td({ children, style }: any) {
+      return <td style={style}>{children}</td>;
+    },
+    // Headings
+    h1({ children }: any) { return <h1>{children}</h1>; },
+    h2({ children }: any) { return <h2>{children}</h2>; },
+    h3({ children }: any) { return <h3>{children}</h3>; },
+    h4({ children }: any) { return <h4>{children}</h4>; },
+    h5({ children }: any) { return <h5>{children}</h5>; },
+    h6({ children }: any) { return <h6>{children}</h6>; },
+    // Paragraph
+    p({ children }: any) { return <p>{children}</p>; },
+    // Horizontal rule
+    hr() { return <hr />; },
+    // Blockquote
+    blockquote({ children }: any) { return <blockquote>{children}</blockquote>; },
+    // Links
+    a({ href, children }: any) {
+      return (
+        <a href={href} target="_blank" rel="noopener noreferrer">
+          {children}
+        </a>
+      );
+    },
+    // Images
+    img({ src, alt }: any) {
+      return <img src={src} alt={alt} loading="lazy" />;
+    },
+    // Lists
+    ul({ children }: any) { return <ul>{children}</ul>; },
+    ol({ children }: any) { return <ol>{children}</ol>; },
+    li({ children }: any) { return <li>{children}</li>; },
+    // Strong / em
+    strong({ children }: any) { return <strong>{children}</strong>; },
+    em({ children }: any) { return <em>{children}</em>; },
+  }), []);
+
   return (
     <div className={`prose-chat ${isStreaming ? 'streaming-cursor' : ''}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex]}
-        components={{
-          // Inline & block code
-          code({ className, children, ...props }) {
-            const match = /language-(\w+)/.exec(className || '');
-            if (!match) {
-              return (
-                <code className="prose-chat-inline-code" {...props}>
-                  {children}
-                </code>
-              );
-            }
-            return <CodeBlock language={match[1]} code={String(children).replace(/\n$/, '')} />;
-          },
-          // Tables — wrap in scrollable container
-          table({ children }) {
-            return (
-              <div className="table-wrapper">
-                <table>{children}</table>
-              </div>
-            );
-          },
-          thead({ children }) { return <thead>{children}</thead>; },
-          tbody({ children }) { return <tbody>{children}</tbody>; },
-          tr({ children })   { return <tr>{children}</tr>; },
-          th({ children, style }) {
-            return <th style={style}>{children}</th>;
-          },
-          td({ children, style }) {
-            return <td style={style}>{children}</td>;
-          },
-          // Headings
-          h1({ children }) { return <h1>{children}</h1>; },
-          h2({ children }) { return <h2>{children}</h2>; },
-          h3({ children }) { return <h3>{children}</h3>; },
-          h4({ children }) { return <h4>{children}</h4>; },
-          h5({ children }) { return <h5>{children}</h5>; },
-          h6({ children }) { return <h6>{children}</h6>; },
-          // Paragraph
-          p({ children }) { return <p>{children}</p>; },
-          // Horizontal rule
-          hr() { return <hr />; },
-          // Blockquote
-          blockquote({ children }) { return <blockquote>{children}</blockquote>; },
-          // Links
-          a({ href, children }) {
-            return (
-              <a href={href} target="_blank" rel="noopener noreferrer">
-                {children}
-              </a>
-            );
-          },
-          // Images
-          img({ src, alt }) {
-            return <img src={src} alt={alt} loading="lazy" />;
-          },
-          // Lists
-          ul({ children }) { return <ul>{children}</ul>; },
-          ol({ children }) { return <ol>{children}</ol>; },
-          li({ children }) { return <li>{children}</li>; },
-          // Strong / em
-          strong({ children }) { return <strong>{children}</strong>; },
-          em({ children }) { return <em>{children}</em>; },
-        }}
+        components={markdownComponents}
       >
         {content}
       </ReactMarkdown>
@@ -474,10 +508,10 @@ function ActionBtn({
     <Tooltip content={!showLabel ? label : undefined} side="top">
       <button
         onClick={onClick} aria-label={label}
-        className={`px-2 py-1 rounded-md transition-all text-[11px] flex items-center gap-1.5 ${
-          danger  ? 'text-foreground-3 hover:text-red-400 hover:bg-red-400/10' :
-          active  ? 'text-accent bg-accent/10' :
-                    'text-foreground-3 hover:text-foreground hover:bg-surface-2'}`}
+        className={`px-2 py-1 rounded-lg transition-colors text-[11px] font-medium flex items-center gap-1.5 ${
+          danger  ? 'text-[#BDBDBD] hover:text-red-400 hover:bg-red-500/10' :
+          active  ? 'text-[#F2F2F2] bg-[#2a2a2a]' :
+                    'text-[#BDBDBD] hover:text-[#F2F2F2] hover:bg-[#2a2a2a]'}`}
       >
         <Icon className="w-3.5 h-3.5" />
         {showLabel && <span className="text-[10px] font-semibold">{label}</span>}
@@ -490,68 +524,15 @@ function ActionBtn({
 //  Time-aware greeting
 // ─────────────────────────────────────────────────────────────
 function getTimeGreeting(name: string) {
-  const h = new Date().getHours();
-  const t = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
-  const displayName = name ? name : 'Creator';
-
-  const pick = (list: Array<{ headline: string; sub: string }>) => {
-    const seed = (h * 37 + new Date().getMinutes() + new Date().getSeconds()) % list.length;
-    return list[seed];
-  };
-
-  // Morning (5 AM – 11:59 AM)
-  if (h >= 5 && h < 12) {
-    return pick([
-      { headline: `Systems online, ${displayName}.`, sub: 'Clear mind, high bandwidth. What are we engineering today?' },
-      { headline: `Morning, ${displayName}.`, sub: `Fresh context at ${t} — let's set the pace.` },
-      { headline: `Rise & execute, ${displayName}.`, sub: 'Turning vision into clean, sharp execution.' },
-      { headline: `Fresh canvas, ${displayName}.`, sub: 'Ready to write the next chapter?' },
-      { headline: `A new horizon, ${displayName}.`, sub: 'Unfiltered potential. Where do we begin?' },
-    ]);
-  }
-
-  // Afternoon (12 PM – 4:59 PM)
-  if (h >= 12 && h < 17) {
-    return pick([
-      { headline: `Peak velocity, ${displayName}.`, sub: 'In the zone. Let\'s conquer the complex tasks.' },
-      { headline: `Good afternoon, ${displayName}.`, sub: 'Momentum is high. What\'s our next breakthrough?' },
-      { headline: `High voltage, ${displayName}.`, sub: 'Pure execution, line by line.' },
-      { headline: `Flow state, ${displayName}.`, sub: 'Precision in focus. What are we building?' },
-      { headline: `Midday rhythm, ${displayName}.`, sub: 'Deep work mode activated.' },
-    ]);
-  }
-
-  // Evening (5 PM – 8:59 PM)
-  if (h >= 17 && h < 21) {
-    return pick([
-      { headline: `Evening pulse, ${displayName}.`, sub: 'Refining raw ideas into polished reality.' },
-      { headline: `Golden hour, ${displayName}.`, sub: 'The day wraps, but the vision stays crystal clear.' },
-      { headline: `Good evening, ${displayName}.`, sub: 'Let me take over the heavy cognitive lifting.' },
-      { headline: `Twilight session, ${displayName}.`, sub: 'Unwind while we map out the big picture.' },
-      { headline: `Sharp focus, ${displayName}.`, sub: 'Finalizing achievements before dusk.' },
-    ]);
-  }
-
-  // Late Evening / Night (9 PM – 11:59 PM)
-  if (h >= 21) {
-    return pick([
-      { headline: `Night ops, ${displayName}.`, sub: 'Late hours, peak creative freedom.' },
-      { headline: `Starlight focus, ${displayName}.`, sub: 'Zero noise. Pure, uninterrupted potential.' },
-      { headline: `Quiet hours, ${displayName}.`, sub: 'The world slows down; our ideas speed up.' },
-      { headline: `Unwind & create, ${displayName}.`, sub: 'Crafting brilliance in the quiet of the night.' },
-      { headline: `Midnight horizon, ${displayName}.`, sub: 'The best innovations happen after dark.' },
-    ]);
-  }
-
-  // Deep Midnight / Early Hours (12 AM – 4:59 AM)
-  return pick([
-    { headline: `Ghost hours, ${displayName}.`, sub: `It's ${t} — silence is where legendary work is born.` },
-    { headline: `Still cookin', ${displayName}?`, sub: `It's ${t} and your drive is relentless — respect.` },
-    { headline: `Midnight mode, ${displayName}.`, sub: 'Zero distractions. Pure architectural focus.' },
-    { headline: `Insomnia & intellect, ${displayName}.`, sub: 'Deep night flow unlocked. What are we solving?' },
-    { headline: `Building in the dark, ${displayName}.`, sub: 'The world sleeps while we shape the future.' },
-    { headline: `Late night frequency, ${displayName}.`, sub: `Clock reads ${t}. High intellect mode engaged.` },
-  ]);
+  const displayName = name ? name : '';
+  const nameSuffix = displayName ? `, ${displayName}` : '';
+  const options = [
+    `How can I help${nameSuffix}?`,
+    `Good to see you${nameSuffix}.`,
+    `How can I help today${nameSuffix}?`,
+  ];
+  const seed = new Date().getHours() % options.length;
+  return options[seed];
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -731,6 +712,28 @@ export default function ChatPage() {
 
   // ── Share & Export state ─────────────────────────────────────
   const [copiedShareLink, setCopiedShareLink] = useState(false);
+  const [shareModalOpen, setShareModalOpen]       = useState(false);
+  const [shareModalContent, setShareModalContent] = useState('');
+  const [sourcesDrawerOpen, setSourcesDrawerOpen] = useState(false);
+  const [sourcesDrawerItems, setSourcesDrawerItems] = useState<SourceItem[]>([]);
+  const [sourcesActivity, setSourcesActivity]     = useState<ActivityTrace>({});
+
+  // ── Canvas / Edit panel ──────────────────────────────────────
+  const [canvasOpen, setCanvasOpen]           = useState(false);
+  const [canvasContent, setCanvasContent]     = useState('');
+  const [canvasMsgId, setCanvasMsgId]         = useState<string | null>(null);
+
+  const openCanvas = useCallback((msgId: string, content: string) => {
+    setCanvasMsgId(msgId);
+    setCanvasContent(content);
+    setCanvasOpen(true);
+  }, []);
+
+  const handleCanvasApply = useCallback((msgId: string, newContent: string) => {
+    updateMessage(msgId, { content: newContent });
+    setCanvasOpen(false);
+    setCanvasMsgId(null);
+  }, [updateMessage]);
 
   // ── More Dropdowns & Archiving ───────────────────────────────
   const [menuOpen, setMenuOpen]               = useState(false);
@@ -923,6 +926,20 @@ export default function ChatPage() {
           // If streaming started while we were fetching, discard the result
           if (useChatStore.getState().isStreaming) return;
 
+          // Guard: if the store already has messages with assistant content for
+          // this chat (populated live by the stream), don't overwrite them with
+          // a potentially stale DB snapshot that may not yet include the assistant reply.
+          const storeState = useChatStore.getState();
+          const cachedForThisChat = storeState.messageCache[activeChatId] || [];
+          const hasLiveAssistantContent = cachedForThisChat.some(
+            (m) => m.role === 'assistant' && m.content && m.content.length > 0
+          );
+          // Only skip if the DB result has *fewer* messages (i.e. assistant not committed yet)
+          if (hasLiveAssistantContent && msgs.length < cachedForThisChat.length) {
+            setMessagesLoading(false);
+            return;
+          }
+
           const hydratedMsgs = msgs.map((m: import('../types/chat').Message) => ({
             ...m,
             imagePreviewUrls:
@@ -939,23 +956,24 @@ export default function ChatPage() {
     } else {
       setMessages([]);
       setMessagesLoading(false);
+      setIsStreaming(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeChatId, setMessagesForChat, setMessages, hasCachedMessages]);
+  }, [activeChatId, setMessagesForChat, setMessages, hasCachedMessages, setIsStreaming]);
 
   useEffect(() => {
     setCopiedShareLink(false);
   }, [activeChatId]);
 
-  // ── Auto-scroll ──────────────────────────────────────────────
+  // ── Auto-scroll — instant during streaming to avoid layout jank ───────────
   useEffect(() => {
     if (isStreaming) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      messagesEndRef.current?.scrollIntoView({ behavior: 'instant' as ScrollBehavior });
     }
   }, [messages, isStreaming]);
 
   // ── HUD: track last assistant message ───────────────────────
-  const assistantMessages = messages.filter((m) => m.role === 'assistant');
+  const assistantMessages = useMemo(() => messages.filter((m) => m.role === 'assistant'), [messages]);
   const lastAssistantMsg  = assistantMessages[assistantMessages.length - 1];
   useEffect(() => {
     if (lastAssistantMsg && (isStreaming || !selectedMessageId)) setSelectedMessageId(lastAssistantMsg.id);
@@ -989,10 +1007,11 @@ export default function ChatPage() {
 
   // ── Chat CRUD ────────────────────────────────────────────────
   const handleCreateChat = useCallback(() => {
+    setIsStreaming(false);
     setActiveChatId(null);
     setMessages([]);
     navigate('/');
-  }, [setActiveChatId, setMessages, navigate]);
+  }, [setActiveChatId, setMessages, setIsStreaming, navigate]);
 
   const handleDeleteChat = (id: string, e?: React.MouseEvent) => {
     e?.stopPropagation();
@@ -1258,7 +1277,6 @@ export default function ChatPage() {
 
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       
-      console.log(res.headers.get("content-type"));
       const reader  = res.body?.getReader();
       const decoder = new TextDecoder('utf-8');
       if (!reader) throw new Error('No reader');
@@ -1266,8 +1284,6 @@ export default function ChatPage() {
       let buffer = '';
       while (true) {
         const { value, done } = await reader.read();
-        console.log("DONE:", done);
-        console.log("CHUNK:", decoder.decode(value || new Uint8Array()));
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
@@ -1311,6 +1327,36 @@ export default function ChatPage() {
         const autoTitle = formatChatTitle(trimmed);
         liveUpdateChat({ ...liveChat, title: autoTitle });
         apiRequest(`/chats/${chatId}`, { method: 'PATCH', json: { title: autoTitle } }).catch(() => {});
+      }
+      // ── Background DB sync after streaming ──────────────────────────────
+      // The assistant message is committed to the DB AFTER streaming ends.
+      // We schedule a delayed re-fetch so the cache has the canonical DB IDs
+      // and the answer survives navigation away and back to this chat.
+      if (chatId) {
+        setTimeout(() => {
+          // Only sync if we're still on the same chat and not streaming again
+          const s = useChatStore.getState();
+          if (s.activeChatId === chatId && !s.isStreaming) {
+            apiRequest(`/chats/${chatId}`)
+              .then((dbMsgs) => {
+                const latest = useChatStore.getState();
+                // Only overwrite if the DB now has at least as many messages
+                // (meaning the assistant reply was committed)
+                const localMsgs = latest.messageCache[chatId] || [];
+                if (!latest.isStreaming && dbMsgs.length >= localMsgs.length) {
+                  const hydrated = dbMsgs.map((m: import('../types/chat').Message) => ({
+                    ...m,
+                    imagePreviewUrls:
+                      m.images && m.images.length > 0
+                        ? m.images.map((img: any) => `data:${img.mimeType};base64,${img.base64}`)
+                        : m.imagePreviewUrls,
+                  }));
+                  useChatStore.getState().setMessagesForChat(chatId, hydrated);
+                }
+              })
+              .catch(() => {/* silent — local streamed messages remain intact */});
+          }
+        }, 1500); // 1.5s gives backend time to commit the assistant message
       }
     }
   }, [activeChatId, isStreaming, messages, activeModel, language, token, addChat, addMessage, updateMessage, setActiveChatId, setIsStreaming, navigate, currentModel, validateChatRequest]);
@@ -1732,13 +1778,16 @@ export default function ChatPage() {
     };
   }, []);
 
-  // ── Conversation sorting/filtering & Date Grouping ──────────────
-  const filteredChats = chats.filter((c) => !searchQuery || (c.title || '').toLowerCase().includes(searchQuery.toLowerCase()));
+  // ── Conversation sorting/filtering & Date Grouping — fully memoized ──────
+  const filteredChats = useMemo(
+    () => chats.filter((c) => !searchQuery || (c.title || '').toLowerCase().includes(searchQuery.toLowerCase())),
+    [chats, searchQuery]
+  );
 
-  const pinnedList = filteredChats.filter((c) => pinnedChats.includes(c.id) && !archivedChats.includes(c.id));
-  const unpinnedList = filteredChats.filter((c) => !pinnedChats.includes(c.id) && !archivedChats.includes(c.id));
+  const pinnedList   = useMemo(() => filteredChats.filter((c) => pinnedChats.includes(c.id) && !archivedChats.includes(c.id)), [filteredChats, pinnedChats, archivedChats]);
+  const unpinnedList = useMemo(() => filteredChats.filter((c) => !pinnedChats.includes(c.id) && !archivedChats.includes(c.id)), [filteredChats, pinnedChats, archivedChats]);
 
-  const { today: todayList, yesterday: yesterdayList, last7Days: last7DaysList, older: olderList } = groupChatsByDate(unpinnedList);
+  const { today: todayList, yesterday: yesterdayList, last7Days: last7DaysList, older: olderList } = useMemo(() => groupChatsByDate(unpinnedList), [unpinnedList]);
 
   // ── Export ───────────────────────────────────────────────────
   const handleExport = (format: 'pdf' | 'markdown' | 'json' | 'text') => {
@@ -1929,7 +1978,7 @@ export default function ChatPage() {
 
   return (
     <div
-      className="h-full w-full flex overflow-hidden relative"
+      className="flex-1 min-h-0 w-full flex overflow-hidden relative"
       role="main"
     >
       {/* Toast container — sits above everything */}
@@ -2346,7 +2395,7 @@ export default function ChatPage() {
                     <div className="questions-popup animate-popover-in z-50">
                       <div className="questions-popup-header flex items-center justify-between">
                         <span>Follow-ups</span>
-                        <span className="text-[9px] font-bold text-zinc-400 bg-white/10 px-2 py-0.5 rounded-full">
+                        <span className="text-[9px] font-bold text-[#BDBDBD] bg-[#2a2a2a] px-2 py-0.5 rounded-full">
                           {userQuestions.length}
                         </span>
                       </div>
@@ -2570,12 +2619,8 @@ export default function ChatPage() {
             <div className="welcome-orb welcome-orb-1" aria-hidden />
             <div className="welcome-orb welcome-orb-2" aria-hidden />
             <div className="w-full max-w-chat flex flex-col items-center gap-10 relative z-10">
-              <div className="welcome-content flex flex-col items-center">
-                <div className="welcome-logo-ring cursor-pointer" aria-hidden>
-                  <Logo size={36} collapsed isStreaming={isStreaming} />
-                </div>
-                <h2 className="welcome-headline">{greeting.headline}</h2>
-                <p className="welcome-sub">{greeting.sub}</p>
+              <div className="welcome-content flex flex-col items-center mb-1">
+                <h2 className="welcome-headline">{greeting}</h2>
               </div>
 
               {/* Centered input form */}
@@ -2594,10 +2639,12 @@ export default function ChatPage() {
             </div>
           </div>
         ) : (
-          /* ── CHAT STATE: full height scrollable messages + floating input ── */
-          <div className="flex-1 flex flex-col min-h-0 relative overflow-hidden">
-            <div ref={chatScrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-4 pt-6 pb-36 space-y-6" style={{ scrollBehavior: 'smooth' }}>
-              <div className="max-w-chat mx-auto space-y-5">
+          /* ── CHAT STATE: flex-row so Sources panel is inline ── */
+          <div className="flex-1 flex flex-row min-h-0 overflow-hidden">
+            {/* ── Left: messages + floating input ── */}
+            <div className="flex-1 flex flex-col min-h-0 relative overflow-hidden">
+              <div ref={chatScrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-4 sm:px-6 md:px-8 pt-6 pb-36 space-y-6" style={{ scrollBehavior: 'smooth' }}>
+              <div className="max-w-chat mx-auto space-y-6">
                 {messages.map((m, idx) => {
                   if (m.role === 'system' || m.role === 'tool') return null;
                   const isUser          = m.role === 'user';
@@ -2605,7 +2652,13 @@ export default function ChatPage() {
                   const isStreamingThis = isStreaming && isLastAsst && m.content === '';
                   const isEditing       = editingMsgId === m.id;
                   const sources: SourceDocument[] = !isUser
-                    ? (m.developer_metrics?.source_documents?.filter(s => s.used !== false) ?? [])
+                    ? (m.developer_metrics?.source_documents?.filter((s: any) =>
+                        s.used !== false &&
+                        // Hide broken/failed web search results (duckduckgo errors, System Notice)
+                        !(typeof s.content === 'string' && s.content.trimStart().startsWith('[System Notice:')) &&
+                        // Hide entries with no meaningful filename
+                        s.filename && s.filename.trim().length > 0
+                      ) ?? [])
                     : [];
 
                   const responseMeta = !isUser && !isStreamingThis ? getResponseMeta(m.content) : null;
@@ -2622,7 +2675,7 @@ export default function ChatPage() {
                         {/* User message block */}
                         {isUser && (
                           isEditing ? (
-                            <div className="w-full min-w-[320px] sm:min-w-[480px] md:min-w-[560px] bg-[#2b2b2e] border border-white/10 rounded-3xl p-4 shadow-xl animate-fade-in-up">
+                            <div className="w-full min-w-[320px] sm:min-w-[440px] md:min-w-[520px] bg-[#212121] border border-[#2B2B2B] rounded-2xl p-4 shadow-xl animate-fade-in-up">
                               {/* Image previews inside edit box */}
                               {editImages.length > 0 && (
                                 <div className="flex flex-wrap gap-2 mb-3">
@@ -2631,12 +2684,12 @@ export default function ChatPage() {
                                       <img
                                         src={img.previewUrl}
                                         alt="attached image"
-                                        className="w-16 h-16 rounded-xl object-cover border border-white/20"
+                                        className="w-16 h-16 rounded-xl object-cover border border-[#2B2B2B]"
                                       />
                                       <button
                                         type="button"
                                         onClick={() => setEditImages((prev) => prev.filter((i) => i.id !== img.id))}
-                                        className="absolute -top-1.5 -right-1.5 p-1 rounded-full bg-black/80 hover:bg-red-600 text-white border border-white/20 transition-all shadow-md"
+                                        className="absolute -top-1.5 -right-1.5 p-1 rounded-full bg-[#212121] hover:bg-red-600 text-[#F2F2F2] border border-[#2B2B2B] transition-colors shadow-md"
                                         title="Remove image"
                                       >
                                         <X className="w-3 h-3" />
@@ -2659,7 +2712,7 @@ export default function ChatPage() {
                                   if (e.key === 'Escape') handleCancelEdit();
                                 }}
                                 rows={Math.max(2, editValue.split('\n').length)}
-                                className="w-full bg-transparent text-sm text-white placeholder-zinc-400 focus:outline-none resize-none leading-relaxed border-none p-0 focus:ring-0"
+                                className="w-full bg-transparent text-sm text-[#F2F2F2] placeholder-[#BDBDBD] focus:outline-none resize-none leading-relaxed border-none p-0 focus:ring-0 custom-scrollbar"
                                 style={{ minHeight: '60px', maxHeight: '220px' }}
                                 placeholder="Edit message…"
                               />
@@ -2673,11 +2726,11 @@ export default function ChatPage() {
                                 onChange={handleEditFileSelect}
                               />
 
-                              <div className="flex items-center justify-between gap-2 mt-3 pt-2 border-t border-white/10">
+                              <div className="flex items-center justify-between gap-2 mt-3 pt-2 border-t border-[#2B2B2B]">
                                 <button
                                   type="button"
                                   onClick={() => editFileInputRef.current?.click()}
-                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium text-white/80 hover:text-white bg-white/10 hover:bg-white/15 border border-white/10 transition-all"
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium text-[#BDBDBD] hover:text-[#F2F2F2] bg-[#2a2a2a] hover:bg-[#333] border border-[#2B2B2B] transition-colors"
                                   title="Add image"
                                 >
                                   <Plus className="w-3.5 h-3.5" />
@@ -2688,7 +2741,7 @@ export default function ChatPage() {
                                   <button
                                     type="button"
                                     onClick={handleCancelEdit}
-                                    className="inline-flex items-center justify-center px-4 py-1.5 rounded-full text-xs font-semibold text-white bg-[#1e1e20] hover:bg-[#18181a] border border-white/10 transition-all active:scale-[0.96] flex-shrink-0 whitespace-nowrap"
+                                    className="inline-flex items-center justify-center px-4 py-1.5 rounded-xl text-xs font-medium text-[#BDBDBD] bg-[#2a2a2a] hover:bg-[#333] border border-[#2B2B2B] transition-colors active:scale-[0.97] flex-shrink-0 whitespace-nowrap"
                                   >
                                     Cancel
                                   </button>
@@ -2696,7 +2749,7 @@ export default function ChatPage() {
                                     type="button"
                                     onClick={() => handleSubmitEdit(m.id)}
                                     disabled={!editValue.trim() && editImages.length === 0}
-                                    className="inline-flex items-center justify-center px-5 py-1.5 rounded-full text-xs font-bold text-black bg-white hover:bg-zinc-200 disabled:opacity-40 disabled:cursor-not-allowed transition-all active:scale-[0.96] shadow-sm flex-shrink-0 whitespace-nowrap min-w-[68px]"
+                                    className="inline-flex items-center justify-center px-5 py-1.5 rounded-xl text-xs font-bold text-[#000000] bg-[#FFFFFF] hover:bg-[#E8E8E8] disabled:opacity-30 disabled:cursor-not-allowed transition-colors active:scale-[0.97] shadow-sm flex-shrink-0 whitespace-nowrap min-w-[60px]"
                                   >
                                     Send
                                   </button>
@@ -2714,41 +2767,41 @@ export default function ChatPage() {
                             return (
                               <div className="user-bubble rounded-2xl rounded-tr-sm px-4 py-3 text-sm flex flex-col gap-2">
                                 {refTitle && (
-                                  <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/10 border border-white/15 text-[11px] font-medium text-white/90 mb-0.5 w-fit">
-                                    <Link className="w-3 h-3 text-white/70" />
-                                    <span>Reference: <strong className="font-semibold text-white">{refTitle}</strong></span>
+                                  <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#2a2a2a] border border-[#2B2B2B] text-[11px] font-medium text-[#BDBDBD] mb-0.5 w-fit">
+                                    <Link className="w-3 h-3 text-[#BDBDBD]" />
+                                    <span>Reference: <strong className="font-medium text-[#F2F2F2]">{refTitle}</strong></span>
                                   </div>
                                 )}
                                 {displayImageUrls.length > 0 && (
                                   <div className="flex flex-wrap gap-1.5 mb-1">
                                     {displayImageUrls.map((url, idx) => (
-                                      <img key={idx} src={url} alt="attached image" className="max-w-[200px] max-h-[150px] rounded-lg object-contain border border-white/10 cursor-pointer hover:opacity-90 transition-opacity" onClick={() => window.open(url, '_blank')} />
+                                      <img key={idx} src={url} alt="attached image" className="max-w-[200px] max-h-[150px] rounded-lg object-contain border border-[#2B2B2B] cursor-pointer hover:opacity-90 transition-opacity" onClick={() => window.open(url, '_blank')} />
                                     ))}
                                   </div>
                                 )}
                                 {userAttachedFiles.length > 0 && (
                                   <div className="flex flex-col gap-2 my-1">
                                     {userAttachedFiles.map((file, fIdx) => (
-                                      <div key={fIdx} className="flex items-center justify-between gap-3 p-2.5 rounded-xl bg-white/10 border border-white/15">
+                                      <div key={fIdx} className="flex items-center justify-between gap-3 p-2.5 rounded-xl bg-[#2a2a2a] border border-[#2B2B2B]">
                                         <div className="flex items-center gap-2 min-w-0">
-                                          <FileText className="w-4 h-4 text-white/90" />
+                                          <FileText className="w-4 h-4 text-[#BDBDBD]" />
                                           <div className="min-w-0">
-                                            <p className="text-xs font-semibold text-white truncate">{file.name}</p>
-                                            <p className="text-[10px] text-white/70">{file.content.length.toLocaleString()} chars</p>
+                                            <p className="text-xs font-medium text-[#F2F2F2] truncate">{file.name}</p>
+                                            <p className="text-[10px] text-[#BDBDBD]">{file.content.length.toLocaleString()} chars</p>
                                           </div>
                                         </div>
                                         <button
                                           type="button"
                                           onClick={() => setSelectedUserFile(file)}
-                                          className="px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-white/20 hover:bg-white/30 text-white transition-all flex items-center gap-1"
+                                          className="px-2.5 py-1 text-[11px] font-medium rounded-lg bg-[#333] hover:bg-[#3a3a3a] text-[#F2F2F2] border border-[#2B2B2B] transition-colors flex items-center gap-1"
                                         >
-                                          View File
+                                          View
                                         </button>
                                       </div>
                                     ))}
                                   </div>
                                 )}
-                                {userPrompt && <p className="whitespace-pre-wrap break-words leading-relaxed text-foreground">{userPrompt}</p>}
+                                {userPrompt && <p className="whitespace-pre-wrap break-words leading-relaxed text-[#F2F2F2]">{userPrompt}</p>}
                               </div>
                             );
                           })()
@@ -2763,17 +2816,22 @@ export default function ChatPage() {
                           let prevUserMsg = '';
                           for (let i = idx - 1; i >= 0; i--) {
                             if (messages[i].role === 'user') {
-                              // Strip injected location/context suffix before matching
+                              // Strip ALL injected context prefixes before matching so they
+                              // don't accidentally trigger the clock widget or other detectors.
                               prevUserMsg = (messages[i].content || '')
-                                .replace(/\[User Location Context:[^\]]*\]/gi, '')
+                                .replace(/\[System Context:[^\]]*\]/gi, '')   // strip datetime injection
+                                .replace(/\[User Location Context:[^\]]*\]/gi, '') // strip location injection
+                                .replace(/\[Connected Reference Context[^\[]*\[End of Referenced Context\]/gi, '') // strip ref context
                                 .trim()
                                 .toLowerCase();
                               break;
                             }
                           }
+                          // Only show the clock widget when the user explicitly asked about time/date.
+                          // Require a time-NOUN AND a time-REQUEST verb together, in the cleaned query.
                           const isTimeQuery =
-                            /\b(time|date|clock|day|hour|minute|today|when)\b/i.test(prevUserMsg) &&
-                            /\b(current|now|what|tell|show|is it|right now|local|today|give me)\b/i.test(prevUserMsg);
+                            /\b(time|date|clock|hour|minute|second)\b/i.test(prevUserMsg) &&
+                            /\b(current|now|what is|what's|tell me|show me|is it|right now|give me)\b/i.test(prevUserMsg);
 
                           return (
                             <div className="assistant-bubble text-foreground rounded-2xl rounded-bl-sm px-4 py-3 text-sm w-full">
@@ -2825,17 +2883,59 @@ export default function ChatPage() {
                             <>
                               <ActionBtn icon={copiedMsgId === m.id ? Check : Copy} label={copiedMsgId === m.id ? 'Copied' : 'Copy'} onClick={() => handleCopyMessage(m.id, m.content)} active={copiedMsgId === m.id} />
                               <div className="w-px h-3.5 bg-border mx-0.5" />
+                              <ActionBtn
+                                icon={PenLine}
+                                label="Start writing"
+                                onClick={() => openCanvas(m.id, m.content)}
+                                active={canvasMsgId === m.id && canvasOpen}
+                              />
+                              <div className="w-px h-3.5 bg-border mx-0.5" />
                               <ActionBtn icon={RefreshCw} label="Regenerate" onClick={() => handleRetry(idx)} />
                               <div className="w-px h-3.5 bg-border mx-0.5" />
-                              <ActionBtn icon={GitBranch} label="Branch in new chat" onClick={() => {
-                                if (activeChat) {
-                                  setConnectedChat({ id: activeChat.id, title: activeChat.title || 'Untitled Chat' });
-                                  handleCreateChat();
-                                }
-                              }} />
+                              <AnswerContextMenu
+                                createdAt={m.created_at}
+                                content={m.content}
+                                onOpenSources={() => {
+                                  const items: SourceItem[] = sources.map((s: any, sIdx: number) => ({
+                                    id: String(sIdx),
+                                    title: s.filename || s.title || 'Source Reference',
+                                    url: s.url,
+                                    domain: s.domain || (s.url ? (s.url.startsWith('http') ? new URL(s.url).hostname : undefined) : undefined),
+                                    snippet: s.snippet || s.content,
+                                    type: s.url ? 'web' : 'document',
+                                  }));
+                                  setSourcesDrawerItems(items);
+                                  setSourcesActivity({
+                                    executionTimeSeconds: m.developer_metrics?.latency_ms ? +(m.developer_metrics.latency_ms / 1000).toFixed(1) : 1.4,
+                                    domainChips: items.map(i => i.domain).filter(Boolean) as string[],
+                                  });
+                                  setSourcesDrawerOpen(true);
+                                }}
+                                onBranch={() => {
+                                  if (activeChat) {
+                                    setConnectedChat({ id: activeChat.id, title: activeChat.title || 'Untitled Chat' });
+                                    handleCreateChat();
+                                  }
+                                }}
+                                onShare={() => {
+                                  setShareModalContent(m.content);
+                                  setShareModalOpen(true);
+                                }}
+                              />
                             </>
                           )}
                         </div>
+
+                        {/* ── Canvas / Edit panel (shown inline below AI message) ── */}
+                        {!isUser && canvasMsgId === m.id && (
+                          <CanvasPanel
+                            isOpen={canvasOpen}
+                            content={canvasContent}
+                            messageId={m.id}
+                            onClose={() => { setCanvasOpen(false); setCanvasMsgId(null); }}
+                            onApplyChanges={(newContent) => handleCanvasApply(m.id, newContent)}
+                          />
+                        )}
                       </div>
                     </div>
                   );
@@ -2869,6 +2969,15 @@ export default function ChatPage() {
                 />
               </div>
             </footer>
+            </div>
+
+            {/* Inline Sources / Activity panel */}
+            <SourcesDrawer
+              isOpen={sourcesDrawerOpen}
+              onClose={() => setSourcesDrawerOpen(false)}
+              sources={sourcesDrawerItems}
+              activity={sourcesActivity}
+            />
           </div>
         )}
       </div>
@@ -3045,6 +3154,38 @@ export default function ChatPage() {
 
       {/* Attached text file viewer modal */}
       <UserFileModal file={selectedUserFile} onClose={() => setSelectedUserFile(null)} />
+
+      {/* Per-Answer Share Modal */}
+      <ShareModal
+        isOpen={shareModalOpen}
+        onClose={() => setShareModalOpen(false)}
+        content={shareModalContent}
+      />
+
+      {/* Activity & Sources panel is now inline — removed from here */}
+
+      {/* Text Selection Tooltip */}
+      <TextSelectionTooltip
+        containerRef={chatScrollRef}
+        onAsk={(selectedText) => {
+          const el = document.querySelector('textarea[aria-label="Message input"]') as HTMLTextAreaElement;
+          if (el) {
+            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+            nativeInputValueSetter?.call(el, `Regarding: "${selectedText}"\n`);
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.focus();
+          }
+        }}
+        onStartWriting={(selectedText) => {
+          const el = document.querySelector('textarea[aria-label="Message input"]') as HTMLTextAreaElement;
+          if (el) {
+            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+            nativeInputValueSetter?.call(el, `Write a detailed draft expanding on: "${selectedText}"`);
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.focus();
+          }
+        }}
+      />
     </div>
   );
 
@@ -3052,7 +3193,9 @@ export default function ChatPage() {
   function renderChatRow(c: any, isPinned = false) {
     const active = activeChatId === c.id;
     const isMenuOpen = activeRowMenuId === c.id;
-    const formattedTitle = formatChatTitle(c.title);
+    // formatChatTitle is expensive (regex); use the raw title for sidebar rows
+    // to keep switching instant. Full formatting only on initial title save.
+    const formattedTitle = c.title ? c.title : 'New Chat';
 
     return (
       <div key={c.id} className="group relative transition-all duration-150 ease-in-out">

@@ -117,15 +117,20 @@ class RetrievalCache:
 
     @staticmethod
     def _key(user_id: str, query: str, k: int) -> str:
-        raw = f"{user_id}|{query.strip().lower()}|{k}"
-        return "ret:" + hashlib.sha256(raw.encode()).hexdigest()[:24]
+        # P1-2 FIX: Prefix with safe user_id slug so per-user invalidation
+        # can remove only keys belonging to a specific user without touching
+        # other users' cached results.
+        import re as _re
+        safe_uid = _re.sub(r"[^a-zA-Z0-9_-]", "", user_id)[:32]
+        suffix   = hashlib.sha256(f"{user_id}|{query.strip().lower()}|{k}".encode()).hexdigest()[:20]
+        return f"ret:{safe_uid}:{suffix}"
 
     async def get(self, user_id: str, query: str, k: int) -> Optional[List[Dict[str, Any]]]:
         key = self._key(user_id, query, k)
         result = await self._lru.get(key)
         if result is not None:
             self.stats.record_hit()
-            logger.debug(f"[RetrievalCache] HIT  key={key[:12]}")
+            logger.debug(f"[RetrievalCache] HIT  key={key[:20]}")
         else:
             self.stats.record_miss()
         return result
@@ -133,12 +138,25 @@ class RetrievalCache:
     async def set(self, user_id: str, query: str, k: int, chunks: List[Dict[str, Any]]) -> None:
         key = self._key(user_id, query, k)
         await self._lru.set(key, chunks, ttl=self._DEFAULT_TTL)
-        logger.debug(f"[RetrievalCache] SET  key={key[:12]} ({len(chunks)} chunks)")
+        logger.debug(f"[RetrievalCache] SET  key={key[:20]} ({len(chunks)} chunks)")
 
     async def invalidate_user(self, user_id: str) -> None:
-        """Clear all cached retrieval entries for a user (called after document upload)."""
-        await self._lru.clear()
-        logger.debug(f"[RetrievalCache] INVALIDATED for user {user_id}")
+        """Clear cached retrieval entries for a specific user only.
+
+        P1-2 FIX: Previously called self._lru.clear() which wiped the ENTIRE
+        cache for ALL users when any single user deleted a document.
+        Now we selectively delete only keys prefixed with this user's id.
+        """
+        import re as _re
+        safe_uid = _re.sub(r"[^a-zA-Z0-9_-]", "", user_id)[:32]
+        prefix   = f"ret:{safe_uid}:"
+        async with self._lru._lock:
+            keys_to_delete = [k for k in list(self._lru._cache.keys()) if k.startswith(prefix)]
+            for k in keys_to_delete:
+                del self._lru._cache[k]
+        logger.debug(
+            f"[RetrievalCache] INVALIDATED {len(keys_to_delete)} key(s) for user {user_id}"
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -102,11 +102,17 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: Optional[str] = None
     OPENAI_API_BASE: Optional[str] = None
 
-    # Search API
-    TAVILY_API_KEY: Optional[str] = None
+    # Search Providers
+    TAVILY_API_KEY:  Optional[str] = None   # tavily.com — AI-curated search
+    SERP_API_KEY:    Optional[str] = None   # serpapi.com — real Google results
+    EXA_API_KEY:     Optional[str] = None   # exa.ai    — neural semantic search
+
+    # Web search routing (comma-separated priority order)
+    WEB_SEARCH_PROVIDER_ORDER: str = "tavily,serpapi,exa,duckduckgo"
+    WEB_SEARCH_MAX_RESULTS:    int = 8      # max results to fetch per search
 
     # Vector DB
-    VECTOR_DB_DIR: str = "./vector_db"
+    VECTOR_DB_DIR: str = "./vector_db"   # overridden to /app/vector_db in Docker
 
     # OAuth
     GOOGLE_CLIENT_ID: Optional[str] = None
@@ -119,7 +125,7 @@ class Settings(BaseSettings):
 
     # File upload constraints
     MAX_UPLOAD_SIZE_MB: int = 20
-    UPLOAD_DIR: str = "./uploads"
+    UPLOAD_DIR: str = "./uploads"         # overridden to /app/uploads in Docker
 
     # OCR — Tesseract binary path (auto-detected if blank)
     TESSERACT_CMD: Optional[str] = None

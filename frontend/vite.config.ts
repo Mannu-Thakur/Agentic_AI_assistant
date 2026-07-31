@@ -15,7 +15,7 @@ export default defineConfig({
     host: true,
     proxy: {
       '/api': {
-        target: 'http://localhost:8080',
+        target: process.env.VITE_BACKEND_URL || 'http://127.0.0.1:8080',
         changeOrigin: true,
         secure: false,
         // Forward cookies between browser and backend through the proxy
@@ -30,6 +30,29 @@ export default defineConfig({
               );
             }
           });
+        },
+      },
+    },
+  },
+  build: {
+    chunkSizeWarningLimit: 1000,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules')) {
+            if (id.includes('monaco-editor') || id.includes('@monaco-editor')) {
+              return 'vendor-monaco';
+            }
+            if (id.includes('katex')) {
+              return 'vendor-katex';
+            }
+            if (id.includes('react-dom') || id.includes('react-router-dom')) {
+              return 'vendor-react';
+            }
+            if (id.includes('framer-motion') || id.includes('lucide-react')) {
+              return 'vendor-ui';
+            }
+          }
         },
       },
     },

@@ -117,18 +117,18 @@ export const TimeWidget: React.FC<TimeWidgetProps> = () => {
   return (
     <div className="my-3 block">
       <div
-        className="inline-flex items-center gap-5 bg-[#1c1c1e] border border-white/[0.08] rounded-2xl px-5 py-4 shadow-2xl hover:border-white/[0.14] transition-all duration-300"
+        className="inline-flex items-center gap-5 bg-[#212121] border border-[#2B2B2B] rounded-2xl px-5 py-4 shadow-2xl hover:border-[#444] transition-colors duration-300"
         style={{ minWidth: 260, maxWidth: 340 }}
       >
         {/* Left: Digital info */}
         <div className="flex flex-col gap-0.5 flex-1 min-w-0">
-          <div className="text-[28px] font-bold text-white tracking-tight leading-none tabular-nums">
+          <div className="text-[28px] font-bold text-[#F2F2F2] tracking-tight leading-none tabular-nums">
             {formatDigital(now)}
           </div>
-          <div className="text-[13px] text-zinc-300 font-medium mt-1.5 truncate">
+          <div className="text-[13px] text-[#BDBDBD] font-medium mt-1.5 truncate">
             {locationText || 'Your Location'}
           </div>
-          <div className="text-[11px] text-zinc-500 font-normal mt-0.5">
+          <div className="text-[11px] text-[#808080] font-normal mt-0.5">
             {getDayBadge(now)}, {getOffset()}
           </div>
         </div>

@@ -52,7 +52,7 @@ export default function OAuthCallbackPage({ provider }: { provider: 'google' | '
   }, [searchParams, provider, loginStore, navigate]);
 
   return (
-    <div className="min-h-screen bg-[#030712] text-foreground flex flex-col items-center justify-center p-6">
+    <div className="min-h-screen bg-[#000000] text-foreground flex flex-col items-center justify-center p-6">
       <div className="max-w-md w-full rounded-2xl border border-border bg-[#0B0F19] p-8 flex flex-col items-center space-y-6 text-center shadow-xl">
         {!error ? (
           <>

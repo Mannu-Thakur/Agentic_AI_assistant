@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 import { X, Command } from 'lucide-react';
 
 interface ShortcutGroup {
@@ -31,8 +31,6 @@ interface KeyboardShortcutsModalProps {
 }
 
 export default function KeyboardShortcutsModal({ open, onClose }: KeyboardShortcutsModalProps) {
-  const overlayRef = useRef<HTMLDivElement>(null);
-
   useEffect(() => {
     if (!open) return;
     const handleKey = (e: KeyboardEvent) => {
@@ -48,8 +46,7 @@ export default function KeyboardShortcutsModal({ open, onClose }: KeyboardShortc
     <>
       {/* Backdrop */}
       <div
-        ref={overlayRef}
-        className="search-overlay-bg"
+        className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm"
         onClick={onClose}
         aria-hidden="true"
       />
@@ -59,46 +56,49 @@ export default function KeyboardShortcutsModal({ open, onClose }: KeyboardShortc
         role="dialog"
         aria-modal="true"
         aria-labelledby="shortcuts-title"
-        className="search-panel"
+        className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-full max-w-sm px-4 animate-fade-in"
       >
-        <div className="glass-heavy rounded-2xl shadow-2xl overflow-hidden">
+        <div className="bg-[#212121] border border-[#2B2B2B] rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.7)] overflow-hidden text-[#F2F2F2]">
+
           {/* Header */}
-          <div className="flex items-center justify-between px-5 py-4 border-b border-border">
-            <div className="flex items-center gap-2.5">
-              <Command className="w-4 h-4 text-accent" />
-              <h2 id="shortcuts-title" className="text-sm font-semibold text-foreground">
+          <div className="flex items-center justify-between px-5 py-4 border-b border-[#2B2B2B]">
+            <div className="flex items-center gap-2">
+              <Command className="w-3.5 h-3.5 text-[#FFFFFF]" />
+              <h2 id="shortcuts-title" className="text-[13px] font-semibold text-[#F2F2F2]">
                 Keyboard Shortcuts
               </h2>
             </div>
             <button
               onClick={onClose}
-              aria-label="Close keyboard shortcuts"
-              className="p-1.5 rounded-lg text-foreground-3 hover:text-foreground hover:bg-surface-2 transition-all"
+              aria-label="Close"
+              className="p-1 text-[#BDBDBD] hover:text-[#F2F2F2] hover:bg-[#2a2a2a] rounded-lg transition-colors"
             >
               <X className="w-4 h-4" />
             </button>
           </div>
 
-          {/* Shortcuts list */}
-          <div className="p-5 space-y-5">
+          {/* Shortcuts */}
+          <div className="px-5 py-4 space-y-5">
             {SHORTCUT_GROUPS.map((group) => (
               <div key={group.category}>
-                <p className="text-[10px] font-bold uppercase tracking-widest text-foreground-3 mb-3">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-[#BDBDBD] mb-2.5">
                   {group.category}
                 </p>
-                <div className="space-y-2">
+                <div className="space-y-1.5">
                   {group.shortcuts.map((s) => (
                     <div
                       key={s.description}
-                      className="flex items-center justify-between py-1.5 px-1"
+                      className="flex items-center justify-between py-1.5 px-2 rounded-lg hover:bg-[#2a2a2a] transition-colors"
                     >
-                      <span className="text-sm text-foreground-2">{s.description}</span>
+                      <span className="text-[13px] text-[#F2F2F2]">{s.description}</span>
                       <div className="flex items-center gap-1">
                         {s.keys.map((k, i) => (
                           <span key={i} className="flex items-center gap-1">
-                            <kbd className="kbd">{k}</kbd>
+                            <kbd className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-[#2a2a2a] border border-[#2B2B2B] text-[#BDBDBD] font-mono">
+                              {k}
+                            </kbd>
                             {i < s.keys.length - 1 && (
-                              <span className="text-[10px] text-foreground-3">+</span>
+                              <span className="text-[10px] text-[#BDBDBD]">+</span>
                             )}
                           </span>
                         ))}
@@ -110,9 +110,14 @@ export default function KeyboardShortcutsModal({ open, onClose }: KeyboardShortc
             ))}
           </div>
 
-          <div className="px-5 py-3 border-t border-border bg-surface-2/50">
-            <p className="text-[11px] text-foreground-3 text-center">
-              Press <kbd className="kbd">Esc</kbd> to close
+          {/* Footer */}
+          <div className="px-5 py-3 border-t border-[#2B2B2B] bg-[#000000]/20">
+            <p className="text-[11px] text-[#BDBDBD] text-center">
+              Press{' '}
+              <kbd className="inline-flex items-center px-1 py-0.5 rounded text-[10px] bg-[#2a2a2a] border border-[#2B2B2B] font-mono">
+                Esc
+              </kbd>{' '}
+              to close
             </p>
           </div>
         </div>

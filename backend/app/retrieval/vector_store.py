@@ -13,12 +13,23 @@ Enhancements:
 
 from __future__ import annotations
 
+import asyncio
+import functools
 import logging
 import math
 import os
 import re
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
+
+
+def _run_sync(fn, /, *args, **kwargs):
+    """
+    Run a synchronous callable in the default ThreadPoolExecutor so that
+    blocking ChromaDB I/O does not stall the async event loop.
+    """
+    loop = asyncio.get_event_loop()
+    return loop.run_in_executor(None, functools.partial(fn, *args, **kwargs))
 
 import chromadb
 
@@ -54,7 +65,10 @@ class VectorStore:
         self.client = chromadb.PersistentClient(path=settings.VECTOR_DB_DIR)
 
     def get_collection(self, name: str = "document_chunks"):
-        return self.client.get_or_create_collection(name=name)
+        return self.client.get_or_create_collection(
+            name=name,
+            metadata={"hnsw:space": "cosine"}
+        )
 
     # ── Indexing ───────────────────────────────────────────────────────────────
 
@@ -111,14 +125,35 @@ class VectorStore:
                 meta.update(chunk_metadatas[i])
             metadatas.append(meta)
 
-        collection.add(ids=ids, embeddings=embeddings, metadatas=metadatas, documents=chunks)
+        await _run_sync(collection.add, ids=ids, embeddings=embeddings, metadatas=metadatas, documents=chunks)
         logger.info(f"[VectorStore] Indexed {len(chunks)} chunks for document {document_id}")
 
-    async def delete_document_chunks(self, document_id: str):
+    async def delete_document_chunks(self, document_id: str, user_id: str = ""):
+        """Delete all chunks for a document and invalidate only that user's retrieval cache.
+
+        P1-2 FIX: Pass user_id so only the owning user's cached results are cleared,
+        rather than flushing the entire cache for all users.
+        """
         collection = self.get_collection()
-        collection.delete(where={"document_id": document_id})
-        # Invalidate cached query results to prevent returning deleted documents
-        await retrieval_cache.invalidate_user("")
+
+        # If user_id was not passed, try to resolve it from stored chunk metadata
+        # so we still invalidate the correct per-user cache slice.
+        if not user_id:
+            try:
+                existing = await _run_sync(
+                    collection.get,
+                    where={"document_id": document_id},
+                    include=["metadatas"],
+                    limit=1,
+                )
+                if existing and existing.get("metadatas"):
+                    user_id = existing["metadatas"][0].get("user_id", "")
+            except Exception:
+                pass
+
+        await _run_sync(collection.delete, where={"document_id": document_id})
+        # Invalidate only this user's retrieval cache (not all users)
+        await retrieval_cache.invalidate_user(user_id)
 
     # ── Hybrid Retrieval ───────────────────────────────────────────────────────
 
@@ -129,6 +164,8 @@ class VectorStore:
         k: int = 5,
         dense_weight: float = 0.7,
         bm25_weight: float = 0.3,
+        where_filter: Optional[Dict[str, Any]] = None,
+        api_key: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Hybrid retrieval: Dense + BM25 fused via Reciprocal Rank Fusion (RRF).
@@ -146,59 +183,114 @@ class VectorStore:
             return cached
 
         # ── Dense retrieval ────────────────────────────────────────────────────
-        query_embedding = await self._get_query_embedding(query)
+        query_embedding = await self._get_query_embedding(query, api_key=api_key)
         collection = self.get_collection()
 
-        # Fetch more candidates for re-ranking (3x)
-        n_dense = min(k * 3, 50)
+        # Build ChromaDB filter combining user_id with any optional metadata filters
+        chroma_filter: Dict[str, Any] = {"user_id": user_id}
+        if where_filter:
+            # Combine where_filter keys with user_id
+            for k, v in where_filter.items():
+                if k != "user_id" and v is not None:
+                    chroma_filter[k] = v
+
+        filter_clause = chroma_filter if len(chroma_filter) == 1 else {"$and": [{k: v} for k, v in chroma_filter.items()]}
+
+        # 1. Fetch dense vector query candidates
+        dense_docs, dense_metas, dense_dists = [], [], []
         try:
-            results = collection.query(
+            results = await _run_sync(
+                collection.query,
                 query_embeddings=[query_embedding],
-                n_results=n_dense,
-                where={"user_id": user_id},
+                n_results=max(k * 5, 50),
+                where=filter_clause,
             )
+            if results and results.get("documents") and results["documents"][0]:
+                dense_docs = results["documents"][0]
+                dense_metas = results["metadatas"][0] if results.get("metadatas") else [{}] * len(dense_docs)
+                dense_dists = results["distances"][0] if results.get("distances") else [0.0] * len(dense_docs)
         except Exception as exc:
-            logger.error(f"[VectorStore] ChromaDB query failed: {exc}")
+            logger.error(f"[VectorStore] ChromaDB dense query failed: {exc}")
+
+        # 2. Fetch full corpus chunks for BM25 keyword matching across all user files
+        corpus_docs, corpus_metas = [], []
+        try:
+            corpus_res = await _run_sync(
+                collection.get,
+                where=filter_clause,
+                include=["documents", "metadatas"],
+            )
+            if corpus_res and corpus_res.get("documents"):
+                corpus_docs = corpus_res["documents"]
+                corpus_metas = corpus_res["metadatas"] if corpus_res.get("metadatas") else [{}] * len(corpus_docs)
+        except Exception as exc:
+            logger.error(f"[VectorStore] ChromaDB corpus fetch failed: {exc}")
+
+        # Combine candidates (deduplicated by doc_id + chunk_index + content)
+        candidate_map: Dict[Tuple[str, int, str], Dict[str, Any]] = {}
+        
+        # Dense ranks
+        for rank, i in enumerate(range(len(dense_docs))):
+            meta = dense_metas[i] if i < len(dense_metas) else {}
+            key = (str(meta.get("document_id")), int(meta.get("chunk_index", 0)), dense_docs[i][:100])
+            candidate_map[key] = {
+                "doc": dense_docs[i],
+                "meta": meta,
+                "dist": dense_dists[i] if i < len(dense_dists) else 0.0,
+                "dense_rank": rank,
+            }
+
+        # BM25 ranking across full corpus
+        bm25_ranks = _bm25_rank(query, corpus_docs) if corpus_docs else {}
+        for idx, rank in bm25_ranks.items():
+            if rank < 30:  # Top 30 BM25 matches
+                meta = corpus_metas[idx] if idx < len(corpus_metas) else {}
+                key = (str(meta.get("document_id")), int(meta.get("chunk_index", 0)), corpus_docs[idx][:100])
+                if key in candidate_map:
+                    candidate_map[key]["bm25_rank"] = rank
+                else:
+                    candidate_map[key] = {
+                        "doc": corpus_docs[idx],
+                        "meta": meta,
+                        "dist": 0.3 if rank == 0 else 0.5,
+                        "dense_rank": 999,
+                        "bm25_rank": rank,
+                    }
+
+        if not candidate_map:
             return []
 
-        if not (results and results.get("documents") and results["documents"][0]):
-            return []
+        # 3. RRF Fusion
+        fused_items: List[Dict[str, Any]] = []
+        for key, item in candidate_map.items():
+            d_rank = item.get("dense_rank", 999)
+            b_rank = item.get("bm25_rank", 999)
+            d_score = dense_weight / (_RRF_K + d_rank + 1)
+            b_score = bm25_weight / (_RRF_K + b_rank + 1)
+            fused_score = d_score + b_score
 
-        docs      = results["documents"][0]
-        metas     = results["metadatas"][0] if results.get("metadatas") else [{}] * len(docs)
-        distances = results["distances"][0] if results.get("distances") else [0.0] * len(docs)
-
-        # ── BM25 ranking ───────────────────────────────────────────────────────
-        bm25_ranks = _bm25_rank(query, docs)  # {doc_index: rank}
-
-        # ── RRF fusion ─────────────────────────────────────────────────────────
-        fused_scores: Dict[int, float] = {}
-        for dense_rank, i in enumerate(range(len(docs))):
-            dense_score = dense_weight / (_RRF_K + dense_rank + 1)
-            bm25_rank   = bm25_ranks.get(i, len(docs))
-            bm25_score  = bm25_weight / (_RRF_K + bm25_rank + 1)
-            fused_scores[i] = dense_score + bm25_score
-
-        sorted_indices = sorted(fused_scores, key=lambda x: fused_scores[x], reverse=True)
-
-        # ── Build result list ─────────────────────────────────────────────────
-        chunks: List[Dict[str, Any]] = []
-        for i in sorted_indices[:k]:
-            meta = metas[i] if i < len(metas) else {}
-            dist = distances[i] if i < len(distances) else 0.0
-            # Convert distance to confidence: lower distance = higher confidence
+            dist = item.get("dist", 0.0)
             confidence = round(max(0.0, 1.0 - float(dist)), 3)
-            chunks.append({
+            if b_rank == 0:
+                confidence = max(confidence, 0.90)
+            elif b_rank < 3:
+                confidence = max(confidence, 0.75)
+
+            meta = item["meta"]
+            fused_items.append({
                 "type":        "chunk",
-                "content":     docs[i],
+                "content":     item["doc"],
                 "filename":    meta.get("filename", "unknown"),
                 "document_id": meta.get("document_id"),
                 "chunk_id":    meta.get("chunk_index"),
                 "page_number": meta.get("page_number", 1),
                 "distance":    float(dist),
                 "confidence":  confidence,
-                "rrf_score":   round(fused_scores[i], 6),
+                "rrf_score":   round(fused_score, 6),
             })
+
+        fused_items.sort(key=lambda x: x["rrf_score"], reverse=True)
+        chunks = fused_items[:k]
 
         # ── Cache and return ──────────────────────────────────────────────────
         await retrieval_cache.set(user_id, query, k, chunks)
@@ -229,6 +321,11 @@ class VectorStore:
         if not chunks:
             return []
 
+        import time
+        start_t = time.perf_counter()
+        candidate_chunks = chunks[:10]
+        initial_rank_ids = [c.get("chunk_id", f"idx_{i}") for i, c in enumerate(candidate_chunks)]
+
         try:
             from app.agent.nodes import _call_llm_judge
 
@@ -249,7 +346,10 @@ class VectorStore:
                 return score, chunk
 
             import asyncio
-            scored = await asyncio.gather(*[score_chunk(c) for c in chunks])
+            scored = await asyncio.wait_for(
+                asyncio.gather(*[score_chunk(c) for c in candidate_chunks]),
+                timeout=2.0
+            )
 
             reranked = sorted(
                 [(score, chunk) for score, chunk in scored if score >= threshold],
@@ -262,14 +362,19 @@ class VectorStore:
                 chunk["confidence"]   = round(max(chunk.get("confidence", score), score), 3)
                 result.append(chunk)
 
+            elapsed_ms = round((time.perf_counter() - start_t) * 1000, 2)
+            final_rank_ids = [c.get("chunk_id", f"idx_{i}") for i, c in enumerate(result)]
+
             logger.info(
-                f"[VectorStore] Reranked {len(chunks)} → {len(result)} chunks "
-                f"(threshold={threshold})"
+                f"[VectorStore] Cross-Encoder Rerank Completed in {elapsed_ms}ms | "
+                f"Initial Ranking: {initial_rank_ids} -> Final Ranking: {final_rank_ids} | "
+                f"Count: {len(chunks)} -> {len(result)} (threshold={threshold})"
             )
             return result
 
         except Exception as exc:
-            logger.warning(f"[VectorStore] Cross-encoder rerank failed (using original): {exc}")
+            elapsed_ms = round((time.perf_counter() - start_t) * 1000, 2)
+            logger.warning(f"[VectorStore] Cross-encoder rerank failed after {elapsed_ms}ms (using original): {exc}")
             return chunks
 
     # ── Context compression ────────────────────────────────────────────────────
@@ -345,12 +450,12 @@ class VectorStore:
     # ── Private helpers ────────────────────────────────────────────────────────
 
     @staticmethod
-    async def _get_query_embedding(query: str) -> List[float]:
+    async def _get_query_embedding(query: str, api_key: Optional[str] = None) -> List[float]:
         """Get query embedding with cache support."""
         cached = await embedding_cache.get(query)
         if cached is not None:
             return cached
-        vec = await EmbeddingService.get_embedding(query)
+        vec = await EmbeddingService.get_embedding(query, api_key=api_key)
         await embedding_cache.set(query, vec)
         return vec
 
@@ -358,6 +463,29 @@ class VectorStore:
 # ─────────────────────────────────────────────────────────────────────────────
 #  BM25 ranking helper (no external library needed)
 # ─────────────────────────────────────────────────────────────────────────────
+
+_BM25_STOPWORDS = frozenset({
+    "a", "about", "above", "after", "again", "against", "all", "am", "an", "and",
+    "any", "are", "aren't", "as", "at", "be", "because", "been", "before", "being",
+    "below", "between", "both", "but", "by", "can", "cannot", "could", "couldn't",
+    "did", "didn't", "do", "does", "doesn't", "doing", "don't", "down", "during",
+    "each", "few", "for", "from", "further", "had", "hadn't", "has", "hasn't",
+    "have", "haven't", "having", "he", "he'd", "he'll", "he's", "her", "here",
+    "here's", "hers", "herself", "him", "himself", "his", "how", "how's", "i",
+    "i'd", "i'll", "i'm", "i've", "if", "in", "into", "is", "isn't", "it", "it's",
+    "its", "itself", "let's", "me", "more", "most", "mustn't", "my", "myself",
+    "no", "nor", "not", "of", "off", "on", "once", "only", "or", "other", "ought",
+    "our", "ours", "ourselves", "out", "over", "own", "same", "shan't", "she",
+    "she'd", "she'll", "she's", "should", "shouldn't", "so", "some", "such",
+    "than", "that", "that's", "the", "their", "theirs", "them", "themselves",
+    "then", "there", "there's", "these", "they", "they'd", "they'll", "they're",
+    "they've", "this", "those", "through", "to", "too", "under", "until", "up",
+    "very", "was", "wasn't", "we", "we'd", "we'll", "we're", "we've", "were",
+    "weren't", "what", "what's", "when", "when's", "where", "where's", "which",
+    "while", "who", "who's", "whom", "why", "why's", "with", "won't", "would",
+    "wouldn't", "you", "you'd", "you'll", "you're", "you've", "your", "yours",
+    "yourself", "yourselves"
+})
 
 def _bm25_rank(
     query: str,
@@ -367,9 +495,12 @@ def _bm25_rank(
 ) -> Dict[int, int]:
     """
     Compute BM25 scores for each document and return a rank dict {doc_index: rank}.
-    Rank 0 = highest relevance.
+    Rank 0 = highest relevance. Stopwords are filtered to prevent precision degradation.
     """
-    query_terms = re.findall(r"\w+", query.lower())
+    all_terms = re.findall(r"\w+", query.lower())
+    query_terms = [t for t in all_terms if t not in _BM25_STOPWORDS and len(t) > 1]
+    if not query_terms:
+        query_terms = all_terms
     if not query_terms:
         return {}
 

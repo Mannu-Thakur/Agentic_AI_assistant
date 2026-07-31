@@ -9,29 +9,38 @@
    ============================================================ */
 @layer base {
   :root {
-    /* ── Sleek Pitch Black Dark (ChatGPT sidebar theme) ── */
-    --background:   0 0% 5%;         /* #0d0d0d - pitch dark bg */
-    --surface:      0 0% 0%;         /* #000000 - pure black sidebar */
-    --surface-2:    0 0% 12%;        /* #1f1f1f - pill hover surface */
-    --surface-3:    0 0% 16%;        /* #292929 - active item surface */
+    /* ══════════════════════════════════════════
+       EXACT DESIGN TOKEN SPEC
+       Page bg:       #000000
+       Card bg:       #212121
+       Primary text:  #F2F2F2
+       Secondary txt: #BDBDBD
+       Borders:       #2B2B2B
+       Scrollbar trk: #9F9F9F
+       Scrollbar thm: #7A7A7A
+       Icons:         #FFFFFF
+    ══════════════════════════════════════════ */
+    --background:    0   0%   0%;     /* #000000 */
+    --surface:       0   0%   7%;     /* #121212 */
+    --surface-2:     0   0%  13%;     /* #212121 */
+    --surface-3:     0   0%  16%;     /* #2a2a2a */
 
-    --foreground:   0 0% 95%;        /* #f2f2f2 - crisp white text */
-    --foreground-2: 0 0% 68%;        /* #adadad - secondary text */
-    --foreground-3: 0 0% 48%;        /* #7a7a7a - muted text */
+    --foreground:    0   0%  95%;     /* #F2F2F2 */
+    --foreground-2:  0   0%  74%;     /* #BDBDBD */
+    --foreground-3:  0   0%  50%;     /* #808080 */
 
-    /* Gray accent — neutral dark gray */
-    --accent:        0 0% 75%;       /* #bfbfbf */
-    --accent-hover:  0 0% 88%;       /* #e0e0e0 */
-    --accent-fg:     0 0% 5%;
+    --accent:        0   0% 100%;     /* #FFFFFF */
+    --accent-hover:  0   0%  91%;     /* #E8E8E8 */
+    --accent-fg:     0   0%   0%;     /* #000000 */
 
-    --border:       0 0% 14%;        /* #242424 */
-    --border-2:     0 0% 20%;        /* #333333 */
-    --ring:         0 0% 55%;
+    --border:        0   0%  17%;     /* #2B2B2B */
+    --border-2:      0   0%  26%;     /* #424242 */
+    --ring:          0   0% 100%;
 
     --destructive:    0 65% 52%;
-    --destructive-fg: 0 0% 100%;
+    --destructive-fg: 0  0% 100%;
     --success:        142 60% 42%;
-    --warning:        38 85% 50%;
+    --warning:         38 85% 50%;
 
     /* Layout */
     --sidebar-width:     248px;
@@ -41,17 +50,17 @@
     --radius:            0.625rem;
 
     /* Tailwind/shadcn compat */
-    --card:             var(--surface);
-    --card-foreground:  var(--foreground);
-    --popover:          var(--surface);
-    --popover-foreground: var(--foreground);
-    --primary:          var(--accent);
-    --primary-foreground: var(--accent-fg);
-    --secondary:        var(--surface-2);
+    --card:              var(--surface-2);
+    --card-foreground:   var(--foreground);
+    --popover:           var(--surface-2);
+    --popover-foreground:var(--foreground);
+    --primary:           var(--accent);
+    --primary-foreground:var(--accent-fg);
+    --secondary:         var(--surface-2);
     --secondary-foreground: var(--foreground);
-    --muted:            var(--surface-2);
-    --muted-foreground: var(--foreground-3);
-    --input:            var(--surface-2);
+    --muted:             var(--surface-2);
+    --muted-foreground:  var(--foreground-3);
+    --input:             var(--surface-2);
     --accent-foreground: var(--accent-fg);
   }
 
@@ -169,30 +178,86 @@
 }
 
 /* ============================================================
-   GLOBAL SLEEK SCROLLBAR (Arrow-free modern dark design)
+   ULTRA-CLEAN CUSTOM SCROLLBAR (NO NATIVE GREY TRACKS)
    ============================================================ */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 6px !important;
+  height: 6px !important;
+  background-color: transparent !important;
 }
-::-webkit-scrollbar-track {
-  background: transparent;
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-track-piece,
+::-webkit-scrollbar-corner {
+  background: transparent !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
 }
+
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.2);
-  border-radius: 9999px;
+  background-color: rgba(255, 255, 255, 0.2) !important;
+  border-radius: 9999px !important;
+  border: none !important;
 }
+
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.35);
+  background-color: rgba(255, 255, 255, 0.4) !important;
 }
+
 ::-webkit-scrollbar-button {
   display: none !important;
   width: 0 !important;
   height: 0 !important;
 }
+
 * {
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+  scrollbar-width: thin !important;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent !important;
+}
+
+.custom-scrollbar {
+  scrollbar-width: thin !important;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent !important;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px !important;
+  height: 6px !important;
+  background-color: transparent !important;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track,
+.custom-scrollbar::-webkit-scrollbar-track-piece,
+.custom-scrollbar::-webkit-scrollbar-corner {
+  background: transparent !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.2) !important;
+  border-radius: 9999px !important;
+  border: none !important;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.4) !important;
+}
+
+/* Light mode overrides */
+.light ::-webkit-scrollbar-thumb,
+.light .custom-scrollbar::-webkit-scrollbar-thumb {
+  background-color: rgba(0, 0, 0, 0.2) !important;
+}
+
+.light ::-webkit-scrollbar-thumb:hover,
+.light .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(0, 0, 0, 0.4) !important;
+}
+
+.light *,
+.light .custom-scrollbar {
+  scrollbar-color: rgba(0, 0, 0, 0.2) transparent !important;
 }
 
 /* ============================================================
@@ -289,21 +354,51 @@
   100% { opacity: 1; transform: translateY(0); }
 }
 
+@keyframes slide-in-right {
+  from { opacity: 0; transform: translateX(100%); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes slide-out-right {
+  from { opacity: 1; transform: translateX(0); }
+  to   { opacity: 0; transform: translateX(100%); }
+}
+
 /* ============================================================
    ANIMATION UTILITY CLASSES
    ============================================================ */
 @layer utilities {
-  .animate-fade-in          { animation: fade-in          0.2s ease forwards; }
-  .animate-fade-in-up       { animation: fade-in-up       0.25s ease forwards; }
-  .animate-scale-in         { animation: scale-in         0.18s ease forwards; }
-  .animate-slide-up         { animation: slide-up         0.22s ease forwards; }
-  .animate-slide-right      { animation: slide-right      0.22s ease forwards; }
+  .animate-fade-in          { animation: fade-in          0.08s ease forwards; }
+  .animate-fade-in-up       { animation: fade-in-up       0.1s ease forwards; }
+  .animate-scale-in         { animation: scale-in         0.08s ease forwards; }
+  .animate-slide-up         { animation: slide-up         0.1s ease forwards; }
+  .animate-slide-right      { animation: slide-right      0.1s ease forwards; }
+  .animate-slide-in-right   { animation: slide-in-right   0.12s cubic-bezier(0, 0, 0.2, 1) forwards; }
   .animate-spin-slow        { animation: spin-slow        12s linear infinite; }
   .animate-float            { animation: float            3s ease-in-out infinite; }
   .animate-pulse-ring       { animation: pulse-ring       1.5s ease-out infinite; }
-  .animate-message-in       { animation: message-in       0.28s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; }
+  .animate-message-in       { animation: message-in       0.1s ease-out forwards; }
   .animate-shimmer          { animation: shimmer          1.8s linear infinite; }
-  .animate-settings-panel-in { animation: settings-panel-in 0.18s ease-out forwards; }
+  .animate-settings-panel-in { animation: settings-panel-in 0.1s ease-out forwards; }
+
+  /* Slim scrollbar — spec colors */
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: #7A7A7A transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 4px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: #7A7A7A;
+    border-radius: 99px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    background: #9F9F9F;
+  }
 }
 
 /* ============================================================
@@ -354,9 +449,9 @@
                 0 0 12px hsl(var(--accent) / 0.1);
   }
 
-  /* Smooth sidebar width transition */
+  /* Ultra-fast sidebar width transition */
   .sidebar-transition {
-    transition: width 0.26s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: width 0.1s cubic-bezier(0, 0, 0.2, 1);
   }
 
   /* Truncate with fade mask */
@@ -368,11 +463,11 @@
 
   /* User message bubble — sleek dark pill / rounded capsule */
   .user-bubble {
-    background: #2f2f2f;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    color: #ffffff;
+    background: #212121;
+    border: 1px solid #2B2B2B;
+    color: #F2F2F2;
     border-radius: 20px;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+    box-shadow: 0 2px 12px rgba(0,0,0,0.4);
   }
 
   /* Assistant message — clean no-bg */
@@ -463,17 +558,21 @@
 }
 
 /* ============================================================
-   MARKDOWN PROSE  (full overhaul)
+   MARKDOWN PROSE  (ChatGPT-grade Typography Overhaul)
    ============================================================ */
 .prose-chat {
-  color: hsl(var(--foreground));
-  line-height: 1.8;
-  font-size: 0.9375rem;
+  color: #F3F4F6;
+  line-height: 1.68;
+  font-size: 1rem;            /* 16px */
+  font-weight: 450;
   word-break: break-word;
   overflow-wrap: anywhere;
-  min-width: 0;           /* prevent flex child from overflowing */
+  min-width: 0;
   max-width: 100%;
   overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 /* ── Headings ── */
@@ -484,64 +583,70 @@
 .prose-chat h5,
 .prose-chat h6 {
   font-weight: 700;
-  line-height: 1.3;
-  margin-top: 1.5em;
+  line-height: 1.33;
+  margin-top: 1.6em;
   margin-bottom: 0.6em;
-  color: hsl(var(--foreground));
-  letter-spacing: -0.01em;
+  color: #FFFFFF;
+  letter-spacing: -0.015em;
 }
 .prose-chat :first-child { margin-top: 0; }
 
 .prose-chat h1 {
   font-size: 1.5rem;
-  border-bottom: 2px solid hsl(var(--accent) / 0.25);
-  padding-bottom: 0.45em;
-  background: linear-gradient(135deg, hsl(var(--foreground)) 60%, hsl(var(--accent) / 0.7) 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  border-bottom: 1px solid #2B2B2B;
+  padding-bottom: 0.4em;
 }
 .prose-chat h2 {
   font-size: 1.25rem;
-  border-bottom: 1px solid hsl(var(--border));
+  border-bottom: 1px solid #2B2B2B;
   padding-bottom: 0.3em;
 }
-.prose-chat h3 { font-size: 1.1rem; color: hsl(var(--foreground)); }
-.prose-chat h4 { font-size: 1rem;   color: hsl(var(--foreground-2)); }
-.prose-chat h5, .prose-chat h6 { font-size: 0.9rem; color: hsl(var(--foreground-3)); }
+.prose-chat h3 { font-size: 1.125rem; font-weight: 650; color: #F3F4F6; }
+.prose-chat h4 { font-size: 1rem; font-weight: 600; color: #D1D5DB; }
+.prose-chat h5, .prose-chat h6 { font-size: 0.9rem; font-weight: 600; color: #9CA3AF; }
 
 /* ── Paragraphs ── */
-.prose-chat p { margin-bottom: 0.9em; }
+.prose-chat p { margin-bottom: 1.15em; }
 .prose-chat p:last-child { margin-bottom: 0; }
 
 /* ── Lists ── */
 .prose-chat ul,
 .prose-chat ol {
-  padding-left: 1.75em;
-  margin-bottom: 0.9em;
-  space-y: 0;
+  padding-left: 1.75rem;
+  margin-bottom: 1.15em;
 }
 .prose-chat ul { list-style-type: disc; }
 .prose-chat ol { list-style-type: decimal; }
 .prose-chat li {
-  margin-bottom: 0.35em;
-  padding-left: 0.25em;
-  line-height: 1.7;
+  margin-bottom: 0.4em;
+  padding-left: 0.25rem;
+  line-height: 1.65;
 }
-.prose-chat ul ul   { list-style-type: circle; margin-top: 0.3em; }
-.prose-chat ul ul ul { list-style-type: square; }
+.prose-chat li:last-child { margin-bottom: 0; }
+
+/* Nested lists */
+.prose-chat ul ul,
+.prose-chat ol ol,
+.prose-chat ul ol,
+.prose-chat ol ul {
+  margin-top: 0.35em;
+  margin-bottom: 0.35em;
+  padding-left: 1.5rem;
+}
+.prose-chat ul ul     { list-style-type: circle; }
+.prose-chat ul ul ul  { list-style-type: square; }
 
 /* ── Task list checkboxes ── */
 .prose-chat input[type="checkbox"] {
   appearance: none;
   -webkit-appearance: none;
-  width: 14px;
-  height: 14px;
-  border: 1.5px solid hsl(var(--border-2));
-  border-radius: 3px;
-  background: hsl(var(--surface-2));
+  width: 15px;
+  height: 15px;
+  border: 1.5px solid #4B5563;
+  border-radius: 4px;
+  background: #212121;
   vertical-align: middle;
-  margin-right: 6px;
+  margin-right: 8px;
   cursor: default;
   position: relative;
   flex-shrink: 0;
@@ -549,66 +654,56 @@
   transition: background 0.15s, border-color 0.15s;
 }
 .prose-chat input[type="checkbox"]:checked {
-  background: hsl(var(--accent));
-  border-color: hsl(var(--accent));
+  background: #FFFFFF;
+  border-color: #FFFFFF;
 }
 .prose-chat input[type="checkbox"]:checked::after {
   content: '✓';
   position: absolute;
-  top: -1px;
-  left: 1px;
-  font-size: 10px;
-  color: white;
-  font-weight: 700;
+  top: -2px;
+  left: 2px;
+  font-size: 11px;
+  color: #000000;
+  font-weight: 800;
 }
 
-/* ── Blockquote ── */
+/* ── Blockquotes ── */
 .prose-chat blockquote {
-  border-left: 3px solid hsl(var(--accent) / 0.6);
-  padding: 0.75em 1.25em;
+  border-left: 3px solid #4B5563;
+  padding: 0.65em 1.1em;
   margin: 1.25em 0;
-  background: linear-gradient(90deg, hsl(var(--accent) / 0.05), transparent);
-  border-radius: 0 10px 10px 0;
-  color: hsl(var(--foreground-2));
+  background: rgba(255, 255, 255, 0.025);
+  border-radius: 0 8px 8px 0;
+  color: #D1D5DB;
   font-style: italic;
-  position: relative;
-}
-.prose-chat blockquote::before {
-  content: '"';
-  position: absolute;
-  top: -0.1em;
-  left: 0.6em;
-  font-size: 2.5rem;
-  color: hsl(var(--accent) / 0.25);
-  font-family: Georgia, serif;
-  line-height: 1;
-  pointer-events: none;
 }
 
 /* ── Links ── */
 .prose-chat a {
-  color: hsl(var(--accent));
+  color: #F3F4F6;
   text-decoration: underline;
   text-underline-offset: 3px;
+  text-decoration-color: #4B5563;
   text-decoration-thickness: 1px;
-  transition: color 0.15s;
+  transition: color 0.15s, text-decoration-color 0.15s;
 }
-.prose-chat a:hover { color: hsl(var(--accent-hover)); text-decoration-thickness: 2px; }
+.prose-chat a:hover { color: #FFFFFF; text-decoration-color: #9CA3AF; }
 
 /* ── Inline emphasis ── */
-.prose-chat strong { font-weight: 700; color: hsl(var(--foreground)); }
-.prose-chat em    { font-style: italic; color: hsl(var(--foreground-2)); }
+.prose-chat strong { font-weight: 750; color: #FFFFFF; }
+.prose-chat em    { font-style: italic; color: #E5E7EB; }
 
 /* ── Inline code ── */
 .prose-chat code {
-  font-size: 0.83em;
-  background: hsl(var(--accent) / 0.1);
-  padding: 0.18em 0.5em;
+  font-size: 0.85em;
+  background: #1F2937;
+  padding: 0.18em 0.45em;
   border-radius: 5px;
-  border: 1px solid hsl(var(--accent) / 0.2);
-  color: hsl(245 80% 80%);
+  border: 1px solid #374151;
+  color: #F9FAFB;
   font-family: 'JetBrains Mono', monospace;
-  white-space: pre-wrap;   /* was nowrap — caused long lines to overflow */
+  font-weight: 500;
+  white-space: pre-wrap;
   word-break: break-word;
   overflow-wrap: anywhere;
 }
@@ -616,10 +711,10 @@
 /* ── Tables ── */
 .prose-chat .table-wrapper {
   overflow-x: auto;
-  margin: 1.4em 0;
+  margin: 1.5em 0;
   border-radius: 10px;
-  border: 1px solid hsl(var(--border-2));
-  box-shadow: 0 2px 12px rgba(0,0,0,0.18);
+  border: 1px solid #374151;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.2);
 }
 .prose-chat table {
   width: 100%;
@@ -629,39 +724,39 @@
   overflow: hidden;
 }
 .prose-chat thead {
-  background: hsl(var(--surface-3));
-  border-bottom: 2px solid hsl(var(--border-2));
+  background: #111827;
+  border-bottom: 2px solid #374151;
 }
 .prose-chat th {
-  padding: 0.7em 1em;
+  padding: 0.75em 1em;
   text-align: left;
-  font-weight: 600;
+  font-weight: 650;
   font-size: 0.8rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: hsl(var(--foreground));
+  color: #F9FAFB;
   white-space: nowrap;
 }
 .prose-chat td {
-  padding: 0.55em 1em;
-  color: hsl(var(--foreground-2));
-  border-top: 1px solid hsl(var(--border));
+  padding: 0.65em 1em;
+  color: #E5E7EB;
+  border-top: 1px solid #374151;
   vertical-align: top;
-  line-height: 1.5;
+  line-height: 1.55;
 }
 .prose-chat tbody tr:nth-child(even) td {
-  background: hsl(var(--surface-2) / 0.5);
+  background: rgba(255, 255, 255, 0.02);
 }
 .prose-chat tbody tr:hover td {
-  background: hsl(var(--accent) / 0.06);
-  color: hsl(var(--foreground));
+  background: rgba(255, 255, 255, 0.05);
+  color: #FFFFFF;
 }
 
 /* ── Horizontal Rule ── */
 .prose-chat hr {
   border: none;
   height: 1px;
-  background: linear-gradient(90deg, transparent, hsl(var(--border-2)), hsl(var(--accent) / 0.2), hsl(var(--border-2)), transparent);
+  background: #374151;
   margin: 2em 0;
 }
 
@@ -745,9 +840,10 @@
 }
 
 .code-block-wrapper.collapsed pre {
-  max-height: 160px;
-  overflow: hidden;
-  mask-image: linear-gradient(to bottom, black 60%, transparent 100%);
+  max-height: 180px !important;
+  overflow: hidden !important;
+  -webkit-mask-image: linear-gradient(to bottom, rgba(0,0,0,1) 50%, rgba(0,0,0,0) 100%);
+  mask-image: linear-gradient(to bottom, rgba(0,0,0,1) 50%, rgba(0,0,0,0) 100%);
 }
 
 .code-block-expand-btn {
@@ -1080,19 +1176,16 @@ select {
 }
 
 .welcome-headline {
-  font-size: 1.75rem;
-  font-weight: 700;
-  letter-spacing: -0.03em;
-  line-height: 1.25;
-  max-width: 520px;
-  background: linear-gradient(180deg, #ffffff 0%, rgba(255, 255, 255, 0.82) 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
+  font-size: 1.85rem;
+  font-weight: 500;
+  letter-spacing: -0.015em;
+  line-height: 1.3;
+  max-width: 600px;
+  color: #ffffff;
+  text-align: center;
 }
 :root[data-theme='light'] .welcome-headline {
-  background: linear-gradient(180deg, #0f172a 0%, #334155 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
+  color: #0f172a;
 }
 
 .welcome-sub {
@@ -1228,49 +1321,49 @@ select {
 
 
 /* ============================================================
-   PILL INPUT BAR (Screenshot Dark Floating Capsule Design)
+   PILL INPUT BAR (Premium Dark Floating Capsule)
    ============================================================ */
 .pill-input-bar {
   display: flex;
-  align-items: flex-end;
-  gap: 10px;
-  padding: 10px 14px 10px 16px;
-  border-radius: 28px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px 8px 14px;
+  border-radius: 26px;
+  border: 1px solid #2B2B2B;
   background: #212121;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
-  transition: border-color 0.2s, box-shadow 0.2s, background-color 0.2s, border-radius 0.2s;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+  transition: border-color 0.2s, box-shadow 0.2s, background-color 0.2s;
 }
 
 .pill-input-bar:focus-within {
-  border-color: rgba(255, 255, 255, 0.25);
+  border-color: #444444;
   background: #262626;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+  box-shadow: 0 6px 32px rgba(0, 0, 0, 0.55);
 }
 
 .pill-input-side-btn {
-  width: 36px;
-  height: 36px;
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  color: #a1a1aa;
-  transition: color 0.15s, background 0.15s, transform 0.1s;
+  color: #d1d1d1;
+  transition: color 0.15s, background 0.15s;
   background: transparent;
   border: none;
   cursor: pointer;
 }
 
 .pill-input-side-btn:hover {
-  color: #ffffff;
-  background: rgba(255, 255, 255, 0.08);
+  color: #FFFFFF;
+  background: #2a2a2a;
 }
 
 .pill-send-btn {
-  width: 36px;
-  height: 36px;
+  width: 34px;
+  height: 34px;
   border-radius: 50%;
   display: flex;
   align-items: center;
@@ -1280,26 +1373,20 @@ select {
   color: #000000;
   border: none;
   cursor: pointer;
-  transition: background 0.15s, transform 0.1s, opacity 0.15s;
+  transition: background 0.15s, transform 0.12s ease, opacity 0.15s;
 }
 
 .pill-send-btn:hover:not(:disabled) {
-  background: #f4f4f5;
-  transform: scale(1.04);
+  background: #e8e8e8;
+  transform: scale(1.05);
 }
 
 .pill-send-btn:disabled {
-  opacity: 0.3;
+  opacity: 0.35;
   cursor: not-allowed;
-  background: #3f3f46;
-  color: #a1a1aa;
+  background: #ffffff;
+  color: #000000;
 }
-
-.pill-send-btn:disabled {
-  opacity: 0.25;
-  cursor: not-allowed;
-}
-
 
 
 /* ============================================================
@@ -1403,29 +1490,30 @@ select {
 }
 
 /* ============================================================
-   CUSTOM PREMIUM SCROLLBARS
+   CUSTOM PREMIUM SCROLLBARS  (#9F9F9F track / #7A7A7A thumb)
    ============================================================ */
 .custom-scrollbar {
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+  scrollbar-color: #7A7A7A #9F9F9F;
 }
 
 .custom-scrollbar::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
+  width: 4px;
+  height: 4px;
 }
 
 .custom-scrollbar::-webkit-scrollbar-track {
-  background: transparent;
+  background: #9F9F9F;
+  border-radius: 9999px;
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.25);
+  background: #7A7A7A;
   border-radius: 9999px;
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.4);
+  background: #5A5A5A;
 }
 
 .custom-scrollbar::-webkit-scrollbar-button {
@@ -1436,11 +1524,11 @@ select {
 
 .custom-sidebar-scrollbar {
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+  scrollbar-color: #7A7A7A transparent;
 }
 
 .custom-sidebar-scrollbar::-webkit-scrollbar {
-  width: 6px;
+  width: 4px;
 }
 
 .custom-sidebar-scrollbar::-webkit-scrollbar-track {
@@ -1448,12 +1536,12 @@ select {
 }
 
 .custom-sidebar-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.2);
+  background: #7A7A7A;
   border-radius: 9999px;
 }
 
 .custom-sidebar-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.35);
+  background: #9F9F9F;
 }
 
 .custom-sidebar-scrollbar::-webkit-scrollbar-button {

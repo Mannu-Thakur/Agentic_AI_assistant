@@ -267,13 +267,15 @@ async def google_login(redirect_uri: Optional[str] = None):
     await store_oauth_state(state)
 
     redirect_target = redirect_uri or settings.GOOGLE_REDIRECT_URI
-    if settings.ENABLE_MOCK_OAUTH:
-        return {"url": f"{redirect_target}?code=mock_google_code&state={state}"}
+    if not settings.GOOGLE_CLIENT_ID:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Google OAuth is not configured on this server. Please set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env."
+        )
 
-    # FIX-1: Use urlencode for URL-safe parameter building
     auth_url = "https://accounts.google.com/o/oauth2/v2/auth"
     params = {
-        "client_id": settings.GOOGLE_CLIENT_ID or "mock_client_id",
+        "client_id": settings.GOOGLE_CLIENT_ID,
         "redirect_uri": redirect_target,
         "response_type": "code",
         "scope": "openid email profile",
@@ -307,26 +309,20 @@ async def google_callback(
             detail="The redirect_uri is not whitelisted. Open redirect blocked."
         )
 
-    # FIX-3: Always validate state unless mock mode AND code is the well-known mock code
-    if not (settings.ENABLE_MOCK_OAUTH and code == "mock_google_code"):
-        if not state or not await verify_oauth_state(state):
-            await AuditService.log_event(db, None, "oauth_failure", {"provider": "google", "reason": "Invalid or missing OAuth state"}, client_ip)
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,  # FIX-3: 403 not 400 for CSRF
-                detail="Invalid OAuth state parameter. Possible CSRF attempt."
-            )
+    if not state or not await verify_oauth_state(state):
+        await AuditService.log_event(db, None, "oauth_failure", {"provider": "google", "reason": "Invalid or missing OAuth state"}, client_ip)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid OAuth state parameter. Possible CSRF attempt."
+        )
+
     redirect_target = redirect_uri or settings.GOOGLE_REDIRECT_URI
 
-    if settings.ENABLE_MOCK_OAUTH or code == "mock_google_code":
-        email = "mock_google_user@example.com"
-        name = "Mock Google User"
-        avatar_url = None
-    else:
-        if not settings.GOOGLE_CLIENT_ID or not settings.GOOGLE_CLIENT_SECRET:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Google OAuth is not configured on this server."
-            )
+    if not settings.GOOGLE_CLIENT_ID or not settings.GOOGLE_CLIENT_SECRET:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Google OAuth is not configured on this server. Please set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env."
+        )
 
         # Google OAuth token exchange — FIX-2: 10s timeout on all external calls
         token_url = "https://oauth2.googleapis.com/token"
@@ -459,13 +455,15 @@ async def github_login(redirect_uri: Optional[str] = None):
     await store_oauth_state(state)
 
     redirect_target = redirect_uri or settings.GITHUB_REDIRECT_URI
-    if settings.ENABLE_MOCK_OAUTH:
-        return {"url": f"{redirect_target}?code=mock_github_code&state={state}"}
+    if not settings.GITHUB_CLIENT_ID:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="GitHub OAuth is not configured on this server. Please set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET in .env."
+        )
 
-    # FIX-1: Use urlencode for URL-safe parameter building
     auth_url = "https://github.com/login/oauth/authorize"
     params = {
-        "client_id": settings.GITHUB_CLIENT_ID or "mock_client_id",
+        "client_id": settings.GITHUB_CLIENT_ID,
         "redirect_uri": redirect_target,
         "scope": "user:email read:user",
         "state": state,
@@ -488,25 +486,20 @@ async def github_callback(
     from app.core.security import verify_oauth_state
     from app.services.audit_service import AuditService
     client_ip = request.client.host if request.client else "unknown"
-    # FIX-3: Always validate state unless mock mode AND code is the well-known mock code
-    if not (settings.ENABLE_MOCK_OAUTH and code == "mock_github_code"):
-        if not state or not await verify_oauth_state(state):
-            await AuditService.log_event(db, None, "oauth_failure", {"provider": "github", "reason": "Invalid or missing OAuth state"}, client_ip)
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,  # FIX-3: 403 not 400 for CSRF
-                detail="Invalid OAuth state parameter. Possible CSRF attempt."
-            )
+
+    if not state or not await verify_oauth_state(state):
+        await AuditService.log_event(db, None, "oauth_failure", {"provider": "github", "reason": "Invalid or missing OAuth state"}, client_ip)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid OAuth state parameter. Possible CSRF attempt."
+        )
     redirect_target = redirect_uri or settings.GITHUB_REDIRECT_URI
-    if settings.ENABLE_MOCK_OAUTH or code == "mock_github_code":
-        email = "mock_github_user@example.com"
-        name = "Mock GitHub User"
-        avatar_url = None
-    else:
-        if not settings.GITHUB_CLIENT_ID or not settings.GITHUB_CLIENT_SECRET:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="GitHub OAuth is not configured on this server."
-            )
+
+    if not settings.GITHUB_CLIENT_ID or not settings.GITHUB_CLIENT_SECRET:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="GitHub OAuth is not configured on this server. Please set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET in .env."
+        )
 
         # GitHub OAuth token exchange
         token_url = "https://github.com/login/oauth/access_token"

@@ -6,6 +6,46 @@ from typing import AsyncGenerator, Dict, Any, List, Optional
 from app.providers.base import BaseLLMProvider
 from app.core.config import settings
 
+def _trim_messages_for_token_budget(messages: List[Dict[str, str]], max_chars: int = 16000) -> List[Dict[str, str]]:
+    """
+    Ensures total message payload stays within Groq's payload & token limit (~16k chars).
+    Preserves system instruction at [0] and the latest user turn at [-1].
+    Trims middle messages if payload exceeds max_chars.
+    """
+    if not messages:
+        return []
+    total_len = sum(len(m.get("content", "")) for m in messages)
+    if total_len <= max_chars:
+        return messages
+
+    sys_msg = [m for m in messages if m.get("role") == "system"]
+    non_sys = [m for m in messages if m.get("role") != "system"]
+
+    if not non_sys:
+        # If sys_msg itself is huge, truncate its text
+        if sys_msg and len(sys_msg[0].get("content", "")) > max_chars:
+            sys_msg[0] = {**sys_msg[0], "content": sys_msg[0]["content"][:max_chars] + "\n[System Context Truncated]"}
+        return sys_msg
+
+    last_user_msg = non_sys[-1]
+    middle_msgs = non_sys[:-1]
+
+    # Keep adding middle messages from right (newest first) until budget is full
+    budget = max_chars - sum(len(m.get("content", "")) for m in sys_msg) - len(last_user_msg.get("content", ""))
+    kept_middle = []
+    current_size = 0
+    for m in reversed(middle_msgs):
+        m_len = len(m.get("content", ""))
+        if current_size + m_len <= max(budget, 2000):
+            kept_middle.insert(0, m)
+            current_size += m_len
+        else:
+            break
+
+    res = sys_msg + kept_middle + [last_user_msg]
+    return res
+
+
 class GroqProvider(BaseLLMProvider):
   def __init__(self):
     self.api_key = settings.GROQ_API_KEY
@@ -51,33 +91,16 @@ class GroqProvider(BaseLLMProvider):
       api_key: Optional[str] = None,
   ) -> Dict[str, Any]:
     key_to_use = api_key or self.api_key
-    is_mock_run = not key_to_use or key_to_use.startswith("mock_")
+    if not key_to_use or str(key_to_use).startswith("mock_"):
+        raise Exception(
+            "Groq API key is missing or invalid. Please configure a valid Groq API key in Settings to run real-time requests."
+        )
 
-    if is_mock_run:
-      await asyncio.sleep(0.5)
-      simulated_calls = self._check_mock_tool_call(messages)
-      
-      if simulated_calls:
-          return {
-              "text": "",
-              "input_tokens": 15,
-              "output_tokens": 15,
-              "model": model,
-              "tool_calls": simulated_calls
-          }
-
-      mock_text = f"[Mock Groq Response for model {model}]: Completed computation. Output matches expectation."
-      return {
-          "text": mock_text,
-          "input_tokens": 15,
-          "output_tokens": 20,
-          "model": model,
-          "tool_calls": []
-      }
+    trimmed_messages = _trim_messages_for_token_budget(messages, max_chars=16000)
 
     payload = {
         "model": model,
-        "messages": messages,
+        "messages": trimmed_messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
         "stream": False
@@ -112,6 +135,14 @@ class GroqProvider(BaseLLMProvider):
         if response.status_code == 200:
           data = response.json()
           break
+        elif response.status_code == 413:
+          # Payload too large — perform emergency budget trim and retry
+          if attempt < max_retries:
+            payload["messages"] = _trim_messages_for_token_budget(trimmed_messages, max_chars=8000)
+            await asyncio.sleep(0.5)
+            continue
+          else:
+            raise Exception("Request payload size exceeded Groq context limit (HTTP 413). Please start a new chat session.")
         elif response.status_code in (429, 500, 502, 503, 504) and attempt < max_retries:
           delay = initial_delay * (2 ** attempt)
           await asyncio.sleep(delay)
@@ -124,33 +155,37 @@ class GroqProvider(BaseLLMProvider):
         else:
           raise Exception(f"Groq API returned error {response.status_code}: {response.text}")
       
-      choice = data["choices"][0]["message"]
-      text = choice.get("content") or ""
-      
-      tool_calls = []
-      raw_tool_calls = choice.get("tool_calls", [])
-      for rtc in raw_tool_calls:
-          if rtc.get("type") == "function":
-              func = rtc.get("function", {})
-              try:
-                  args = json.loads(func.get("arguments", "{}"))
-              except Exception:
-                  args = {}
-              tool_calls.append({
-                  "name": func.get("name"),
-                  "arguments": args
-              })
+    if not data:
+      raise Exception("Groq API returned empty response data.")
 
-      input_tokens = data.get("usage", {}).get("prompt_tokens", 0)
-      output_tokens = data.get("usage", {}).get("completion_tokens", 0)
-      
-      return {
-          "text": text,
-          "input_tokens": input_tokens,
-          "output_tokens": output_tokens,
-          "model": model,
-          "tool_calls": tool_calls
-      }
+    choice = data["choices"][0]["message"]
+    text = choice.get("content") or ""
+    
+    tool_calls = []
+    raw_tool_calls = choice.get("tool_calls", [])
+    for rtc in raw_tool_calls:
+        if rtc.get("type") == "function":
+            func = rtc.get("function", {})
+            try:
+                args = json.loads(func.get("arguments", "{}"))
+            except Exception:
+                args = {}
+            tool_calls.append({
+                "name": func.get("name"),
+                "arguments": args
+            })
+
+    input_tokens = data.get("usage", {}).get("prompt_tokens", 0)
+    output_tokens = data.get("usage", {}).get("completion_tokens", 0)
+    
+    return {
+        "text": text,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "model": model,
+        "tool_calls": tool_calls
+    }
+
 
   async def generate_stream(
       self,
@@ -162,38 +197,16 @@ class GroqProvider(BaseLLMProvider):
       api_key: Optional[str] = None,
   ) -> AsyncGenerator[Dict[str, Any], None]:
     key_to_use = api_key or self.api_key
-    is_mock_run = not key_to_use or key_to_use.startswith("mock_")
-
-    if is_mock_run:
-      simulated_calls = self._check_mock_tool_call(messages)
-
-      if simulated_calls:
-        # Yield tool calls and exit
-        yield {
-            "event": "tool_calls",
-            "tool_calls": simulated_calls
-        }
-        yield {
-            "event": "metrics",
-            "metrics": {
-                "model_used": model,
-                "latency_ms": 100,
-                "tokens_input": 15,
-                "tokens_output": 15,
-                "cost_estimate": 0.0,
-                "confidence_score": 0.98,
-                "memory_hits": 0
-            }
-        }
-        return
-
+    if not key_to_use or str(key_to_use).startswith("mock_"):
       raise Exception(
           "Groq API key missing or invalid. Please configure your Groq API key in Settings to stream real-time responses."
       )
 
+    trimmed_messages = _trim_messages_for_token_budget(messages, max_chars=16000)
+
     payload = {
         "model": model,
-        "messages": messages,
+        "messages": trimmed_messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
         "stream": True
@@ -218,7 +231,7 @@ class GroqProvider(BaseLLMProvider):
         "Content-Type": "application/json"
     }
 
-    input_tokens = len(str(messages)) // 4
+    input_tokens = len(str(trimmed_messages)) // 4
     output_text = ""
     start_time = time.time()
     accumulated_tool_calls = {}
@@ -229,7 +242,14 @@ class GroqProvider(BaseLLMProvider):
     for attempt in range(max_retries + 1):
       async with httpx.AsyncClient(timeout=30.0) as client:
         async with client.stream("POST", url, json=payload, headers=headers) as response:
-          if response.status_code in (429, 500, 502, 503, 504):
+          if response.status_code == 413:
+            if attempt < max_retries:
+              payload["messages"] = _trim_messages_for_token_budget(trimmed_messages, max_chars=8000)
+              await asyncio.sleep(0.5)
+              continue
+            else:
+              raise Exception("Request payload size exceeded Groq context limit (HTTP 413). Please start a new chat session.")
+          elif response.status_code in (429, 500, 502, 503, 504):
             if attempt < max_retries:
               delay = initial_delay * (2 ** attempt)
               await asyncio.sleep(delay)

@@ -23,7 +23,7 @@ function highlight(text: string, query: string): React.ReactNode {
   const parts = text.split(new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'));
   return parts.map((part, i) =>
     part.toLowerCase() === query.toLowerCase()
-      ? <mark key={i} className="bg-accent/25 text-accent rounded px-0.5">{part}</mark>
+      ? <mark key={i} className="bg-white/20 text-[#F2F2F2] rounded px-0.5 not-italic">{part}</mark>
       : part
   );
 }
@@ -86,45 +86,50 @@ export default function GlobalSearch({ open, onClose, chats, onSelectChat }: Glo
   return (
     <>
       {/* Backdrop */}
-      <div className="search-overlay-bg" onClick={onClose} aria-hidden="true" />
+      <div
+        className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm"
+        onClick={onClose}
+        aria-hidden="true"
+      />
 
       {/* Panel */}
       <div
         role="dialog"
         aria-modal="true"
         aria-label="Search chats"
-        className="search-panel"
+        className="fixed top-[15%] left-1/2 -translate-x-1/2 z-50 w-full max-w-[520px] px-4 animate-fade-in-up"
       >
-        <div className="glass-heavy rounded-2xl shadow-2xl overflow-hidden">
+        <div className="bg-[#212121] border border-[#2B2B2B] rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.7)] overflow-hidden">
+
           {/* Search input */}
-          <div className="flex items-center gap-3 px-4 py-3.5 border-b border-border">
-            <Search className="w-4 h-4 text-foreground-3 flex-shrink-0" />
+          <div className="flex items-center gap-3 px-4 py-3.5 border-b border-[#2B2B2B]">
+            <Search className="w-4 h-4 text-[#BDBDBD] flex-shrink-0" />
             <input
               ref={inputRef}
               value={query}
               onChange={(e) => { setQuery(e.target.value); setSelectedIdx(0); }}
               onKeyDown={handleKeyDown}
               placeholder="Search conversations…"
-              className="flex-1 bg-transparent text-sm text-foreground placeholder:text-foreground-3 focus:outline-none"
+              className="flex-1 bg-transparent text-[13px] text-[#F2F2F2] placeholder:text-[#BDBDBD] focus:outline-none"
               aria-label="Search conversations"
             />
             {query && (
               <button
                 onClick={() => setQuery('')}
-                className="p-1 rounded text-foreground-3 hover:text-foreground transition-colors"
+                className="p-0.5 text-[#BDBDBD] hover:text-[#F2F2F2] transition-colors"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
             )}
-            <kbd className="kbd hidden sm:inline-flex">Esc</kbd>
+            <kbd className="hidden sm:inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-[#2a2a2a] border border-[#2B2B2B] text-[#BDBDBD] font-mono">Esc</kbd>
           </div>
 
           {/* Results */}
-          <div className="max-h-96 overflow-y-auto">
+          <div className="max-h-80 overflow-y-auto custom-scrollbar">
             {query.trim() ? (
               results.length > 0 ? (
-                <div className="py-2">
-                  <p className="px-4 py-1 text-[10px] font-bold uppercase tracking-widest text-foreground-3">
+                <div className="py-1.5">
+                  <p className="px-4 py-1.5 text-[10px] font-bold uppercase tracking-widest text-[#BDBDBD]">
                     Conversations
                   </p>
                   {results.map((chat, i) => (
@@ -133,49 +138,57 @@ export default function GlobalSearch({ open, onClose, chats, onSelectChat }: Glo
                       onClick={() => handleSelect(chat.id, chat.title)}
                       onMouseEnter={() => setSelectedIdx(i)}
                       className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors ${
-                        i === selectedIdx ? 'bg-accent/10 text-foreground' : 'text-foreground-2 hover:bg-surface-2'
+                        i === selectedIdx
+                          ? 'bg-[#2a2a2a] text-[#F2F2F2]'
+                          : 'text-[#BDBDBD] hover:bg-[#2a2a2a] hover:text-[#F2F2F2]'
                       }`}
                     >
-                      <MessageSquare className="w-3.5 h-3.5 flex-shrink-0 text-foreground-3" />
-                      <span className="text-sm truncate flex-1">
+                      <MessageSquare className="w-3.5 h-3.5 flex-shrink-0 text-[#BDBDBD]" />
+                      <span className="text-[13px] truncate flex-1">
                         {highlight(chat.title || 'New Chat', query)}
                       </span>
                     </button>
                   ))}
                 </div>
               ) : (
-                <div className="py-12 text-center text-foreground-3 text-sm">
-                  No conversations found for "<span className="text-foreground-2">{query}</span>"
+                <div className="py-12 text-center text-[#BDBDBD] text-[13px]">
+                  No conversations found for "<span className="text-[#F2F2F2]">{query}</span>"
                 </div>
               )
             ) : recentSearches.length > 0 ? (
-              <div className="py-2">
-                <p className="px-4 py-1 text-[10px] font-bold uppercase tracking-widest text-foreground-3 flex items-center gap-1.5">
-                  <Clock className="w-3 h-3" /> Recent Searches
+              <div className="py-1.5">
+                <p className="px-4 py-1.5 text-[10px] font-bold uppercase tracking-widest text-[#BDBDBD] flex items-center gap-1.5">
+                  <Clock className="w-3 h-3" /> Recent
                 </p>
                 {recentSearches.map((r) => (
                   <button
                     key={r}
                     onClick={() => setQuery(r)}
-                    className="w-full flex items-center gap-3 px-4 py-2 text-left text-sm text-foreground-2 hover:bg-surface-2 hover:text-foreground transition-colors"
+                    className="w-full flex items-center gap-3 px-4 py-2 text-left text-[13px] text-[#BDBDBD] hover:bg-[#2a2a2a] hover:text-[#F2F2F2] transition-colors"
                   >
-                    <Clock className="w-3.5 h-3.5 flex-shrink-0 text-foreground-3" />
+                    <Clock className="w-3.5 h-3.5 flex-shrink-0" />
                     {r}
                   </button>
                 ))}
               </div>
             ) : (
-              <div className="py-12 text-center text-foreground-3 text-sm">
+              <div className="py-12 text-center text-[#BDBDBD] text-[13px]">
                 Start typing to search conversations
               </div>
             )}
           </div>
 
           {/* Footer */}
-          <div className="px-4 py-2.5 border-t border-border bg-surface-2/50 flex items-center gap-4 text-[11px] text-foreground-3">
-            <span className="flex items-center gap-1"><kbd className="kbd">↑↓</kbd> Navigate</span>
-            <span className="flex items-center gap-1"><kbd className="kbd">↵</kbd> Select</span>
-            <span className="flex items-center gap-1"><kbd className="kbd">Esc</kbd> Close</span>
+          <div className="px-4 py-2.5 border-t border-[#2B2B2B] bg-[#000000]/30 flex items-center gap-4 text-[11px] text-[#BDBDBD]">
+            <span className="flex items-center gap-1">
+              <kbd className="px-1 py-0.5 rounded text-[10px] bg-[#2a2a2a] border border-[#2B2B2B] font-mono">↑↓</kbd> Navigate
+            </span>
+            <span className="flex items-center gap-1">
+              <kbd className="px-1 py-0.5 rounded text-[10px] bg-[#2a2a2a] border border-[#2B2B2B] font-mono">↵</kbd> Select
+            </span>
+            <span className="flex items-center gap-1">
+              <kbd className="px-1 py-0.5 rounded text-[10px] bg-[#2a2a2a] border border-[#2B2B2B] font-mono">Esc</kbd> Close
+            </span>
           </div>
         </div>
       </div>

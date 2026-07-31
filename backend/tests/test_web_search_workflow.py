@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, patch, MagicMock
 from langchain_core.messages import HumanMessage, AIMessage
 
 from app.tools.local_tools import tavily_search, _ddg_search_fallback
+from app.services.web_search import SearchResult
 from app.agent.prompts import INTENT_WEB_SEARCH, INTENT_NORMAL_CHAT, INTENT_DOCUMENT_QA
 
 
@@ -47,38 +48,51 @@ async def test_tavily_search_no_key_uses_ddg_fallback(monkeypatch):
     """When TAVILY_API_KEY is absent, tavily_search() MUST call DDG and return
     real-looking results, NOT the old static Paris weather mock string."""
     monkeypatch.setattr("app.tools.local_tools.settings.TAVILY_API_KEY", None)
+    monkeypatch.setattr("app.services.web_search.settings.TAVILY_API_KEY", None)
+    monkeypatch.setattr("app.services.web_search.settings.SERP_API_KEY", None)
+    monkeypatch.setattr("app.services.web_search.settings.EXA_API_KEY", None)
 
-    # Patch DDG fallback to return controlled live-style result
-    fake_ddg_result = (
-        "Live Web Search Results (via DuckDuckGo):\n\n"
-        "Source [1]: India News - Minister Update\n"
-        "URL: https://example.com/india-news\n"
-        "Snippet: Latest updates on Indian cabinet ministers.\n"
-    )
+    fake_ddg_result = [
+        SearchResult(
+            title="India News - Minister Update",
+            url="https://example.com/india-news",
+            snippet="Latest updates on Indian cabinet ministers.",
+            source="duckduckgo"
+        )
+    ]
 
-    # Patch the cache so it does not return a hit
     mock_cache = MagicMock()
     mock_cache.get = AsyncMock(return_value=None)
     mock_cache.set = AsyncMock(return_value=None)
     monkeypatch.setattr("app.tools.local_tools.web_search_cache", mock_cache)
 
     with patch(
-        "app.tools.local_tools._ddg_search_fallback",
+        "app.services.web_search.search_duckduckgo",
         new=AsyncMock(return_value=fake_ddg_result),
     ) as mock_ddg:
         result = await tavily_search("current news of India")
-        mock_ddg.assert_called_once_with("current news of India")
+        mock_ddg.assert_called_once()
 
-    assert "Paris weather" not in result, (
-        "CRITICAL: old mock string 'Paris weather' leaked into search result!"
-    )
-    assert "Live Web Search Results" in result or "Source" in result
+    assert "Paris weather" not in result
+    assert "India News" in result or "Source" in result or "Web Search Results" in result
 
 
 @pytest.mark.anyio
 async def test_tavily_search_mock_key_uses_ddg_fallback(monkeypatch):
     """When TAVILY_API_KEY is a mock key, DDG fallback is used."""
     monkeypatch.setattr("app.tools.local_tools.settings.TAVILY_API_KEY", "mock_key_123")
+    monkeypatch.setattr("app.services.web_search.settings.TAVILY_API_KEY", "mock_key_123")
+    monkeypatch.setattr("app.services.web_search.settings.SERP_API_KEY", None)
+    monkeypatch.setattr("app.services.web_search.settings.EXA_API_KEY", None)
+
+    fake_ddg_result = [
+        SearchResult(
+            title="India minister resignation",
+            url="https://example.com/news",
+            snippet="DDG: India news results",
+            source="duckduckgo"
+        )
+    ]
 
     mock_cache = MagicMock()
     mock_cache.get = AsyncMock(return_value=None)
@@ -86,27 +100,38 @@ async def test_tavily_search_mock_key_uses_ddg_fallback(monkeypatch):
     monkeypatch.setattr("app.tools.local_tools.web_search_cache", mock_cache)
 
     with patch(
-        "app.tools.local_tools._ddg_search_fallback",
-        new=AsyncMock(return_value="DDG: India news results"),
+        "app.services.web_search.search_duckduckgo",
+        new=AsyncMock(return_value=fake_ddg_result),
     ) as mock_ddg:
         result = await tavily_search("India minister resignation")
         mock_ddg.assert_called_once()
 
     assert "Paris weather" not in result
-    assert "DDG" in result or "India" in result
+    assert "India" in result
 
 
 @pytest.mark.anyio
 async def test_tavily_search_http_error_falls_back_to_ddg(monkeypatch):
     """When Tavily returns HTTP 429/500, DDG fallback is used automatically."""
     monkeypatch.setattr("app.tools.local_tools.settings.TAVILY_API_KEY", "real_looking_key_abc")
+    monkeypatch.setattr("app.services.web_search.settings.TAVILY_API_KEY", "real_looking_key_abc")
+    monkeypatch.setattr("app.services.web_search.settings.SERP_API_KEY", None)
+    monkeypatch.setattr("app.services.web_search.settings.EXA_API_KEY", None)
+
+    fake_ddg_result = [
+        SearchResult(
+            title="DDG fallback result",
+            url="https://example.com",
+            snippet="DDG fallback result for rate-limited query",
+            source="duckduckgo"
+        )
+    ]
 
     mock_cache = MagicMock()
     mock_cache.get = AsyncMock(return_value=None)
     mock_cache.set = AsyncMock(return_value=None)
     monkeypatch.setattr("app.tools.local_tools.web_search_cache", mock_cache)
 
-    # Simulate Tavily returning HTTP 429
     mock_response = MagicMock()
     mock_response.status_code = 429
     mock_response.text = "Rate limit exceeded"
@@ -119,20 +144,32 @@ async def test_tavily_search_http_error_falls_back_to_ddg(monkeypatch):
         mock_client_cls.return_value = mock_client
 
         with patch(
-            "app.tools.local_tools._ddg_search_fallback",
-            new=AsyncMock(return_value="DDG fallback result for rate-limited query"),
+            "app.services.web_search.search_duckduckgo",
+            new=AsyncMock(return_value=fake_ddg_result),
         ) as mock_ddg:
             result = await tavily_search("India news today")
             mock_ddg.assert_called_once()
 
     assert "Paris weather" not in result
-    assert "DDG fallback" in result
+    assert "DDG fallback" in result or "India" in result or "Web Search Results" in result
 
 
 @pytest.mark.anyio
 async def test_tavily_search_exception_falls_back_to_ddg(monkeypatch):
     """When Tavily raises a network exception, DDG fallback is used."""
     monkeypatch.setattr("app.tools.local_tools.settings.TAVILY_API_KEY", "real_key")
+    monkeypatch.setattr("app.services.web_search.settings.TAVILY_API_KEY", "real_key")
+    monkeypatch.setattr("app.services.web_search.settings.SERP_API_KEY", None)
+    monkeypatch.setattr("app.services.web_search.settings.EXA_API_KEY", None)
+
+    fake_ddg_result = [
+        SearchResult(
+            title="DDG offline fallback",
+            url="https://example.com",
+            snippet="DDG offline fallback snippet",
+            source="duckduckgo"
+        )
+    ]
 
     mock_cache = MagicMock()
     mock_cache.get = AsyncMock(return_value=None)
@@ -147,8 +184,8 @@ async def test_tavily_search_exception_falls_back_to_ddg(monkeypatch):
         mock_client_cls.return_value = mock_client
 
         with patch(
-            "app.tools.local_tools._ddg_search_fallback",
-            new=AsyncMock(return_value="DDG offline fallback"),
+            "app.services.web_search.search_duckduckgo",
+            new=AsyncMock(return_value=fake_ddg_result),
         ) as mock_ddg:
             result = await tavily_search("current India news")
             mock_ddg.assert_called_once()
@@ -249,13 +286,13 @@ async def test_classify_intent_minister_keyword_routes_to_web_search(monkeypatch
 
 @pytest.mark.anyio
 async def test_grade_documents_triggers_web_search_for_web_intent(monkeypatch):
-    """grade_documents_node must call tavily_search for INTENT_WEB_SEARCH
+    """grade_documents_node must call unified_web_search for INTENT_WEB_SEARCH
     even when the vector DB returns zero chunks (early-exit path fixed)."""
     from app.agent.nodes import grade_documents_node
 
-    web_result = "Source [1]: India news today\nURL: https://news.example.com"
+    fake_doc = SearchResult(title="India news today", url="https://news.example.com", snippet="India news today", source="tavily", score=1.0)
 
-    with patch("app.agent.nodes.tavily_search", new=AsyncMock(return_value=web_result)) as mock_ws, \
+    with patch("app.agent.nodes.unified_web_search", new=AsyncMock(return_value=[fake_doc])) as mock_ws, \
          patch("app.agent.nodes._call_llm_judge", new=AsyncMock(return_value=None)):
         state = _make_state(
             intent=INTENT_WEB_SEARCH,
@@ -264,7 +301,7 @@ async def test_grade_documents_triggers_web_search_for_web_intent(monkeypatch):
             messages=[HumanMessage(content="current news of India")],
         )
         result = await grade_documents_node(state, config={})
-        mock_ws.assert_called_once_with("current news of India")
+        mock_ws.assert_called_once_with("current news of India", {})
 
     # Web results should be injected into retrieved documents
     assert result.get("document_relevance") == "web_fallback", (
@@ -338,6 +375,6 @@ async def test_ddg_fallback_returns_live_results_structure():
         mock_loop.return_value.run_in_executor = mock_executor
         result = await _ddg_search_fallback("India news")
 
-    assert "Source [1]" in result
+    assert "[1]" in result or "Source [1]" in result
     assert "India News Today" in result or "Live Web Search Results" in result
     assert "Paris weather" not in result

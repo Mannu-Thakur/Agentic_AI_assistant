@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import traceback
+import uuid
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Request
 from fastapi.responses import StreamingResponse
@@ -166,11 +167,29 @@ async def stream_agent_message(
     db: AsyncSession = Depends(get_db)
 ):
   logger.info(f"stream_agent_message: chat_id={chat_id}")
+
+  # ── Per-user rate limit (200 req/min per user ID) ─────────────────────────
+  # Complements the per-IP limit (100/min) in the global middleware.
+  # Fails open if Redis is unavailable so chat is never blocked by cache outage.
+  from app.core.redis_client import rate_limit_check as _rate_limit_check
+  _user_rl_key = f"ratelimit:user:{current_user.id}"
+  _user_allowed = await _rate_limit_check(_user_rl_key, limit=200, window_seconds=60)
+  if not _user_allowed:
+      logger.warning(f"[RateLimit] User {current_user.id} exceeded 200 req/min on chat")
+      raise HTTPException(
+          status_code=429,
+          detail="Too many requests. You have exceeded the per-user rate limit (200/min). Please slow down.",
+      )
+
   chat = await ChatService.get_chat_by_id(db, chat_id, current_user.id)
   if not chat:
     raise HTTPException(status_code=404, detail="Conversation session not found")
 
   await ChatService.delete_messages_after(db, chat_id, schema.parent_message_id)
+
+  import re as _re
+  clean_save_content = _re.sub(r"\[System Context:[^\]]*\]\n?", "", schema.content)
+  clean_save_content = _re.sub(r"\[User Location Context:[^\]]*\]\n?", "", clean_save_content).strip() or schema.content
 
   images_payload = (
       [img.model_dump() for img in schema.images] if schema.images else None
@@ -179,7 +198,7 @@ async def stream_agent_message(
       db=db,
       chat_id=chat_id,
       role="user",
-      content=schema.content,
+      content=clean_save_content,
       parent_id=schema.parent_message_id,
       images=images_payload,
   )
@@ -257,13 +276,39 @@ async def stream_agent_message(
 
   key_found = bool(final_key and not str(final_key).startswith("mock_"))
 
-  langchain_messages = []
+  # ── P3-3 FIX: Chat history trimming ──────────────────────────────────────
+  # Long conversations will eventually exceed provider context limits.
+  # Strategy: keep the most recent messages within a character budget.
+  #   - Hard turn cap: max 30 exchange pairs (60 messages) — always keep the
+  #     most recent turns.
+  #   - Char budget: 60,000 chars (~15k tokens) — oldest messages are dropped
+  #     first until the total fits within budget.
+  # This prevents 400/context-overflow errors on Groq (32k) and other providers.
+  _MAX_HISTORY_MESSAGES = 60       # 30 turn pairs
+  _MAX_HISTORY_CHARS    = 60_000   # ~15k tokens at 4 chars/token
 
-  for msg in db_messages:
+  # Step 1: apply hard turn cap — take the N most recent messages
+  db_messages_trimmed = db_messages[-_MAX_HISTORY_MESSAGES:] if len(db_messages) > _MAX_HISTORY_MESSAGES else db_messages
+
+  # Step 2: apply character budget — drop oldest messages until under budget
+  _total_chars = sum(len(m.content or "") for m in db_messages_trimmed)
+  while _total_chars > _MAX_HISTORY_CHARS and len(db_messages_trimmed) > 2:
+      removed = db_messages_trimmed.pop(0)
+      _total_chars -= len(removed.content or "")
+
+  if len(db_messages_trimmed) < len(db_messages):
+      logger.info(
+          f"[HistoryTrim] Trimmed chat history: {len(db_messages)} → "
+          f"{len(db_messages_trimmed)} messages (chars={_total_chars})"
+      )
+
+  langchain_messages = []
+  for msg in db_messages_trimmed:
     if msg.role == "user":
       langchain_messages.append(HumanMessage(content=msg.content))
     elif msg.role == "assistant":
       langchain_messages.append(AIMessage(content=msg.content))
+
 
   uploaded_file_paths = [
       doc.storage_path
@@ -302,8 +347,30 @@ async def stream_agent_message(
   }
 
   async def sse_event_stream():
-    logger.error("STREAM GENERATOR STARTED")
+    # BUG-8: use INFO not ERROR for normal lifecycle events
+    logger.info("STREAM GENERATOR STARTED")
     try:
+      # BUG-2 FIX: Run PromptInjectionGuard before the graph is invoked.
+      # Catches jailbreak / system-prompt-override patterns early and blocks
+      # the request without touching the LLM at all.
+      try:
+        from app.middleware.security import PromptInjectionGuard
+        _is_suspicious, _reason = PromptInjectionGuard.inspect_prompt(schema.content)
+        if _is_suspicious:
+          logger.warning(
+            f"[PromptInjectionGuard] Blocked request. Reason: {_reason} | "
+            f"user={current_user.id} chat={chat_id}"
+          )
+          _block_msg = (
+            "I'm sorry, but I can't process that request. "
+            "It appears to contain patterns that may violate usage policies."
+          )
+          yield f"data: {json.dumps({'event': 'chunk', 'text': _block_msg})}\n\n"
+          yield "data: [DONE]\n\n"
+          return
+      except ImportError:
+        pass  # Guard module not present — non-fatal, continue
+
       if not key_found:
           err_msg = f"Authentication failed - Missing or invalid API key for provider {(resolved_prov or 'unknown').upper()}. Configure it in Settings."
           logger.error(f"YIELDING AUTH ERROR: {err_msg}")
@@ -321,6 +388,21 @@ async def stream_agent_message(
         metrics_store.update(metrics)
         await queue.put({"event": "metrics", "metrics": metrics})
 
+      # BUG-5d FIX: Instantiate RequestTelemetry per-request and pass it through
+      # config so graph nodes can call record_routing / record_llm / record_evidence.
+      # finalize() is called after graph completion and emits a structured JSON log.
+      _request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+      _telemetry = None
+      try:
+        from app.core.telemetry import RequestTelemetry
+        _telemetry = RequestTelemetry(
+          request_id=_request_id,
+          user_id=str(current_user.id),
+          chat_id=chat_id,
+        )
+      except Exception as _tel_init_err:
+        logger.warning(f"RequestTelemetry init failed (non-fatal): {_tel_init_err}")
+
       config = {
           "configurable": {
               "user_id": current_user.id,
@@ -328,6 +410,7 @@ async def stream_agent_message(
               "memories": memories,
               "on_token": on_token_callback,
               "on_metrics": on_metrics_callback,
+              "telemetry": _telemetry,  # BUG-5d: nodes read this via config["configurable"]["telemetry"]
               # Always pass the primary resolved key for google/gemini (they share a key)
               "gemini_api_key": (final_key if resolved_prov in ["google", "gemini"] else None) or user_keys.get("gemini") or user_keys.get("google"),
               "google_api_key": (final_key if resolved_prov in ["google", "gemini"] else None) or user_keys.get("google") or user_keys.get("gemini"),
@@ -340,19 +423,36 @@ async def stream_agent_message(
               "alibaba_api_key":    (final_key if resolved_prov == "alibaba" else None) or user_keys.get("alibaba"),
               "glm_api_key":        (final_key if resolved_prov == "glm" else None) or user_keys.get("glm"),
               "uploaded_file_paths": uploaded_file_paths,
+              # ── Search provider keys ───────────────────────────────────────────────────
+              # Full merged dict (DB-decrypted + x-api-keys header) so that
+              # unified_web_search() in nodes.py can pick Tavily/SerpAPI/Exa.
+              "api_keys": user_keys,
           }
       }
 
       logger.info("STARTING GRAPH TASK...")
       task = asyncio.create_task(agent_graph.ainvoke(initial_state, config))
 
+      # GAP-1 FIX: Check for client disconnect inside the queue loop.
+      # When the browser tab closes mid-stream, cancel the graph task to avoid
+      # wasting LLM tokens and compute.
       while not task.done() or not queue.empty():
         try:
-          chunk = await asyncio.wait_for(queue.get(), timeout=0.005)  # 5ms poll — 20x faster first token
+          # GAP-1: Periodically check if client has disconnected
+          if await request.is_disconnected():
+            logger.info(f"Client disconnected for chat_id={chat_id} — cancelling graph task")
+            task.cancel()
+            return
+
+          try:
+            chunk = queue.get_nowait()
+          except asyncio.QueueEmpty:
+            if task.done():
+              break
+            await asyncio.sleep(0.01)
+            continue
           yield f"data: {json.dumps(chunk)}\n\n"
           queue.task_done()
-        except asyncio.TimeoutError:
-          continue
         except Exception as err:
           logger.error(f"ERROR IN QUEUE LOOP: {err}")
           yield f"data: {json.dumps({'event': 'error', 'detail': str(err)})}\n\n"
@@ -365,6 +465,17 @@ async def stream_agent_message(
         response_content = final_state.get("response_text", "").strip() if isinstance(final_state, dict) else ""
         if not response_content:
           response_content = "*[No response generated — please try again]*"
+
+        # BUG-5d FIX: Finalize telemetry — attaches cache hit/miss stats
+        # and emits the structured JSON "agent_request" log line.
+        if _telemetry is not None:
+          try:
+            from app.core.cache_service import get_all_cache_stats
+            _telemetry.attach_cache_stats(get_all_cache_stats())
+            _tel_payload = _telemetry.finalize()
+            logger.debug(f"Telemetry finalized: total_latency_ms={_tel_payload.get('total_latency_ms')}ms")
+          except Exception as _tel_fin_err:
+            logger.warning(f"Telemetry finalize failed (non-fatal): {_tel_fin_err}")
 
         try:
           from app.core.database import AsyncSessionLocal, get_db
@@ -382,7 +493,8 @@ async def stream_agent_message(
               if is_first_message:
                 auto_title = ChatService.generate_short_descriptive_title(schema.content)
                 await ChatService.update_chat_title(test_db, chat_id, current_user.id, auto_title)
-                logger.error(f"YIELDING TITLE EVENT: {auto_title}")
+                # BUG-8 FIX: was logger.error() — not an error
+                logger.info(f"YIELDING TITLE EVENT: {auto_title}")
                 yield f"data: {json.dumps({'event': 'title', 'title': auto_title})}\n\n"
               break
           else:
@@ -399,7 +511,8 @@ async def stream_agent_message(
               if is_first_message:
                 auto_title = ChatService.generate_short_descriptive_title(schema.content)
                 await ChatService.update_chat_title(save_db, chat_id, current_user.id, auto_title)
-                logger.error(f"YIELDING TITLE EVENT: {auto_title}")
+                # BUG-8 FIX: was logger.error() — not an error
+                logger.info(f"YIELDING TITLE EVENT: {auto_title}")
                 yield f"data: {json.dumps({'event': 'title', 'title': auto_title})}\n\n"
 
           from app.services.memory_service import MemoryService
@@ -416,14 +529,16 @@ async def stream_agent_message(
         logger.error(f"ERROR IN FINAL STATE PROCESSING: {traceback.format_exc()}")
         yield f"data: {json.dumps({'event': 'error', 'detail': str(err)})}\n\n"
 
-      logger.error("YIELDING DONE")
+      # BUG-8 FIX: was logger.error() — not an error
+      logger.info("YIELDING DONE")
       yield "data: [DONE]\n\n"
     except Exception as stream_err:
       logger.error(f"CRITICAL UNCAUGHT EXCEPTION IN sse_event_stream: {traceback.format_exc()}")
       yield f"data: {json.dumps({'event': 'error', 'detail': str(stream_err)})}\n\n"
       yield "data: [DONE]\n\n"
 
-  logger.error(">>> RETURNING STREAMING RESPONSE <<<")
+  # BUG-8 FIX: was logger.error() — not an error
+  logger.info(">>> RETURNING STREAMING RESPONSE <<<")
   return StreamingResponse(sse_event_stream(), media_type="text/event-stream")
 
 

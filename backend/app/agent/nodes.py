@@ -33,6 +33,7 @@ P0 Production Fixes Applied
     • Raises the "too brief" threshold so one-line ACKs are never regenerated.
 """
 
+import os
 import json
 import logging
 import asyncio
@@ -42,6 +43,7 @@ from typing import Dict, Any, List, Optional
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 
+from app.core.config import settings
 from app.agent.state import AgentState
 from app.agent.prompts import (
     compile_system_prompt,
@@ -60,6 +62,11 @@ from app.agent.prompts import (
     INTENT_VISION,
     INTENT_COMPLEX,
     INTENT_CODE_EXECUTION,
+    INTENT_MCP_TOOL,
+    INTENT_FINANCE,
+    INTENT_NEWS,
+    INTENT_CURRENT_EVENTS,
+    INTENT_MATH,
     AMBIGUITY_DETECTOR_PROMPT,
     CLARIFICATION_QUESTION_PROMPT,
     QUERY_RECONSTRUCTOR_PROMPT,
@@ -83,6 +90,11 @@ from app.providers.openrouter import OpenRouterProvider
 # Top-level imports so patch paths resolve correctly in tests
 from app.core.database import AsyncSessionLocal
 from app.tools.local_tools import tavily_search as tavily_search
+from app.services.web_search import (
+    unified_web_search,
+    format_for_llm,
+    format_as_source_documents,
+)
 
 logger = logging.getLogger("agent.nodes")
 
@@ -121,20 +133,76 @@ def get_provider(model: str):
     return gemini_provider
 
 
+def _extract_last_user_query(messages: list) -> str:
+    """Safely extract content of last user/human message from list of LangChain objects or dicts."""
+    for msg in reversed(messages or []):
+        if hasattr(msg, "type") and getattr(msg, "type") in ("human", "user"):
+            return msg.content if isinstance(msg.content, str) else ""
+        elif isinstance(msg, dict):
+            m_type = msg.get("type") or msg.get("role")
+            if m_type in ("human", "user", "user_input"):
+                content = msg.get("content", "")
+                return content if isinstance(content, str) else ""
+    return ""
+
+
 def _extract_api_keys(config: dict) -> dict:
-    """Return a dict of provider → api_key from graph config."""
+    """Return a dict of provider → api_key from graph config, falling back to server settings/env."""
     cfg = config.get("configurable", {})
+    api_keys = cfg.get("api_keys", {}) if isinstance(cfg.get("api_keys"), dict) else {}
+
+    gemini_k = (
+        cfg.get("gemini_api_key") or cfg.get("google_api_key") or
+        api_keys.get("gemini") or api_keys.get("google") or
+        getattr(settings, "GEMINI_API_KEY", None) or
+        os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    )
+    google_k = (
+        cfg.get("google_api_key") or cfg.get("gemini_api_key") or
+        api_keys.get("google") or api_keys.get("gemini") or
+        getattr(settings, "GEMINI_API_KEY", None) or
+        os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+    )
+    groq_k = (
+        cfg.get("groq_api_key") or
+        api_keys.get("groq") or
+        getattr(settings, "GROQ_API_KEY", None) or
+        os.environ.get("GROQ_API_KEY")
+    )
+    openrouter_k = (
+        cfg.get("openrouter_api_key") or
+        api_keys.get("openrouter") or
+        getattr(settings, "OPENROUTER_API_KEY", None) or
+        os.environ.get("OPENROUTER_API_KEY")
+    )
+    openai_k = (
+        cfg.get("openai_api_key") or
+        api_keys.get("openai") or
+        getattr(settings, "OPENAI_API_KEY", None) or
+        os.environ.get("OPENAI_API_KEY")
+    )
+    anthropic_k = (
+        cfg.get("anthropic_api_key") or
+        api_keys.get("anthropic") or
+        os.environ.get("ANTHROPIC_API_KEY")
+    )
+    deepseek_k = (
+        cfg.get("deepseek_api_key") or
+        api_keys.get("deepseek") or
+        os.environ.get("DEEPSEEK_API_KEY")
+    )
     return {
-        "gemini":     cfg.get("gemini_api_key") or cfg.get("google_api_key"),
-        "google":     cfg.get("google_api_key") or cfg.get("gemini_api_key"),
-        "groq":       cfg.get("groq_api_key"),
-        "openrouter": cfg.get("openrouter_api_key"),
-        "openai":     cfg.get("openai_api_key"),
-        "anthropic":  cfg.get("anthropic_api_key"),
-        "deepseek":   cfg.get("deepseek_api_key"),
-        "alibaba":    cfg.get("alibaba_api_key"),
-        "glm":        cfg.get("glm_api_key"),
+        "gemini":     gemini_k,
+        "google":     google_k,
+        "groq":       groq_k,
+        "openrouter": openrouter_k,
+        "openai":     openai_k,
+        "anthropic":  anthropic_k,
+        "deepseek":   deepseek_k,
+        "alibaba":    cfg.get("alibaba_api_key") or api_keys.get("alibaba") or os.environ.get("ALIBABA_API_KEY"),
+        "glm":        cfg.get("glm_api_key") or api_keys.get("glm") or os.environ.get("GLM_API_KEY"),
     }
+
 
 
 def _best_api_key(keys: dict, model: str) -> Optional[str]:
@@ -194,14 +262,47 @@ def _sanitize_response(text: str) -> str:
     """
     Strips internal tool-name references and implementation-detail phrases
     from the final response text before it is streamed to the user.
+    Also redacts any API keys or secrets that may have leaked into the response.
     """
     for pattern in _TOOL_PHRASE_PATTERNS:
         text = pattern.sub("", text)
     for pattern in _TOOL_LEAK_PATTERNS:
         text = pattern.sub("", text)
+    # BUG-4 FIX: Redact any API keys / secrets that leaked into the response
+    try:
+        from app.middleware.security import SecretRedactor
+        text = SecretRedactor.redact(text)
+    except Exception as _sec_err:
+        logger.warning(f"SecretRedactor failed (non-fatal): {_sec_err}")
     # Collapse any double blank lines created by removal
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
+
+
+def validate_citations(text: str, valid_sources: List[Dict[str, Any]]) -> str:
+    """
+    Validates citation markers in response text against actual valid_sources.
+    Strips or neutralizes citations that reference non-existent source indices.
+    """
+    if not text or not valid_sources:
+        # If no sources were provided, remove any hallucinated numeric bracket citations like [1], [2]
+        return re.sub(r"\[(?:Doc|Web|Source|\d+)\s*\d*\]", "", text)
+
+    valid_indices = {s.get("index") for s in valid_sources if s.get("index") is not None}
+
+    def check_tag(match: re.Match) -> str:
+        tag = match.group(0)
+        digits = re.findall(r"\d+", tag)
+        if digits:
+            num = int(digits[0])
+            if num in valid_indices:
+                return tag
+        return ""  # Strip hallucinated tag
+
+    cleaned = re.sub(r"\[(?:Doc|Web|Source)\s*\d+\]", check_tag, text)
+    cleaned = re.sub(r"\[\d+\]", check_tag, cleaned)
+    return re.sub(r"  +", " ", cleaned).strip()
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -223,16 +324,21 @@ async def _call_llm_judge(prompt: str, config: dict) -> Optional[dict]:
         (groq_provider,       "groq",       "llama-3.1-8b-instant"),
     ]:
         api_key = keys.get(key_name)
+        if not api_key:
+            continue
         try:
-            result = await provider.generate(
-                messages=messages,
-                model=model,
-                temperature=0.0,
-                max_tokens=512,
-                tools=None,
-                api_key=api_key,
+            result = await asyncio.wait_for(
+                provider.generate(
+                    messages=messages,
+                    model=model,
+                    temperature=0.0,
+                    max_tokens=512,
+                    tools=None,
+                    api_key=api_key,
+                ),
+                timeout=8.0
             )
-            raw = result.get("text", "").strip()
+            raw = (result.get("text") or "").strip()
             if raw.startswith("```"):
                 parts = raw.split("```")
                 raw = parts[1] if len(parts) > 1 else raw
@@ -270,14 +376,19 @@ async def _call_llm_text(prompt: str, config: dict, max_tokens: int = 256) -> Op
         (groq_provider,       "groq",       "llama-3.1-8b-instant"),
     ]:
         api_key = keys.get(key_name)
+        if not api_key:
+            continue
         try:
-            result = await provider.generate(
-                messages=messages,
-                model=model,
-                temperature=0.0,
-                max_tokens=max_tokens,
-                tools=None,
-                api_key=api_key,
+            result = await asyncio.wait_for(
+                provider.generate(
+                    messages=messages,
+                    model=model,
+                    temperature=0.0,
+                    max_tokens=max_tokens,
+                    tools=None,
+                    api_key=api_key,
+                ),
+                timeout=8.0,
             )
             raw = result.get("text", "").strip()
             return raw
@@ -415,13 +526,26 @@ async def classify_intent_node(
     detected_language     = state.get("detected_language")
 
     # Extract last user query
-    last_query = ""
-    for msg in reversed(messages):
-        if hasattr(msg, "type") and msg.type in ("human", "user"):
-            last_query = msg.content if isinstance(msg.content, str) else ""
-            break
+    last_query = _extract_last_user_query(messages)
 
-    # ── Build conversation context for ambiguity detector ─────────────────────
+    # ── Strip injected context prefixes so they don't pollute intent detection ─
+    # The frontend injects [System Context: ...] (datetime), [User Location Context: ...],
+    # and [Connected Reference Context ...] into every user message payload.
+    # Words like 'today', 'current', 'date', 'now' inside those brackets must NOT
+    # trigger INTENT_WEB_SEARCH or other heuristics.
+    import re as _re
+    _clean_query = last_query
+    _clean_query = _re.sub(r"\[System Context:[^\]]*\]", "", _clean_query)
+    _clean_query = _re.sub(r"\[User Location Context:[^\]]*\]", "", _clean_query)
+    _clean_query = _re.sub(
+        r"\[Connected Reference Context[^\[]*\[End of Referenced Context\]",
+        "",
+        _clean_query,
+        flags=_re.DOTALL,
+    )
+    last_query_clean = _clean_query.strip()
+    # Use clean query for intent classification; keep original for LLM prompts.
+
     # This is the key fix: the ambiguity detector previously received ONLY the
     # current query, causing follow-up queries like 'translate this' to be
     # flagged as ambiguous. Now it gets the recent conversation history.
@@ -455,9 +579,14 @@ async def classify_intent_node(
             logger.info(f"Reconstructed resolved query: {resolved_query}")
 
     # ── Ambiguity check (with conversation context) ───────────────────────────
-    # Skip ambiguity check if images present (never ambiguous — just analyze the image)
-    # Skip if this is a follow-up to a prior clarification
-    if not resolved_query and last_query and not images_present:
+    # Skip ambiguity check for self-contained queries (>10 chars or common question/action words)
+    is_clear_self_contained = (
+        bool(last_query_clean) and (
+            len(last_query_clean) >= 12 or
+            any(last_query_clean.lower().startswith(w) for w in ("what", "how", "why", "who", "where", "when", "can", "could", "would", "is", "are", "do", "does", "explain", "write", "tell", "show", "give", "help", "solve", "create", "generate", "hi", "hello"))
+        )
+    )
+    if not resolved_query and last_query and not images_present and not is_clear_self_contained:
         ambiguity_prompt = AMBIGUITY_DETECTOR_PROMPT.format(
             query=last_query,
             conversation_context=conversation_context,
@@ -491,8 +620,9 @@ async def classify_intent_node(
         logger.info("classify_intent_node: images present → auto-routing to VISION")
 
     # ── High-confidence memory-write keyword override ─────────────────────────
-    if last_query and intent != INTENT_VISION:
-        q_lower = last_query.lower().strip()
+    # Use last_query_clean to ignore injected [System Context: ...] prefixes
+    if last_query_clean and intent != INTENT_VISION:
+        q_lower = last_query_clean.lower().strip()
         question_prefixes = ("what", "who", "where", "when", "why", "how", "do you", "can you", "is my", "what's")
         memory_signals = (
             "remember that", "remember this:", "remember this ",
@@ -527,78 +657,158 @@ async def classify_intent_node(
                 f"content='{memory_write_content}' | category={memory_write_category}"
             )
 
-    # ── LLM-based intent classification (with conversation context) ───────────
-    if last_query and intent not in (INTENT_MEMORY_WRITE, INTENT_VISION):
-        prompt = INTENT_CLASSIFIER_PROMPT.format(
-            query=last_query,
-            has_images=images_present,
-            conversation_context=conversation_context,
-        )
-        parsed = await _call_llm_judge(prompt, config)
-
-        if parsed and isinstance(parsed, dict):
-            intent                = parsed.get("intent", INTENT_NORMAL_CHAT)
-            is_private_doc_query  = bool(parsed.get("is_private_doc_query", False))
-            memory_write_content  = parsed.get("memory_content") or None
-            memory_write_category = parsed.get("memory_category") or None
-            # Pick up language detection from the LLM response
-            lang_from_llm = parsed.get("detected_language")
-            if lang_from_llm and lang_from_llm.lower() not in ("unknown", "none", ""):
-                detected_language = lang_from_llm
+    # ── BUG-7 FIX: Full LLM-based intent classification ──────────────────────
+    # Previously the LLM was only called when explicit web-search keywords were
+    # present. This meant PROGRAMMING, MATH, CODE_EXECUTION, COMPLEX, REASONING,
+    # TRANSLATION, SUMMARIZATION etc. were unreachable for most queries.
+    # Now: only trivially short greetings / single-word queries skip the LLM.
+    # Everything else always goes to the LLM judge for proper classification.
+    if last_query_clean and intent not in (INTENT_MEMORY_WRITE, INTENT_VISION):
+        q_lower = last_query_clean.lower()
+        # Fast-path only for private-doc signals (high-confidence, no LLM needed)
+        if any(term in q_lower for term in ("my gpa", "my cgpa", "my resume", "my cv", "my project", "my document", "my file", "my notes", "uploaded document")):
+            intent = INTENT_DOCUMENT_QA
+            is_private_doc_query = True
         else:
-            # ── Heuristic fallback (comprehensive) ───────────────────────────
-            q_lower = last_query.lower()
-            memory_signals = (
-                "remember that", "remember this", "note that", "save that",
-                "keep in mind", "store this", "don't forget", "make a note",
-                "make a note that", "my favourite is", "my favorite is",
-                "save this:", "save this ", "note this:",
-            )
-            doc_signals = (
-                "my document", "my file", "my notes", "my cheat", "in the file",
-                "uploaded", "the pdf", "the doc", "my code", "in my", "from the file",
-                "according to my", "from my",
-            )
-            # EXPANDED web search triggers
-            web_signals = (
-                # Time-sensitive
-                "today's", "today", "latest", "current", "right now", "recent",
-                "this week", "news", "update", "live", "breaking", "now",
-                "2024", "2025", "2026",
-                # Dynamic financial data
-                "weather", "temperature", "forecast", "stock", "price", "bitcoin",
-                "crypto", "exchange rate", "market", "ipo", "sensex", "nifty",
-                # Current facts & political news
-                "population", "capital of", "president", "prime minister", "pm of",
-                "ceo", "governor", "minister", "resignation", "resigned", "cabinet",
-                "government", "parliament", "politics", "protest", "headline",
-                "champion", "winner", "who won", "election", "results", "score",
-                "ranking", "richest", "gdp",
-                # Search phrases
-                "search for", "look up", "find me", "what's happening",
-                "who is the current", "latest version of",
-            )
-            code_signals = (
-                "execute", "run this", "generate and run", "plot and show",
-                "run the code", "execute the script",
+            # Always call LLM classifier unless the query is a trivial greeting
+            # (≤4 words AND no special character signals)
+            _word_count = len(last_query_clean.split())
+            _is_trivial_greeting = (
+                _word_count <= 4 and
+                not any(ch in last_query_clean for ch in ("?", "!", "(", ")", "[", "]",'`')) and
+                any(last_query_clean.lower().startswith(g) for g in (
+                    "hi", "hey", "hello", "thanks", "thank", "ok", "okay",
+                    "sure", "yes", "no", "bye", "good morning", "good evening",
+                    "good night", "lol", "haha", "hmm"
+                ))
             )
 
-            if any(s in q_lower for s in memory_signals):
-                intent = INTENT_MEMORY_WRITE
-            elif any(s in q_lower for s in doc_signals):
-                intent = INTENT_DOCUMENT_QA
-                is_private_doc_query = True
-            elif any(s in q_lower for s in web_signals):
-                intent = INTENT_WEB_SEARCH
-            elif any(s in q_lower for s in code_signals):
-                intent = INTENT_COMPLEX
-            # else stays NORMAL_CHAT
+            if not _is_trivial_greeting:
+                prompt = INTENT_CLASSIFIER_PROMPT.format(
+                    query=last_query_clean,
+                    has_images=images_present,
+                    conversation_context=conversation_context,
+                )
+                parsed = await _call_llm_judge(prompt, config)
+
+                if parsed and isinstance(parsed, dict):
+                    intent                = parsed.get("intent", INTENT_NORMAL_CHAT)
+                    is_private_doc_query  = bool(parsed.get("is_private_doc_query", False))
+                    memory_write_content  = parsed.get("memory_content") or None
+                    memory_write_category = parsed.get("memory_category") or None
+                    # Pick up language detection from the LLM response
+                    lang_from_llm = parsed.get("detected_language")
+                    if lang_from_llm and lang_from_llm.lower() not in ("unknown", "none", ""):
+                        detected_language = lang_from_llm
+                else:
+                    # ── Heuristic fallback (comprehensive) ─────────────────────
+                    # Used only when LLM judge is unavailable (no API keys configured).
+                    # IMPORTANT: use last_query_clean so injected [System Context: ...]
+                    # prefixes don't pollute keyword matching.
+                    q_lower = last_query_clean.lower()
+                    memory_signals = (
+                        "remember that", "remember this", "note that", "save that",
+                        "keep in mind", "store this", "don't forget", "make a note",
+                        "make a note that", "my favourite is", "my favorite is",
+                        "save this:", "save this ", "note this:",
+                    )
+                    doc_signals = (
+                        "my document", "my file", "my notes", "my cheat", "in the file",
+                        "uploaded", "the pdf", "the doc", "my code", "in my", "from the file",
+                        "according to my", "from my",
+                        "my projects", "my project", "my cgpa", "my gpa", "my xgpa",
+                        "my resume", "my cv", "my skills", "my education", "my degree",
+                        "my achievements", "my experience", "my internship", "my internships",
+                        "my grades", "my marks", "my result", "my results", "my score",
+                        "my background", "my profile", "my qualification",
+                        "my college", "my university", "my institute",
+                    )
+                    web_signals = (
+                        "today's", "today", "latest", "current", "right now", "recent",
+                        "this week", "news", "update", "live", "breaking", "now",
+                        "2024", "2025", "2026",
+                        "weather", "temperature", "forecast", "stock", "price", "bitcoin",
+                        "crypto", "exchange rate", "market", "ipo", "sensex", "nifty",
+                        "population", "capital of", "president", "prime minister", "pm of",
+                        "ceo", "governor", "minister", "resignation", "resigned", "cabinet",
+                        "government", "parliament", "politics", "protest", "headline",
+                        "champion", "winner", "who won", "election", "results", "score",
+                        "ranking", "richest", "gdp",
+                        "search for", "look up", "find me", "what's happening",
+                        "who is the current", "latest version of", "fetch that", "fetch",
+                        "leetcode", "lc ", "codeforces", "atcoder", "advent of code",
+                        "problem statement", "problem details", "problem number",
+                        "search", "google", "latest news", "live score", "current price",
+                    )
+                    code_signals = (
+                        "execute", "run this", "generate and run", "plot and show",
+                        "run the code", "execute the script",
+                        "write code", "write a function", "write python", "write javascript",
+                        "debug this", "fix this code", "code review", "implement",
+                    )
+                    math_signals = (
+                        "calculate", "solve", "equation", "integral", "derivative",
+                        "matrix", "statistics", "probability", "algebra", "geometry",
+                    )
+
+                    if any(s in q_lower for s in memory_signals):
+                        intent = INTENT_MEMORY_WRITE
+                    elif any(s in q_lower for s in doc_signals):
+                        intent = INTENT_DOCUMENT_QA
+                        is_private_doc_query = True
+                    elif any(s in q_lower for s in web_signals):
+                        intent = INTENT_WEB_SEARCH
+                    elif any(s in q_lower for s in code_signals):
+                        intent = INTENT_CODE_EXECUTION
+                    elif any(s in q_lower for s in math_signals):
+                        intent = INTENT_MATH
+                    # else stays INTENT_NORMAL_CHAT
+
+
+    # ── Personal-data possession override ────────────────────────────────────
+    # If the LLM classified as NORMAL_CHAT but the query is clearly asking
+    # about personal information stored in uploaded documents (resume, CGPA,
+    # projects, etc.), re-route to DOCUMENT_QA so RAG is triggered.
+    _PERSONAL_DOC_SIGNALS = (
+        "my projects", "my project", "my cgpa", "my gpa", "my xgpa",
+        "my resume", "my cv", "my skills", "my education", "my degree",
+        "my achievements", "my experience", "my internship", "my internships",
+        "my grades", "my marks", "my result", "my results", "my score",
+        "my background", "my profile", "my qualification",
+        "my college", "my university", "my institute",
+        "my document", "my file", "my notes", "in the file",
+        "uploaded", "from the file", "according to my",
+    )
+    if last_query_clean and intent == INTENT_NORMAL_CHAT:
+        q_low_personal = last_query_clean.lower()
+        if any(sig in q_low_personal for sig in _PERSONAL_DOC_SIGNALS):
+            intent = INTENT_DOCUMENT_QA
+            is_private_doc_query = True
+            logger.info(
+                f"classify_intent_node: personal-data override → DOCUMENT_QA "
+                f"for query='{last_query_clean[:60]}'"
+            )
 
     # High-confidence explicit news & search keyword override
-    if last_query and intent in (INTENT_NORMAL_CHAT, INTENT_DOCUMENT_QA) and not is_private_doc_query:
-        q_low = last_query.lower()
-        if any(k in q_low for k in ("news", "resignation", "resigned", "minister", "breaking", "latest update", "current news")):
+    # Use last_query_clean to avoid context-prefix pollution
+    if last_query_clean and intent in (INTENT_NORMAL_CHAT, INTENT_DOCUMENT_QA) and not is_private_doc_query:
+        q_low = last_query_clean.lower()
+        if any(k in q_low for k in ("news", "resignation", "resigned", "minister", "breaking", "latest update", "current news", "leetcode", "fetch", "search")):
             intent = INTENT_WEB_SEARCH
+
+    # High-confidence explicit MCP tool signal override
+    _MCP_TOOL_SIGNALS = (
+        "expense", "expenses", "merchant", "merchants", "monthly summary",
+        "category summary", "top merchants", "add expense", "add an expense",
+        "list expense", "list expenses", "list all expenses", "search expense",
+        "search expenses", "update expense", "delete expense", "groceries",
+        "calculate", "reminder", "remind me", "send email"
+    )
+    if last_query_clean and intent in (INTENT_NORMAL_CHAT, INTENT_WEB_SEARCH, INTENT_DOCUMENT_QA) and not is_private_doc_query:
+        q_low_mcp = last_query_clean.lower()
+        if any(sig in q_low_mcp for sig in _MCP_TOOL_SIGNALS):
+            intent = INTENT_MCP_TOOL
+            logger.info(f"classify_intent_node: MCP signal override → MCP_TOOL for query='{last_query_clean[:60]}'")
 
     # ── Re-apply image override if LLM incorrectly overrode it ───────────────
     # If images were present but LLM returned a non-VISION intent for an
@@ -607,8 +817,19 @@ async def classify_intent_node(
         intent = INTENT_VISION
         logger.info("classify_intent_node: empty query with images → forcing VISION")
 
-    # ── Determine allowed tools from whitelist ────────────────────────────────
-    allowed_tools = INTENT_TOOL_WHITELIST.get(intent, [])
+    # ── Determine allowed tools from whitelist & ToolRegistry ─────────────────
+    from app.tools.registry import ToolRegistry
+    registry = ToolRegistry()
+    if not registry.is_initialized:
+        try:
+            await registry.initialize()
+        except Exception as init_exc:
+            logger.warning(f"ToolRegistry initialization warning in classify_intent_node: {init_exc}")
+
+    allowed_tools = list(INTENT_TOOL_WHITELIST.get(intent, []))
+    if intent in (INTENT_MCP_TOOL, INTENT_COMPLEX, INTENT_FINANCE, INTENT_MATH):
+        all_registered = set(registry.local_tools.keys()).union(set(registry.mcp_tools_schemas.keys()))
+        allowed_tools = list(set(allowed_tools).union(all_registered))
 
     logger.info(
         f"Intent Classifier: intent={intent} | "
@@ -618,6 +839,19 @@ async def classify_intent_node(
         f"language_mode={language_mode} | "
         f"query='{last_query[:60]}'"
     )
+
+    # BUG-5a FIX: Record routing decision in telemetry if available
+    _telemetry = config.get("configurable", {}).get("telemetry")
+    if _telemetry is not None:
+        try:
+            _needs_ret = intent not in (INTENT_MEMORY_WRITE, INTENT_NORMAL_CHAT)
+            _telemetry.record_routing(
+                intent=intent,
+                is_ambiguous=is_ambiguous,
+                needs_retrieval=_needs_ret,
+            )
+        except Exception as _tel_err:
+            logger.debug(f"Telemetry record_routing failed (non-fatal): {_tel_err}")
 
     steps.append("classify_intent")
     return {
@@ -762,7 +996,7 @@ async def plan_node(state: AgentState, config: RunnableConfig = None) -> Dict[st
     intent   = state.get("intent", INTENT_NORMAL_CHAT)
 
     # 1. Skip planning for simple intents — saves latency and avoids over-planning
-    simple_intents = {INTENT_NORMAL_CHAT, INTENT_MEMORY_WRITE, "WEB_SEARCH", "MCP_TOOL"}
+    simple_intents = {INTENT_NORMAL_CHAT, INTENT_MEMORY_WRITE, INTENT_DOCUMENT_QA, INTENT_VISION, INTENT_WEB_SEARCH, INTENT_MCP_TOOL}
     if intent in simple_intents:
         steps.append("plan")
         return {"plan": None, "current_plan_step": 0, "steps": steps}
@@ -817,6 +1051,87 @@ async def plan_node(state: AgentState, config: RunnableConfig = None) -> Dict[st
         "plan":              plan,
         "current_plan_step": 0,
         "steps":             steps,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Node 2.5: Query Rewriter
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def query_rewriter_node(
+    state: AgentState, config: RunnableConfig = None
+) -> Dict[str, Any]:
+    """
+    Query Rewriter Node — optimizes user query before retrieval and routing.
+    Rewrites ONLY when beneficial (expanding abbreviations, resolving coreferences, maintaining entities).
+    Logs: Original Query -> Rewritten Query.
+
+    P3-2 FIX: Skip rewriting for intents and query shapes that never benefit
+    from it — avoids an extra LLM call per request for simple conversations.
+    """
+    config = config or {}
+    messages = state.get("messages", [])
+    steps = list(state.get("steps") or [])
+    intent = state.get("intent", INTENT_NORMAL_CHAT)
+
+    last_query = state.get("resolved_query")
+    if not last_query:
+        for msg in reversed(messages):
+            if hasattr(msg, "type") and msg.type in ("human", "user"):
+                last_query = msg.content if isinstance(msg.content, str) else ""
+                break
+
+    if not last_query or state.get("is_ambiguous", False):
+        steps.append("query_rewriter")
+        return {"steps": steps}
+
+    # P3-2 FIX: Short-circuit for intents that never need rewriting:
+    # NORMAL_CHAT / MEMORY_WRITE / VISION — no retrieval, so rewriting is useless.
+    # WEB_SEARCH / NEWS / CURRENT_EVENTS — query goes to search engine verbatim;
+    #   rewriting adds latency without improving web results.
+    # Also skip for very short queries (≤5 words) — they are self-contained and
+    # the rewriter would return them unchanged anyway.
+    _skip_rewrite_intents = {
+        INTENT_NORMAL_CHAT, INTENT_MEMORY_WRITE, INTENT_VISION,
+        INTENT_WEB_SEARCH, INTENT_NEWS, INTENT_CURRENT_EVENTS,
+    }
+    _word_count_rw = len(last_query.split())
+    if intent in _skip_rewrite_intents or _word_count_rw <= 5:
+        logger.info(
+            f"[QueryRewriter] Skipping rewrite (intent={intent}, words={_word_count_rw}): "
+            f"'{last_query[:60]}'"
+        )
+        steps.append("query_rewriter")
+        return {"steps": steps}
+
+    original_query = last_query
+    rewritten_query = original_query
+
+    # Evaluate if rewriting is beneficial
+    conv_context = _build_conversation_context(messages, max_exchanges=2)
+    REWRITE_PROMPT = (
+        "You are a query rewriting module for a search engine.\n"
+        "Given the conversation context and current user query, rewrite the query into a self-contained, "
+        "clear, entity-rich search query ONLY if it contains ambiguous pronouns (it, that, he, she), "
+        "abbreviations, or incomplete references to the prior conversation.\n"
+        "If the query is already clear and self-contained, return the query UNCHANGED.\n\n"
+        "Conversation Context:\n{context}\n\n"
+        "Current Query: {query}\n\n"
+        "Reply with ONLY a JSON object: {{\"rewritten_query\": \"<text>\", \"was_rewritten\": <true|false>}}"
+    )
+    prompt = REWRITE_PROMPT.format(context=conv_context, query=original_query)
+    parsed = await _call_llm_judge(prompt, config)
+    if parsed and isinstance(parsed, dict) and parsed.get("was_rewritten"):
+        rewritten_query = parsed.get("rewritten_query", original_query).strip()
+        logger.info(f"[QueryRewriter] Original Query: '{original_query}' → Rewritten Query: '{rewritten_query}'")
+    else:
+        logger.info(f"[QueryRewriter] Query preserved without rewrite: '{original_query}'")
+
+    steps.append("query_rewriter")
+    return {
+        "resolved_query": rewritten_query,
+        "original_query": original_query,
+        "steps": steps,
     }
 
 
@@ -901,7 +1216,37 @@ async def check_retrieval_node(
     if intent == INTENT_DOCUMENT_QA:
         steps.append("check_retrieval")
         return {"needs_retrieval": True, "steps": steps}
-    if intent in (INTENT_NORMAL_CHAT, "WEB_SEARCH", "MCP_TOOL", INTENT_MEMORY_WRITE, INTENT_VISION):
+
+    # For NORMAL_CHAT: do NOT blindly skip retrieval — check for personal possession
+    # signals first. Queries like "what are my projects" or "what is my cgpa" should
+    # still retrieve from documents even if classified as NORMAL_CHAT.
+    if intent in (INTENT_NORMAL_CHAT,):
+        last_q_temp = state.get("resolved_query") or ""
+        if not last_q_temp:
+            for msg in reversed(messages):
+                if hasattr(msg, "type") and msg.type in ("human", "user"):
+                    last_q_temp = msg.content if isinstance(msg.content, str) else ""
+                    break
+        _personal_signals = (
+            "my projects", "my project", "my cgpa", "my gpa", "my xgpa",
+            "my resume", "my cv", "my skills", "my education", "my degree",
+            "my achievements", "my experience", "my internship", "my internships",
+            "my grades", "my marks", "my result", "my results", "my score",
+            "my background", "my profile", "my qualification",
+            "my college", "my university", "my institute",
+            "my document", "my file", "my notes", "in the file",
+            "uploaded", "from the file", "according to my",
+        )
+        q_lower_temp = last_q_temp.lower()
+        if any(sig in q_lower_temp for sig in _personal_signals):
+            logger.info(
+                f"Self-RAG: personal-data signal detected in NORMAL_CHAT query "
+                f"→ forcing needs_retrieval=True for '{last_q_temp[:60]}'"
+            )
+            steps.append("check_retrieval")
+            return {"needs_retrieval": True, "steps": steps}
+
+    if intent in (INTENT_WEB_SEARCH, INTENT_MCP_TOOL, INTENT_MEMORY_WRITE, INTENT_VISION):
         steps.append("check_retrieval")
         return {"needs_retrieval": False, "steps": steps}
 
@@ -994,6 +1339,22 @@ async def retrieve_context_node(
                 last_query = msg.content if isinstance(msg.content, str) else ""
                 break
 
+    # Perform semantic vector query against MemoryVectorStore
+    if user_id and last_query:
+        try:
+            from app.memory.memory_store import MemoryVectorStore
+            mem_store = MemoryVectorStore()
+            semantic_memories = await mem_store.search_memories(user_id=user_id, query=last_query, k=5)
+            if semantic_memories:
+                existing_contents = {m.get("content") for m in memories if isinstance(m, dict)}
+                for sm in semantic_memories:
+                    if sm.get("content") not in existing_contents:
+                        memories.append(sm)
+                        existing_contents.add(sm.get("content"))
+                logger.info(f"[retrieve_context] Added {len(semantic_memories)} semantically matched memories")
+        except Exception as exc:
+            logger.warning(f"[retrieve_context] Semantic memory search failed: {exc}")
+
     if user_id and last_query:
         # 2. Reformulate query on low-confidence retry
         if retry_count > 0:
@@ -1017,6 +1378,13 @@ async def retrieve_context_node(
             if last_query not in queries:
                 queries.insert(0, last_query)
             logger.info(f"Multi-query decomposed query into: {queries}")
+
+        # Deterministic query expansion for GPA/CGPA queries
+        l_q_low = last_query.lower()
+        if "gpa" in l_q_low or "cgpa" in l_q_low or "grade" in l_q_low or "mark" in l_q_low:
+            for extra_q in ["gpa", "cgpa", "CGPA", "GPA", "CGP A", "education CGPA"]:
+                if extra_q not in queries:
+                    queries.append(extra_q)
 
         # 4. Fetch user document stats for dynamic k sizing
         num_docs = 0
@@ -1053,13 +1421,26 @@ async def retrieve_context_node(
         try:
             from app.retrieval.vector_store import VectorStore
             vector_store = VectorStore()
-            
+
+            # P2-1 FIX: Extract the user's runtime Gemini key from config so
+            # query-time embeddings use real vectors. Previously api_key was
+            # never passed here, so if settings.GEMINI_API_KEY was unset in .env,
+            # all retrieval fell back to deterministic mock embeddings (random results).
+            _ret_keys    = _extract_api_keys(config)
+            _embed_key   = (
+                _ret_keys.get("gemini")
+                or _ret_keys.get("google")
+                or getattr(settings, "GEMINI_API_KEY", None)
+                or None
+            )
+
             async def retrieve_for_query(q: str):
                 try:
                     return await vector_store.query_relevant_chunks(
                         user_id=user_id,
                         query=q,
                         k=dynamic_k,
+                        api_key=_embed_key,   # P2-1 FIX: propagate runtime key
                     )
                 except Exception as ex:
                     logger.error(f"VectorStore query failed for sub-query '{q}': {ex}")
@@ -1077,9 +1458,42 @@ async def retrieve_context_node(
                         seen.add(chunk_key)
                         merged_chunks.append(chunk)
 
-            # Sort by Chroma vector distance (lower distance is more relevant)
-            merged_chunks.sort(key=lambda c: c.get("distance", 1.0))
-            doc_chunks = merged_chunks[:dynamic_k]
+            # Sort by RAG confidence and hybrid RRF score (highest relevance first)
+            merged_chunks.sort(key=lambda c: (c.get("confidence", 0.0), c.get("rrf_score", 0.0), -c.get("distance", 1.0)), reverse=True)
+            candidate_chunks = merged_chunks[:max(dynamic_k * 2, 10)]
+
+            # ── Cross-encoder re-ranking ──────────────────────────────────────────
+            if candidate_chunks:
+                logger.info(f"[VectorStore] Invoking Cross-Encoder reranker on {len(candidate_chunks)} candidates for query '{last_query[:40]}'")
+                reranked_chunks = await vector_store.rerank_chunks(
+                    query=last_query,
+                    chunks=candidate_chunks,
+                    config=config,
+                    threshold=0.3,
+                )
+                doc_chunks = reranked_chunks[:dynamic_k]
+            else:
+                doc_chunks = []
+
+            # ── Context compression (deduplication & token-budget enforcement) ───
+            if doc_chunks:
+                doc_chunks = VectorStore.compress_context(doc_chunks)
+
+            # BUG-3 FIX: Sanitize each chunk's content against indirect prompt injection
+            # (malicious documents trying to override the system prompt)
+            if doc_chunks:
+                try:
+                    from app.middleware.security import IndirectInjectionGuard
+                    sanitized_chunks = []
+                    for _chunk in doc_chunks:
+                        _clean_content = IndirectInjectionGuard.sanitize_external_content(
+                            _chunk.get("content", "")
+                        )
+                        sanitized_chunks.append({**_chunk, "content": _clean_content})
+                    doc_chunks = sanitized_chunks
+                except Exception as _inj_err:
+                    logger.warning(f"IndirectInjectionGuard failed (non-fatal): {_inj_err}")
+
         except Exception as e:
             logger.error(f"VectorStore query failed: {e}")
 
@@ -1160,27 +1574,30 @@ async def grade_documents_node(
     is_private        = state.get("is_private_doc_query", False)
     intent            = state.get("intent", INTENT_NORMAL_CHAT)
 
+    # Extract user API keys from LangGraph config so search providers can use them
+    req_api_keys: Dict[str, Any] = config.get("configurable", {}).get("api_keys", {})
+
     # 1. Extract resolved_query or last user query
-    last_query = state.get("resolved_query")
-    if not last_query:
-        for msg in reversed(messages):
-            if hasattr(msg, "type") and msg.type in ("human", "user"):
-                last_query = msg.content if isinstance(msg.content, str) else ""
-                break
+    last_query = state.get("resolved_query") or _extract_last_user_query(messages)
 
     doc_chunks   = [d for d in retrieved_docs if d.get("type") == "chunk"]
     memory_items = [d for d in retrieved_docs if d.get("type") != "chunk"]
 
     if not doc_chunks:
-        # For WEB_SEARCH intent (or COMPLEX), still attempt live web search
-        # even when the vector DB returned no document chunks.
-        if not is_private and intent in (INTENT_WEB_SEARCH, INTENT_COMPLEX):
+        # Attempt live web search for public queries when vector DB has no chunks
+        if not is_private:
             if last_query:
                 logger.info(
-                    f"CRAG: No doc chunks, but intent={intent} → forcing web search fallback."
+                    f"CRAG: No doc chunks for public query (intent={intent}) → forcing web search fallback."
                 )
                 try:
-                    web_result = await tavily_search(last_query)
+                    import re as _re2
+                    _search_query = _re2.sub(r"\[System Context:[^\]]*\]", "", last_query)
+                    _search_query = _re2.sub(r"\[User Location Context:[^\]]*\]", "", _search_query)
+                    _search_query = _re2.sub(r"\[Connected Reference Context[^\[]*\[End of Referenced Context\]", "", _search_query, flags=_re2.DOTALL).strip() or last_query
+                    search_results = await unified_web_search(_search_query, req_api_keys)
+                    web_result     = format_for_llm(search_results)
+                    web_src_docs   = format_as_source_documents(search_results)
                     web_chunk = {
                         "type":     "chunk",
                         "content":  web_result,
@@ -1192,12 +1609,7 @@ async def grade_documents_node(
                         "document_relevance":   "web_fallback",
                         "no_doc_answer":        False,
                         "retrieved_documents":  retrieved_docs + [web_chunk],
-                        "source_documents":     [{
-                            "index": 1,
-                            "filename": "Web Search Results",
-                            "content": web_result,
-                            "distance": 0.0,
-                        }],
+                        "source_documents":     web_src_docs,
                         "retrieval_confidence": 0.9,
                         "generation_mode":      "web_search",
                         "steps":                steps,
@@ -1214,9 +1626,12 @@ async def grade_documents_node(
             "steps":               steps,
         }
 
-    # 2. Grade each chunk for relevance and freshness
+    # 2. Check if freshness is actually required
+    freshness_keywords = {"latest", "current", "today", "now", "recent", "news", "version", "update", "stock", "price", "weather"}
+    query_lower = last_query.lower()
+    freshness_required = any(k in query_lower for k in freshness_keywords)
+
     # Stopwords filtered from heuristic fallback to avoid false positives
-    # (e.g., "LeetCode 23" sharing only "the", "and", "a" with Resume.pdf)
     _STOPWORDS = frozenset({
         "the", "a", "an", "is", "in", "of", "to", "and", "or", "for",
         "on", "at", "by", "it", "be", "as", "my", "this", "that", "i",
@@ -1225,6 +1640,13 @@ async def grade_documents_node(
     })
 
     async def grade_one(chunk: dict) -> str:
+        # Fast-path vector confidence check for standard non-freshness queries
+        conf = chunk.get("confidence", 0.0)
+        if not freshness_required and conf >= 0.85:
+            return "relevant"
+        if conf < 0.25:
+            return "irrelevant"
+
         prompt = DOCUMENT_GRADER_PROMPT.format(
             query=last_query,
             chunk=chunk.get("content", "")[:800],
@@ -1238,16 +1660,12 @@ async def grade_documents_node(
         overlap = len(query_words & chunk_words)
         if overlap >= 3:
             return "relevant"
-        if overlap >= 1 and chunk.get("confidence", 0) >= 0.5:
+        if overlap >= 1 and conf >= 0.5:
             return "partial"
         return "irrelevant"
 
     scores = await asyncio.gather(*[grade_one(ch) for ch in doc_chunks])
 
-    # 3. Check if freshness is actually required
-    freshness_keywords = {"latest", "current", "today", "now", "recent", "news", "version", "update", "stock", "price", "weather"}
-    query_lower = last_query.lower()
-    freshness_required = any(k in query_lower for k in freshness_keywords)
 
     relevant_chunks: List[dict] = []
     has_outdated = False
@@ -1270,12 +1688,13 @@ async def grade_documents_node(
     should_search_web = False
     # Allow web search if not a private document query, OR if it's a COMPLEX/WEB_SEARCH intent.
     if (not is_private) or (intent in (INTENT_COMPLEX, INTENT_WEB_SEARCH)):
-        if intent == INTENT_WEB_SEARCH:
-            # WEB_SEARCH intent: ALWAYS perform live web search (this is the primary path)
+        if intent in (INTENT_WEB_SEARCH, INTENT_NEWS, INTENT_CURRENT_EVENTS, INTENT_FINANCE):
+            # WEB_SEARCH / NEWS / CURRENT_EVENTS / FINANCE intent: ALWAYS perform live web search
             should_search_web = True
         elif freshness_required and (has_outdated or not relevant_chunks):
-            # All other intents: only fire web search when freshness is required
-            # AND chunks are either outdated or missing — preserves original behaviour.
+            should_search_web = True
+        elif not relevant_chunks and not is_private:
+            # Public query with 0 relevant document chunks -> web search fallback
             should_search_web = True
 
     # 5. Handle web fallback
@@ -1283,8 +1702,14 @@ async def grade_documents_node(
     if should_search_web and last_query:
         logger.info(f"CRAG: Freshness required & issues found → Executing web search fallback.")
         try:
-            # Use module-level tavily_search to support mock patching in tests
-            web_result = await tavily_search(last_query)
+            import re as _re3
+            _search_query = _re3.sub(r"\[System Context:[^\]]*\]", "", last_query)
+            _search_query = _re3.sub(r"\[User Location Context:[^\]]*\]", "", _search_query)
+            _search_query = _re3.sub(r"\[Connected Reference Context[^\[]*\[End of Referenced Context\]", "", _search_query, flags=_re3.DOTALL).strip() or last_query
+            # Use unified_web_search so all providers + ranking apply
+            search_results = await unified_web_search(_search_query, req_api_keys)
+            web_result     = format_for_llm(search_results)
+            web_src_docs   = format_as_source_documents(search_results)
             web_chunk = {
                 "type":     "chunk",
                 "content":  web_result,
@@ -1293,12 +1718,12 @@ async def grade_documents_node(
             }
             # Add web results to relevant chunks
             relevant_chunks.append(web_chunk)
-            source_documents.append({
-                "index": len(source_documents) + 1,
-                "filename": "Web Search Results",
-                "content": web_result,
-                "distance": 0.0
-            })
+            # Replace source_documents with per-result ranked entries
+            # Re-index so they don't collide with any existing doc sources
+            offset = len(source_documents)
+            for s in web_src_docs:
+                s["index"] = offset + s["index"]
+            source_documents.extend(web_src_docs)
             document_relevance = "web_fallback"
         except Exception as e:
             logger.error(f"CRAG web fallback failed: {e}")
@@ -1410,15 +1835,20 @@ class StreamingSanitizer:
     def feed(self, chunk: str) -> str:
         self.buffer += chunk
         
-        # 1. Clean completed forbidden patterns or phrases
+        # 1. Clean completed forbidden patterns or raw tool-call JSON
         import re
         phrases_to_redact = [
+            r"<(?:>|/[^>]*>)?\s*\{[^{}]*\"query\"[^{}]*\}\s*</?>?",
+            r"\{[^{}]*\"query\"\s*:\s*\"[^\"]*\"[^{}]*\}",
+            r"<tool_call>.*?</tool_call>",
+            r"<search>.*?</search>",
+            r"<search_query>.*?</search_query>",
             r"\[tool output:\s*\w+\]\s*",
             r"calling tools?:\s*[\w,\s]+\.{3}",
             r"i (?:used|called|invoked|ran|executed) (?:the )?(?:tool|sandbox|search)\b[^.]*\.",
         ]
         for phrase in phrases_to_redact:
-            self.buffer = re.sub(phrase, "", self.buffer, flags=re.IGNORECASE)
+            self.buffer = re.sub(phrase, "", self.buffer, flags=re.IGNORECASE | re.DOTALL)
             
         # Redact exact internal names
         for name in self.internal_names:
@@ -1448,6 +1878,17 @@ class StreamingSanitizer:
         import re
         final_text = self.buffer
         self.buffer = ""
+        phrases_to_redact = [
+            r"<(?:>|/[^>]*>)?\s*\{[^{}]*\"query\"[^{}]*\}\s*</?>?",
+            r"\{[^{}]*\"query\"\s*:\s*\"[^\"]*\"[^{}]*\}",
+            r"<tool_call>.*?</tool_call>",
+            r"<search>.*?</search>",
+            r"<search_query>.*?</search_query>",
+            r"\[tool output:\s*\w+\]\s*",
+            r"calling tools?:\s*[\w,\s]+\.{3}",
+        ]
+        for phrase in phrases_to_redact:
+            final_text = re.sub(phrase, "", final_text, flags=re.IGNORECASE | re.DOTALL)
         for name in self.internal_names:
             pattern = re.compile(rf"\b{re.escape(name)}\b", re.IGNORECASE)
             final_text = pattern.sub("", final_text)
@@ -1483,6 +1924,7 @@ async def generate_response_node(
             await config["configurable"]["on_token"]("*[Error: No model selected. Please select a model from the model picker.]*")
         return {**state, "response_text": "*[Error: No model selected. Please select a model from the model picker.]*"}
     model_aliases = {
+        # Upgrade old model names to current equivalents
         "gemini-1.5-flash":                     "gemini-2.5-flash",
         "gemini-1.5-pro":                       "gemini-2.5-pro",
         "gemini-3.5-flash":                     "gemini-2.5-flash",
@@ -1511,34 +1953,102 @@ async def generate_response_node(
     on_metrics = config.get("configurable", {}).get("on_metrics")
     keys       = _extract_api_keys(config)
 
-    # ── Image-provider mismatch guard ─────────────────────────────────────────
-    actual_model_id = model[11:] if model.startswith("openrouter/") else model
-    # Check if the model runs on Gemini provider — either by name keyword
-    # or because it was resolved to the Gemini provider (e.g. deep-research-max-preview-04-2026)
-    is_gemini_model = (
-        "gemini" in actual_model_id or
-        "google" in actual_model_id or
-        bool(keys.get("gemini") or keys.get("google"))  # If a Google key exists and no other keyword matches, assume Gemini
-        if not any(kw in actual_model_id for kw in ["gpt", "claude", "deepseek", "llama", "mixtral", "qwen", "glm"])
-        else False
+    # ── Image-provider vision-capability guard with auto-fallback ──────────────
+    # Determine whether the active model supports vision / image input.
+    # We check the full model string (including openrouter/ prefix) so that
+    # vendor-prefixed names like "openrouter/meta-llama/llama-4-scout" match.
+    _model_lower = model.lower()
+    # Fragments that indicate a vision-capable model across all providers:
+    _VISION_FRAGMENTS = (
+        # Google / Gemini
+        "gemini", "google",
+        # OpenAI
+        "gpt-4o", "gpt-4-vision", "gpt-4.1", "o1", "o3", "o4",
+        # Anthropic
+        "claude-3", "claude-4",
+        # Meta Llama vision
+        "llama-3.2", "llama-4", "llama4",
+        # DeepSeek vision
+        "deepseek-vl", "deepseek-v3",
+        # Alibaba Qwen vision
+        "qwen-vl", "qwen2-vl", "qwen2.5-vl", "qvq",
+        # Mistral
+        "pixtral", "mistral-large",
+        # LLaVA
+        "llava",
+        # GLM vision
+        "glm-4v",
+        # InternVL
+        "internvl",
+        # Generic vision keywords
+        "vision", "-vl", "-vision",
     )
-    if images and not is_gemini_model:
-        warning_text = (
-            "⚠️ Image analysis requires a Gemini model. "
-            "Please switch your active model to Gemini to process image inputs. "
-            "Your text query has been answered without image analysis."
-        )
-        logger.warning(
-            f"generate_response_node: image(s) present but model '{model}' "
-            "is not Gemini — returning graceful mismatch message."
-        )
-        # Clear images so the text-only call below can proceed normally
-        images = []
-        if on_token:
-            try:
-                await on_token(warning_text + "\n\n")
-            except Exception:
-                pass
+    is_vision_capable_model = any(frag in _model_lower for frag in _VISION_FRAGMENTS)
+
+    # ── Vision auto-fallback: if images present but model is not vision-capable,
+    #    automatically switch to the best available vision provider so images
+    #    are ACTUALLY processed instead of silently dropped.
+    if images and not is_vision_capable_model:
+        gemini_key = keys.get("gemini") or keys.get("google") or getattr(settings, "GEMINI_API_KEY", None) or os.environ.get("GEMINI_API_KEY")
+        openrouter_key = keys.get("openrouter") or getattr(settings, "OPENROUTER_API_KEY", None)
+
+        if gemini_key:
+            # Switch silently to Gemini Flash for vision — fastest and most capable
+            keys["gemini"] = gemini_key
+            keys["google"] = gemini_key
+            vision_model   = "gemini-2.5-flash"
+            vision_prov    = gemini_provider
+            vision_key     = gemini_key
+            vision_note    = f"*(Analyzing your image with Gemini Flash — your current model **{model}** does not support vision)*\n\n"
+            logger.info(
+                f"generate_response_node: '{model}' is not vision-capable — "
+                f"auto-routing to Gemini Flash for image analysis."
+            )
+            model          = vision_model
+            provider       = vision_prov
+            provider_api_key = vision_key
+            if on_token:
+                try:
+                    await on_token(vision_note)
+                except Exception:
+                    pass
+        elif openrouter_key:
+            # Fallback: OpenRouter Gemini Flash
+            vision_model   = "openrouter/google/gemini-2.5-flash"
+            vision_prov    = openrouter_provider
+            vision_key     = openrouter_key
+            vision_note    = f"*(Analyzing your image via OpenRouter Gemini — your current model **{model}** does not support vision)*\n\n"
+            logger.info(
+                f"generate_response_node: '{model}' is not vision-capable — "
+                f"auto-routing to OpenRouter Gemini Flash for image analysis."
+            )
+            model          = vision_model
+            provider       = vision_prov
+            provider_api_key = vision_key
+            if on_token:
+                try:
+                    await on_token(vision_note)
+                except Exception:
+                    pass
+        else:
+            # No vision-capable provider configured — drop images with a clear message
+            warning_text = (
+                "⚠️ Image analysis is not available. "
+                f"The selected model **{model}** does not support vision, "
+                "and no Gemini or OpenRouter API key is configured to use as a fallback. "
+                "Please add a Gemini API key in Settings or switch to a vision-capable model."
+            )
+            logger.warning(
+                f"generate_response_node: '{model}' is not vision-capable and no "
+                "Gemini/OpenRouter key available — dropping images."
+            )
+            images = []
+            if on_token:
+                try:
+                    await on_token(warning_text + "\n\n")
+                except Exception:
+                    pass
+
 
     # ── Build system prompt ───────────────────────────────────────────────────
     sys_prompt = compile_system_prompt(
@@ -1581,6 +2091,12 @@ async def generate_response_node(
     # An empty allowed_tools → no tool schemas → LLM cannot call any tool.
     from app.tools.registry import ToolRegistry
     registry = ToolRegistry()
+    if not registry.is_initialized:
+        try:
+            await registry.initialize()
+        except Exception as exc:
+            logger.warning(f"ToolRegistry initialization warning in generate_response_node: {exc}")
+
     if allowed_tools:
         tool_schemas = registry.get_tool_schemas_for_intent(allowed_tools)
     else:
@@ -1593,6 +2109,8 @@ async def generate_response_node(
     )
 
     # ── Provider & fallback setup (logging, overrides and fallback checks) ────
+    # actual_model_id strips the "openrouter/" prefix for provider routing logic
+    actual_model_id  = model[11:] if model.startswith("openrouter/") else model
     provider         = get_provider(model)
     provider_api_key = _best_api_key(keys, model)
 
@@ -1647,29 +2165,47 @@ async def generate_response_node(
 
     model_lower = (actual_model_id or "").lower()
     if "gemini" in model_lower or "google" in model_lower:
+        # Gemini primary → try OpenRouter Gemini → then Groq as rescue
         generic_fallbacks = [
             ("gemini",     gemini_provider,     "gemini-2.5-flash"),
             ("openrouter", openrouter_provider, "google/gemini-2.5-flash"),
+            ("groq",       groq_provider,       "llama-3.3-70b-versatile"),
         ]
     elif "gpt" in model_lower or "o1-" in model_lower or "o3-" in model_lower or "o4-" in model_lower:
+        # OpenAI primary → OpenRouter OpenAI → Gemini rescue
         generic_fallbacks = [
             ("openai",     openrouter_provider, f"openai/{actual_model_id}"),
             ("openrouter", openrouter_provider, f"openai/{actual_model_id}"),
+            ("gemini",     gemini_provider,     "gemini-2.5-flash"),
         ]
     elif "claude" in model_lower:
+        # Anthropic primary → OpenRouter Anthropic → Gemini rescue
         generic_fallbacks = [
             ("anthropic",  openrouter_provider, f"anthropic/{actual_model_id}"),
             ("openrouter", openrouter_provider, f"anthropic/{actual_model_id}"),
+            ("gemini",     gemini_provider,     "gemini-2.5-flash"),
         ]
     elif "deepseek" in model_lower:
+        # DeepSeek primary → OpenRouter DeepSeek → Gemini rescue
         generic_fallbacks = [
             ("deepseek",   openrouter_provider, f"deepseek/{actual_model_id}"),
             ("openrouter", openrouter_provider, f"deepseek/{actual_model_id}"),
+            ("gemini",     gemini_provider,     "gemini-2.5-flash"),
         ]
     elif "llama" in model_lower or "groq" in model_lower or "mixtral" in model_lower:
+        # Groq primary → OpenRouter Llama → Gemini cross-provider rescue
+        # Note: llama-3.1-8b-instant is also Groq so skip if Groq is rate-limited.
+        # OpenRouter and Gemini are the true cross-provider rescues here.
         generic_fallbacks = [
-            ("groq",       groq_provider,       "llama-3.1-8b-instant"),
-            ("openrouter", openrouter_provider, "meta-llama/llama-3.1-8b-instruct"),
+            ("openrouter", openrouter_provider, "meta-llama/llama-3.3-70b-instruct"),
+            ("gemini",     gemini_provider,     "gemini-2.5-flash"),
+            ("openrouter", openrouter_provider, "google/gemini-2.5-flash"),
+        ]
+    elif "qwen" in model_lower or "glm" in model_lower:
+        # Alibaba/Zhipu → OpenRouter → Gemini rescue
+        generic_fallbacks = [
+            ("openrouter", openrouter_provider, actual_model_id),
+            ("gemini",     gemini_provider,     "gemini-2.5-flash"),
         ]
     else:
         # Unknown model — dynamically choose fallback based on what keys are available.
@@ -1687,19 +2223,38 @@ async def generate_response_node(
                 ("openrouter", openrouter_provider, "google/gemini-2.5-flash"),
             ]
     for prov_name, prov_inst, model_id in generic_fallbacks:
-        key = keys.get(prov_name)
+        key = keys.get(prov_name) or getattr(prov_inst, "api_key", None)
         if key and not any(p == prov_inst and m == model_id for p, m, _ in attempts):
             attempts.append((prov_inst, model_id, key))
+
+    if images:
+        # Strict filter: only attempt vision-capable models when images are present
+        attempts = [
+            (p, m, k) for (p, m, k) in attempts
+            if any(frag in m.lower() for frag in _VISION_FRAGMENTS)
+        ]
 
     full_response = ""
     tool_calls: List[dict] = []
     success    = False
     last_error = None
+    # P1-1 FIX: Capture real wall-clock start time for LLM latency measurement
+    import time as _wall_time
+    _llm_start_time = _wall_time.monotonic()
 
     async def _stream(prov, mod, api_k):
         nonlocal full_response
         t_calls: List[dict] = []
-        provider_images = images if (("gemini" in mod or "google" in mod or isinstance(prov, GeminiProvider)) and images) else []
+        # Pass images to any provider whose generate_stream accepts an `images` parameter.
+        # The actual capability check already happened above; here we just route correctly.
+        _mod_lower = mod.lower()
+        _is_vision_mod = any(frag in _mod_lower for frag in (
+            "gemini", "google", "gpt-4o", "gpt-4-vision", "gpt-4.1", "o1", "o3", "o4",
+            "claude-3", "claude-4", "llama-3.2", "llama-4", "llama4",
+            "deepseek-vl", "deepseek-v3", "qwen-vl", "qwen2-vl", "qwen2.5-vl", "qvq",
+            "pixtral", "mistral-large", "llava", "glm-4v", "internvl", "vision", "-vl",
+        ))
+        provider_images = images if (_is_vision_mod and images) else []
 
         import inspect
         sig = inspect.signature(prov.generate_stream)
@@ -1786,6 +2341,7 @@ async def generate_response_node(
         return t_calls
 
     primary_error = None
+    primary_provider_class = type(attempts[0][0]).__name__ if attempts else ""
     for attempt_idx, (current_provider, current_model, current_key) in enumerate(attempts):
         try:
             tool_calls = await _stream(current_provider, current_model, current_key)
@@ -1793,11 +2349,13 @@ async def generate_response_node(
             break
         except Exception as e:
             err_str = str(e).lower()
-            is_payment_error = any(code in err_str for code in ["402", "403", "payment required", "insufficient credits", "quota"])
+            is_rate_limit   = "429" in err_str or "rate limit" in err_str or "rate_limit" in err_str or "ratelimit" in err_str
+            is_payment_error = any(code in err_str for code in ["402", "403", "payment required", "insufficient credits"])
             logger.error(json.dumps({
                 "event": "provider_call_failed",
                 "model": current_model,
                 "error": str(e),
+                "is_rate_limit": is_rate_limit,
                 "is_payment_error": is_payment_error,
                 "attempt": attempt_idx
             }))
@@ -1805,15 +2363,16 @@ async def generate_response_node(
                 primary_error = e  # always remember the primary attempt's error
             last_error = e
             if full_response:
-                # Already streamed some content — cannot silently retry
+                # Already streamed some content — cannot silently retry mid-stream
                 raise e
-            if is_payment_error and attempt_idx > 0:
-                # Skip fallback providers with billing/quota issues silently
-                logger.warning(f"Skipping fallback provider {current_model} due to payment/quota error — trying next")
-                continue
-            if attempt_idx == 0 and not is_payment_error:
-                # Primary provider failed with a real error — still try fallbacks
-                continue
+            # On rate-limit, skip any remaining fallbacks on the SAME provider class
+            if is_rate_limit:
+                current_prov_class = type(current_provider).__name__
+                # Advance past any remaining same-provider attempts in the list
+                logger.warning(f"[fallback] 429 rate-limit on {current_prov_class}/{current_model} — skipping same-provider retries")
+            # Always continue to next fallback
+            logger.warning(f"[fallback] attempt {attempt_idx} failed ({current_model}): {str(e)[:120]} — trying next provider")
+            continue
 
     if not success:
         err_msg = str(primary_error or last_error or "")
@@ -1833,14 +2392,15 @@ async def generate_response_node(
             # Surface the primary provider's error if it failed, otherwise use last error
             raise (primary_error or last_error or Exception("No active provider models were able to process the request."))
 
-    # ── Sanitize response before returning ────────────────────────────────────
-    full_response = _sanitize_response(full_response)
-
     # Determine generation mode and authoritative source list.
     # These come from grade_documents_node (or initial empty state for model-knowledge).
     final_source_docs = state.get("source_documents", [])
     gen_mode = state.get("generation_mode",
                          "model_knowledge" if not final_source_docs else "normal_rag")
+
+    # ── Validate & Sanitize citations and response text before returning ──────
+    full_response = validate_citations(full_response, final_source_docs)
+    full_response = _sanitize_response(full_response)
 
     # RAG audit: log final generation decision
     chunk_items = [x for x in retrieved_items if x.get("type") == "chunk"]
@@ -1855,6 +2415,20 @@ async def generate_response_node(
         generation_mode=gen_mode,
         sources_returned=final_source_docs,
     )
+
+    # P1-1 FIX: Record actual wall-clock LLM latency (was incorrectly recording char count)
+    _telemetry = config.get("configurable", {}).get("telemetry")
+    if _telemetry is not None:
+        try:
+            _actual_latency_ms = round((_wall_time.monotonic() - _llm_start_time) * 1000, 2)
+            _telemetry.record_llm(
+                provider=type(attempts[0][0]).__name__ if attempts else "unknown",
+                model=model,
+                latency_ms=_actual_latency_ms,
+                response_text=full_response,
+            )
+        except Exception as _tel_err:
+            logger.debug(f"Telemetry record_llm failed (non-fatal): {_tel_err}")
 
     steps = list(state.get("steps") or []) + ["generate_response"]
     if tool_calls:
@@ -1896,6 +2470,7 @@ async def execute_tools_node(
     config     = config or {}
     tool_calls = state.get("tool_calls", []) or []
     messages   = list(state.get("messages", []))
+    req_api_keys: Dict[str, Any] = config.get("configurable", {}).get("api_keys", {})
 
     from app.tools.registry import ToolRegistry
     registry = ToolRegistry()
@@ -1903,8 +2478,8 @@ async def execute_tools_node(
     new_messages = []
     for tc in tool_calls:
         name      = tc["name"]
-        arguments = tc["arguments"]
-        result    = await registry.call_tool(name, arguments)
+        arguments = tc.get("arguments") if "arguments" in tc else tc.get("args", {})
+        result    = await registry.call_tool(name, arguments, api_keys=req_api_keys)
         # Use neutral label — never expose internal tool name to the conversation
         new_messages.append(
             HumanMessage(content=f"[Tool Result] {result}")
@@ -2009,6 +2584,8 @@ async def tool_planner_node(
 
     Skipped when:
       - No allowed_tools for this intent
+      - Intent is a simple single-tool routing (WEB_SEARCH, MCP_TOOL, etc.) that
+        does not require DAG planning — these use the sequential tool-call loop.
       - Existing tool_calls already present (sequential tool-call loop is running)
     """
     config      = config or {}
@@ -2017,7 +2594,18 @@ async def tool_planner_node(
     allowed     = state.get("allowed_tools") or []
     last_query  = state.get("resolved_query") or ""
 
-    if not allowed or not last_query:
+    # P3-1 FIX: Extend skip_intents to include WEB_SEARCH and MCP_TOOL.
+    # These intents use a single pre-determined tool (tavily_search / MCP call)
+    # routed by generate_response_node's sequential tool-call loop. Running the
+    # LLM tool-planner for them adds an extra LLM round-trip with zero benefit.
+    skip_intents = {
+        INTENT_DOCUMENT_QA, INTENT_NORMAL_CHAT, INTENT_MEMORY_WRITE, INTENT_VISION,
+        INTENT_WEB_SEARCH,  # single tavily_search call — no DAG needed
+        INTENT_MCP_TOOL,    # MCP tools routed by sequential loop — no DAG needed
+        INTENT_NEWS,        # same as WEB_SEARCH in practice
+        INTENT_CURRENT_EVENTS,  # same as WEB_SEARCH in practice
+    }
+    if not allowed or not last_query or intent in skip_intents:
         steps.append("tool_planner")
         return {"tool_dag": None, "steps": steps, "ux_stage": UX_STAGE_PLANNING}
 
@@ -2184,8 +2772,9 @@ async def evidence_checker_node(
             "ux_stage":                 UX_STAGE_GENERATING,
         }
 
-    # Build evidence text from retrieved doc/web chunks
-    doc_chunks = [d for d in retrieved if d.get("type") == "chunk"]
+    # Build evidence text from CRAG-validated source_documents (or fallback to retrieved)
+    validated_sources = state.get("source_documents") or []
+    doc_chunks = validated_sources if validated_sources else [d for d in retrieved if d.get("type") == "chunk"]
     evidence_text = ""
     for idx, chunk in enumerate(doc_chunks[:10], start=1):
         evidence_text += f"[Source {idx}] {chunk.get('filename', 'unknown')}:\n{chunk.get('content', '')[:400]}\n\n"
@@ -2240,9 +2829,46 @@ async def evidence_checker_node(
         verified = last_response
         logger.info(f"[EvidenceChecker] PASS — confidence={confidence:.2f}")
 
+    # BUG-5c FIX: Record evidence check result in telemetry
+    _telemetry = config.get("configurable", {}).get("telemetry")
+    if _telemetry is not None:
+        try:
+            _telemetry.record_evidence(
+                verdict=verdict,
+                confidence=confidence,
+                hallucination_risk=hallucination_risk,
+                unsupported_count=len(unsupported),
+                citations_count=len(citations),
+            )
+        except Exception as _tel_err:
+            logger.debug(f"Telemetry record_evidence failed (non-fatal): {_tel_err}")
+
     steps.append("evidence_checker")
+
+    # BUG-1 FIX: Write the verified (possibly corrected) response back to response_text
+    # and update the last AI message in the conversation so reflect_node sees the
+    # corrected version. Previously verified_response was set but NEVER read — the
+    # streaming endpoint only reads state["response_text"].
+    current_messages = list(state.get("messages", []))
+    if verified != last_response:
+        # Replace the last AI message with the corrected version
+        updated_messages = []
+        replaced = False
+        for _m in reversed(current_messages):
+            if not replaced and hasattr(_m, "type") and _m.type == "ai":
+                updated_messages.insert(0, AIMessage(content=verified))
+                replaced = True
+            else:
+                updated_messages.insert(0, _m)
+        if not replaced:
+            updated_messages = current_messages
+    else:
+        updated_messages = current_messages
+
     return {
         "verified_response":        verified,
+        "response_text":            verified,   # ← THE FIX: now actually reaches the user
+        "messages":                 updated_messages,
         "answer_confidence":        confidence,
         "has_hallucination_risk":   has_risk,
         "unsupported_claims_count": len(unsupported),

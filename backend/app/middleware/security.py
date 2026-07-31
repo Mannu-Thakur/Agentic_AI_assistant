@@ -119,3 +119,87 @@ class InputSanitizationMiddleware:
             await self.app(scope, mock_receive, send)
         else:
             await self.app(scope, receive, send)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Production Security Guardrails: Injection Defense & Secret Masking
+# ─────────────────────────────────────────────────────────────────────────────
+
+import re
+from typing import Tuple
+
+class PromptInjectionGuard:
+    """Detects direct prompt injection attempts and jailbreaks in user queries."""
+    
+    INJECTION_PATTERNS = [
+        r"ignore\s+(all\s+)?previous\s+instructions",
+        r"disregard\s+(all\s+)?prior\s+prompts",
+        r"you\s+are\s+now\s+a\s+DAN",
+        r"do\s+anything\s+now",
+        r"system\s*:\s*override",
+        r"override\s+system\s+prompt",
+        r"reveal\s+(your\s+)?system\s+prompt",
+        r"show\s+me\s+your\s+instructions",
+        r"print\s+your\s+initial\s+prompt",
+        r"reveal\s+all\s+api\s+keys",
+    ]
+
+    @classmethod
+    def inspect_prompt(cls, text: str) -> Tuple[bool, str]:
+        """Returns (is_suspicious, reason)."""
+        if not text:
+            return False, ""
+        
+        lowered = text.lower()
+        for pattern in cls.INJECTION_PATTERNS:
+            if re.search(pattern, lowered):
+                logger.warning(f"[SecurityGuard] Direct prompt injection detected matching pattern: '{pattern}'")
+                return True, f"Prompt injection pattern detected: {pattern}"
+        
+        return False, ""
+
+
+class IndirectInjectionGuard:
+    """Sanitizes third-party untrusted context (web snippets, doc chunks) to prevent indirect prompt injection."""
+
+    INDIRECT_PATTERNS = [
+        (r"\[System Context:.*?\]", "[Content Redacted]"),
+        (r"\[System Message:.*?\]", "[Content Redacted]"),
+        (r"Ignore previous instructions and.*", "[Content Neutralized]"),
+        (r"Forget all prior constraints and.*", "[Content Neutralized]"),
+    ]
+
+    @classmethod
+    def sanitize_external_content(cls, content: str) -> str:
+        if not content:
+            return content
+        
+        cleaned = content
+        for pattern, replacement in cls.INDIRECT_PATTERNS:
+            cleaned = re.sub(pattern, replacement, cleaned, flags=re.IGNORECASE | re.DOTALL)
+        
+        return cleaned
+
+
+class SecretRedactor:
+    """Redacts API keys and secrets from logs and LLM output to prevent secret leakage."""
+
+    SECRET_PATTERNS = [
+        r"AIzaSy[A-Za-z0-9_-]{20,}",                   # Gemini API key
+        r"sk-[A-Za-z0-9_-]{20,}",                      # OpenAI / generic sk key
+        r"gsk_[A-Za-z0-9_-]{20,}",                     # Groq key
+        r"tvly-[A-Za-z0-9_-]{20,}",                    # Tavily key
+        r"Bearer\s+[A-Za-z0-9_\-\.]{20,}",             # Bearer tokens
+    ]
+
+    @classmethod
+    def redact(cls, text: str) -> str:
+        if not text:
+            return text
+        
+        redacted = text
+        for pattern in cls.SECRET_PATTERNS:
+            redacted = re.sub(pattern, "[REDACTED_API_KEY]", redacted)
+        
+        return redacted
+

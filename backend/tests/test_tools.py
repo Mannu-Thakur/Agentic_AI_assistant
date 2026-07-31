@@ -1,6 +1,7 @@
 import sys
 import pytest
 import asyncio
+from unittest.mock import patch, MagicMock, AsyncMock
 from app.tools.local_tools import python_sandbox, tavily_search
 from app.tools.mcp_client import McpStdioClient
 from app.tools.registry import ToolRegistry
@@ -27,8 +28,12 @@ async def test_tavily_search_mock(monkeypatch):
     """
     Verify web search returns content results.
     """
+    from unittest.mock import patch, AsyncMock
+    from app.services.web_search import SearchResult
     monkeypatch.setattr("app.tools.local_tools.settings.TAVILY_API_KEY", "mock_key")
-    result = await tavily_search("fastapi best practices")
+    fake_res = [SearchResult(title="FastAPI Best Practices", url="https://example.com", snippet="FastAPI tips", source="duckduckgo")]
+    with patch("app.services.web_search.search_duckduckgo", new=AsyncMock(return_value=fake_res)):
+        result = await tavily_search("fastapi best practices")
     assert any(k in result for k in ("Result", "FastAPI", "DuckDuckGo", "Search", "Source"))
 
 @pytest.mark.anyio
@@ -137,7 +142,8 @@ async def test_agent_graph_tool_calling_loop():
     config = {
         "configurable": {
             "user_id": "test-user",
-            "chat_id": "test-chat"
+            "chat_id": "test-chat",
+            "gemini_api_key": "AIzaSyFakeKeyForTest1234567890",
         }
     }
 
@@ -145,8 +151,22 @@ async def test_agent_graph_tool_calling_loop():
     registry = ToolRegistry()
     await registry.initialize()
 
-    # Execute graph
-    final_state = await agent_graph.ainvoke(initial_state, config)
+    # Mock provider streaming response to simulate tool call on first call and final answer on second call
+    call_count = 0
+
+    async def mock_generate_stream(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            yield {"event": "tool_calls", "tool_calls": [{"name": "calculate", "args": {"expression": "8 * 8"}}]}
+        else:
+            yield {"event": "chunk", "text": "The calculated result is 64."}
+            yield {"event": "done"}
+
+    with patch("app.agent.nodes._call_llm_judge", new=AsyncMock(return_value={"intent": "MCP_TOOL"})):
+        with patch("app.agent.nodes.gemini_provider.generate_stream", side_effect=mock_generate_stream):
+            # Execute graph
+            final_state = await agent_graph.ainvoke(initial_state, config)
 
     # The agent should have loop-routed, executed the tool calculation,
     # and produced the final response in its history.

@@ -67,7 +67,7 @@ function App() {
               <Terminal className="w-6 h-6" />
             </div>
             <h3 className="font-medium">Backend Server</h3>
-            <span className="text-xs text-muted-foreground">FastAPI running on :8080</span>
+            <span className="text-xs text-muted-foreground">FastAPI running on :8000</span>
           </div>
 
           <div className="p-5 rounded-2xl border border-border bg-card shadow-sm flex flex-col items-center space-y-2">

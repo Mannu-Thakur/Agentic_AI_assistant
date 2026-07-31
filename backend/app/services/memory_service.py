@@ -120,6 +120,22 @@ class MemoryService:
         await db.commit()
         await db.refresh(mem)
 
+        # Sync memory to vector store for semantic retrieval
+        try:
+            from app.memory.memory_store import MemoryVectorStore
+            mem_store = MemoryVectorStore()
+            await mem_store.add_memory_item(
+                memory_id=str(mem.id),
+                user_id=user_id,
+                category=category,
+                content=content,
+                importance_score=importance_score,
+                project_id=project_id,
+                session_id=session_id,
+            )
+        except Exception as exc:
+            logger.warning(f"Memory vector store sync failed: {exc}")
+
         # Audit log memory write
         from app.services.audit_service import AuditService
         await AuditService.log_event(
@@ -141,6 +157,14 @@ class MemoryService:
             return False
         await db.delete(mem)
         await db.commit()
+
+        # Delete from memory vector store
+        try:
+            from app.memory.memory_store import MemoryVectorStore
+            mem_store = MemoryVectorStore()
+            await mem_store.delete_memory_item(memory_id)
+        except Exception as exc:
+            logger.warning(f"Memory vector store delete failed: {exc}")
 
         # Audit log memory delete
         from app.services.audit_service import AuditService
@@ -237,18 +261,14 @@ class MemoryService:
         except Exception as exc:
             logger.error(f"Failed to fetch user Gemini key: {exc}")
 
-        is_mock_run = provider.is_mock
-        if user_gemini_key:
-            is_mock_run = user_gemini_key.startswith("mock_")
-
         memories_to_create: List[dict] = []
 
-        if is_mock_run:
-            memories_to_create = _rule_based_extraction(user_content)
-        else:
+        if user_gemini_key and not str(user_gemini_key).startswith("mock_"):
             memories_to_create = await _llm_based_extraction(
                 provider, user_gemini_key, user_content, assistant_content
             )
+        else:
+            memories_to_create = _rule_based_extraction(user_content)
 
         if not memories_to_create:
             return
@@ -328,7 +348,25 @@ class MemoryService:
                     confidence=confidence,
                 )
                 db.add(mem)
+                await db.flush()
                 existing_norm_set.add(norm)
+
+                # Sync to vector store
+                try:
+                    from app.memory.memory_store import MemoryVectorStore
+                    mem_store = MemoryVectorStore()
+                    await mem_store.add_memory_item(
+                        memory_id=str(mem.id),
+                        user_id=user_id,
+                        category=category,
+                        content=content,
+                        importance_score=importance,
+                        project_id=project_id,
+                        session_id=session_id,
+                    )
+                except Exception as exc:
+                    logger.warning(f"Memory vector store sync failed in extraction: {exc}")
+
                 logger.info(f"[MemoryService] Saved '{category}' memory: {content[:60]}")
 
             await db.commit()

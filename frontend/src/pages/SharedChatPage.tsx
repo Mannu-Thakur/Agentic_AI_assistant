@@ -18,7 +18,13 @@ interface SharedChat {
 
 function formatTime(isoStr: string): string {
   try {
-    return new Date(isoStr).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    let s = isoStr.trim();
+    if (!s.endsWith('Z') && !/[+-]\d{2}:\d{2}$/.test(s)) {
+      s = s.replace(' ', 'T');
+      if (!s.includes('T')) s += 'T00:00:00Z';
+      else s += 'Z';
+    }
+    return new Date(s).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   } catch {
     return '';
   }
@@ -103,7 +109,7 @@ export default function SharedChatPage() {
   /* ── Loading ── */
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#030712] flex items-center justify-center">
+      <div className="min-h-screen bg-[#000000] flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
           <div className="w-12 h-12 rounded-2xl bg-accent/10 flex items-center justify-center">
             <Loader2 className="w-6 h-6 text-accent animate-spin" />
@@ -117,7 +123,7 @@ export default function SharedChatPage() {
   /* ── Error / Not found ── */
   if (error || !chat) {
     return (
-      <div className="min-h-screen bg-[#030712] flex items-center justify-center p-6">
+      <div className="min-h-screen bg-[#000000] flex items-center justify-center p-6">
         <div className="max-w-md w-full bg-[#0B0F19] border border-border rounded-2xl p-8 flex flex-col items-center gap-6 text-center shadow-2xl">
           <div className="w-14 h-14 rounded-2xl bg-red-500/10 flex items-center justify-center">
             <Lock className="w-7 h-7 text-red-400" />

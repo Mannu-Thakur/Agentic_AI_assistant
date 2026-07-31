@@ -64,10 +64,16 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-ai_assistant}
-      REDIS_HOST:   redis
-      REDIS_PORT:   6379
-      SECRET_KEY:   ${SECRET_KEY:?SECRET_KEY must be set in .env}
+      # Override DATABASE_URL to point at the postgres container (not SQLite)
+      DATABASE_URL:   postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-ai_assistant}
+      REDIS_HOST:     redis
+      REDIS_PORT:     6379
+      SECRET_KEY:     ${SECRET_KEY:?SECRET_KEY must be set in .env}
+      # Data directory paths must match the volume mount points below
+      VECTOR_DB_DIR:  /app/vector_db
+      UPLOAD_DIR:     /app/uploads
+      # Clear Windows Tesseract path — Linux binary is auto-detected at /usr/bin/tesseract
+      TESSERACT_CMD:  ""
     depends_on:
       postgres:
         condition: service_healthy

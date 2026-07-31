@@ -1,0 +1,32 @@
+# ── Secrets (never bake into image) ──────────────────────────────────────────
+.env
+*.env
+
+# ── Local databases ───────────────────────────────────────────────────────────
+*.db
+*.db-shm
+*.db-wal
+sql_app.db*
+test_*.db
+
+# ── Python artifacts ──────────────────────────────────────────────────────────
+venv/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+
+# ── Test / dev-only files ─────────────────────────────────────────────────────
+.pytest_cache/
+tests/
+verify_*.py
+
+# ── Data directories (use named Docker volumes instead) ───────────────────────
+uploads/
+vector_db/
+
+# ── Editor & OS noise ─────────────────────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
