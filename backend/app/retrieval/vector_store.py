@@ -346,9 +346,13 @@ class VectorStore:
                 return score, chunk
 
             import asyncio
+            # Dynamic timeout: allow 3s per chunk, capped at 20s total.
+            # Previously hardcoded at 2.0s which was always less than the 8s
+            # per-call timeout inside _call_llm_judge, causing silent fallback.
+            _rerank_timeout = min(20.0, len(candidate_chunks) * 3.0)
             scored = await asyncio.wait_for(
                 asyncio.gather(*[score_chunk(c) for c in candidate_chunks]),
-                timeout=2.0
+                timeout=_rerank_timeout
             )
 
             reranked = sorted(

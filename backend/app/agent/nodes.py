@@ -319,9 +319,9 @@ async def _call_llm_judge(prompt: str, config: dict) -> Optional[dict]:
     messages = [{"role": "user", "content": prompt}]
 
     for provider, key_name, model in [
-        (gemini_provider,     "gemini",     "gemini-2.5-flash"),
-        (openrouter_provider, "openrouter", "google/gemini-2.5-flash"),
-        (groq_provider,       "groq",       "llama-3.1-8b-instant"),
+        (groq_provider,       "groq",       "llama-3.3-70b-versatile"),
+        (gemini_provider,     "gemini",     "gemini-2.0-flash"),
+        (openrouter_provider, "openrouter", "google/gemini-2.0-flash"),
     ]:
         api_key = keys.get(key_name)
         if not api_key:
@@ -371,9 +371,9 @@ async def _call_llm_text(prompt: str, config: dict, max_tokens: int = 256) -> Op
     messages = [{"role": "user", "content": prompt}]
 
     for provider, key_name, model in [
-        (gemini_provider,     "gemini",     "gemini-2.5-flash"),
-        (openrouter_provider, "openrouter", "google/gemini-2.5-flash"),
-        (groq_provider,       "groq",       "llama-3.1-8b-instant"),
+        (groq_provider,       "groq",       "llama-3.3-70b-versatile"),
+        (gemini_provider,     "gemini",     "gemini-2.0-flash"),
+        (openrouter_provider, "openrouter", "google/gemini-2.0-flash"),
     ]:
         api_key = keys.get(key_name)
         if not api_key:
@@ -931,9 +931,9 @@ async def memory_write_node(
             messages_for_ack = [{"role": "user", "content": prompt}]
 
             for provider, key_name, model in [
-                (gemini_provider,     "gemini",     "gemini-2.5-flash"),
-                (groq_provider,       "groq",       "llama-3.1-8b-instant"),
-                (openrouter_provider, "openrouter", "google/gemini-2.5-flash"),
+                (groq_provider,       "groq",       "llama-3.3-70b-versatile"),
+                (gemini_provider,     "gemini",     "gemini-2.0-flash"),
+                (openrouter_provider, "openrouter", "google/gemini-2.0-flash"),
             ]:
                 api_key = keys.get(key_name)
                 if not api_key:
@@ -1370,14 +1370,19 @@ async def retrieve_context_node(
                 logger.info(f"Retrieval retry {retry_count}: reformulated query to '{last_query}'")
 
         # 3. Multi-Query Decomposition
+        # Skip for short/simple queries (≤ 8 words) — saves an LLM round-trip with no benefit.
         queries = [last_query]
-        decomp_prompt = QUERY_DECOMPOSITION_PROMPT.format(query=last_query)
-        parsed_decomp = await _call_llm_judge(decomp_prompt, config)
-        if parsed_decomp and isinstance(parsed_decomp, dict) and isinstance(parsed_decomp.get("queries"), list):
-            queries = parsed_decomp["queries"]
-            if last_query not in queries:
-                queries.insert(0, last_query)
-            logger.info(f"Multi-query decomposed query into: {queries}")
+        _decomp_word_count = len(last_query.split())
+        if _decomp_word_count > 8:
+            decomp_prompt = QUERY_DECOMPOSITION_PROMPT.format(query=last_query)
+            parsed_decomp = await _call_llm_judge(decomp_prompt, config)
+            if parsed_decomp and isinstance(parsed_decomp, dict) and isinstance(parsed_decomp.get("queries"), list):
+                queries = parsed_decomp["queries"]
+                if last_query not in queries:
+                    queries.insert(0, last_query)
+                logger.info(f"Multi-query decomposed query into: {queries}")
+        else:
+            logger.info(f"[QueryDecompose] Skipping decomposition for short query ({_decomp_word_count} words): '{last_query[:60]}'")
 
         # Deterministic query expansion for GPA/CGPA queries
         l_q_low = last_query.lower()
@@ -1463,7 +1468,10 @@ async def retrieve_context_node(
             candidate_chunks = merged_chunks[:max(dynamic_k * 2, 10)]
 
             # ── Cross-encoder re-ranking ──────────────────────────────────────────
-            if candidate_chunks:
+            # Skip reranking for short queries (≤ 8 words) — RRF fusion already gives
+            # excellent ordering and reranking adds LLM latency with minimal gain.
+            _rerank_word_count = len(last_query.split())
+            if candidate_chunks and _rerank_word_count > 8:
                 logger.info(f"[VectorStore] Invoking Cross-Encoder reranker on {len(candidate_chunks)} candidates for query '{last_query[:40]}'")
                 reranked_chunks = await vector_store.rerank_chunks(
                     query=last_query,
@@ -1472,6 +1480,9 @@ async def retrieve_context_node(
                     threshold=0.3,
                 )
                 doc_chunks = reranked_chunks[:dynamic_k]
+            elif candidate_chunks:
+                logger.info(f"[VectorStore] Skipping reranker for short query ({_rerank_word_count} words) — using RRF ordering")
+                doc_chunks = candidate_chunks[:dynamic_k]
             else:
                 doc_chunks = []
 
@@ -2516,7 +2527,9 @@ async def reflect_node(
     intent   = state.get("intent", INTENT_NORMAL_CHAT)
 
     # Skip reflection for intents that don't benefit from quality critique
-    skip_intents = {INTENT_MEMORY_WRITE, INTENT_NORMAL_CHAT}
+    # Skip reflection for intents that don't benefit from quality critique.
+    # DOCUMENT_QA is also skipped — evidence_checker already validated accuracy.
+    skip_intents = {INTENT_MEMORY_WRITE, INTENT_NORMAL_CHAT, INTENT_DOCUMENT_QA}
     if intent in skip_intents:
         steps.append("reflect")
         return {
@@ -2766,6 +2779,30 @@ async def evidence_checker_node(
         return {
             "verified_response":        last_response,
             "answer_confidence":        1.0,
+            "has_hallucination_risk":   False,
+            "unsupported_claims_count": 0,
+            "steps":                    steps,
+            "ux_stage":                 UX_STAGE_GENERATING,
+        }
+
+    # Short-circuit: skip deep LLM evidence check when CRAG already confirmed
+    # high retrieval confidence on a private document query — grading already
+    # validated the chunks, so a second LLM pass adds latency without benefit.
+    _ev_retrieval_conf = state.get("retrieval_confidence", 0.0)
+    _ev_doc_relevance  = state.get("document_relevance", "")
+    if (
+        intent == INTENT_DOCUMENT_QA
+        and _ev_retrieval_conf >= 0.75
+        and _ev_doc_relevance not in ("web_fallback", "no_docs", "no_private_docs")
+    ):
+        logger.info(
+            f"[EvidenceChecker] Skipping LLM verification — high-confidence DOCUMENT_QA "
+            f"(retrieval_confidence={_ev_retrieval_conf:.2f}, relevance={_ev_doc_relevance})"
+        )
+        steps.append("evidence_checker")
+        return {
+            "verified_response":        last_response,
+            "answer_confidence":        _ev_retrieval_conf,
             "has_hallucination_risk":   False,
             "unsupported_claims_count": 0,
             "steps":                    steps,

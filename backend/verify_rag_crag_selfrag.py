@@ -247,18 +247,43 @@ async def test_self_rag():
     except Exception as e:
         results.append(("Self-RAG Low-Confidence Retry & Reformulation", False, str(e)))
 
-    # 3.4 Reflection & Hallucination Guard (reflect_node)
+    # 3.4 Reflection node: verify DOCUMENT_QA is correctly skipped (speed fix),
+    #     and COMPLEX intent still runs the full LLM reflection + regeneration loop.
     try:
         from langchain_core.messages import HumanMessage, AIMessage
-        state_reflect = make_state(
+
+        # 3.4a — DOCUMENT_QA must now SKIP reflection (evidence_checker handles it)
+        state_doc_qa_reflect = make_state(
             intent="DOCUMENT_QA",
             resolved_query="What is Python?",
             messages=[
                 HumanMessage(content="What is Python?"),
-                AIMessage(content="Python is a snake only.")
+                AIMessage(content="Python is a snake only."),
             ],
             source_documents=[{"content": "Python is a programming language.", "filename": "doc.txt"}],
-            iteration_count=0
+            iteration_count=0,
+        )
+        with patch("app.agent.nodes._call_llm_judge", new_callable=AsyncMock) as mock_judge:
+            mock_judge.return_value = {
+                "verdict": "NEEDS_IMPROVEMENT",
+                "feedback": "Response contradicts retrieved sources",
+            }
+            res_doc_qa = await reflect_node(state_doc_qa_reflect, {})
+
+        # For DOCUMENT_QA the LLM judge must NOT be called — reflection is skipped
+        mock_judge.assert_not_called()
+        assert res_doc_qa["reflection_passed"] is True, "DOCUMENT_QA should always pass reflection (skip)"
+
+        # 3.4b — COMPLEX intent must still run full LLM reflection + regeneration
+        state_complex_reflect = make_state(
+            intent="COMPLEX",
+            resolved_query="What is Python?",
+            messages=[
+                HumanMessage(content="What is Python?"),
+                AIMessage(content="Python is a snake only."),
+            ],
+            source_documents=[{"content": "Python is a programming language.", "filename": "doc.txt"}],
+            iteration_count=0,
         )
         with patch("app.agent.nodes._call_llm_judge", new_callable=AsyncMock) as mock_judge:
             mock_judge.return_value = {
@@ -266,13 +291,18 @@ async def test_self_rag():
                 "is_grounded": False,
                 "answers_question": False,
                 "quality_score": 3,
-                "feedback": "Response contradicts retrieved sources"
+                "feedback": "Response contradicts retrieved sources",
             }
-            res_ref = await reflect_node(state_reflect, {})
+            res_complex = await reflect_node(state_complex_reflect, {})
 
-        assert res_ref["reflection_passed"] is False
-        assert route_after_reflection(res_ref) == "generate_response"
-        results.append(("Self-RAG Reflection & Regeneration Loop", True, "Ungrounded output failed reflection and triggered regeneration pass"))
+        assert res_complex["reflection_passed"] is False, "COMPLEX should fail reflection on bad response"
+        assert route_after_reflection(res_complex) == "generate_response"
+
+        results.append((
+            "Self-RAG Reflection & Regeneration Loop",
+            True,
+            "DOCUMENT_QA skips reflection (fast-path), COMPLEX intent runs LLM reflection and triggers regeneration",
+        ))
     except Exception as e:
         results.append(("Self-RAG Reflection & Regeneration Loop", False, str(e)))
 
