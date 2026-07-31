@@ -375,23 +375,23 @@ export const ChatInput = React.memo(function ChatInput({
     recognition.start();
   };
 
+  // Separate attachments by type for display
+  const imageAttachments = attachments.filter((a) => !!a.previewUrl);
+  const nonImageAttachments = attachments.filter((a) => !a.previewUrl);
+
   return (
     <form onSubmit={handleSubmit} className={`space-y-3 ${className}`}>
-      {/* Attachments Area */}
-      {attachments.length > 0 && (
+      {/* Non-image (doc / snippet) chips — shown ABOVE the input pill */}
+      {nonImageAttachments.length > 0 && (
         <div className="flex flex-wrap gap-2 animate-slide-up">
-          {attachments.map((att) => (
+          {nonImageAttachments.map((att) => (
             <div
               key={att.id}
               className="relative group/att bg-surface border border-border-2 rounded-xl p-2 flex items-center gap-2.5 min-w-[210px] max-w-[280px] shadow-sm"
             >
-              {att.previewUrl ? (
-                <img src={att.previewUrl} alt="preview" className="w-8 h-8 rounded-lg object-cover flex-shrink-0" />
-              ) : (
-                <div className="w-8 h-8 rounded-lg bg-accent/15 flex items-center justify-center text-accent flex-shrink-0">
-                  <FileText className="w-4 h-4" />
-                </div>
-              )}
+              <div className="w-8 h-8 rounded-lg bg-accent/15 flex items-center justify-center text-accent flex-shrink-0">
+                <FileText className="w-4 h-4" />
+              </div>
               <div className="min-w-0 flex-1">
                 <p className="text-[11px] font-semibold text-foreground truncate">{att.file.name}</p>
                 {att.isTextSnippet ? (
@@ -410,7 +410,6 @@ export const ChatInput = React.memo(function ChatInput({
                   </div>
                 )}
               </div>
-
               <div className="flex items-center gap-1 flex-shrink-0">
                 {att.isTextSnippet && (
                   <>
@@ -499,8 +498,40 @@ export const ChatInput = React.memo(function ChatInput({
         onChange={handleFileSelect}
       />
 
-      {/* Input bar card */}
-      <div className={`pill-input-bar ${isLocked ? 'opacity-50 cursor-not-allowed' : ''}`}>
+      {/* Input bar card — column layout to host inline image previews + input row */}
+      <div className={`pill-input-bar pill-input-bar--col ${isLocked ? 'opacity-50 cursor-not-allowed' : ''}`}>
+
+        {/* ── Inline image thumbnails row (inside the pill) ── */}
+        {imageAttachments.length > 0 && (
+          <div className="pill-image-preview-row">
+            {imageAttachments.map((att) => (
+              <div key={att.id} className="pill-image-thumb">
+                <img
+                  src={att.previewUrl}
+                  alt={att.file.name}
+                  className="pill-image-thumb__img"
+                />
+                {/* uploading spinner overlay */}
+                {att.status === 'uploading' && (
+                  <div className="pill-image-thumb__loading">
+                    <div className="pill-image-thumb__spinner" />
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => removeAttachment(att.id)}
+                  title="Remove image"
+                  className="pill-image-thumb__remove"
+                >
+                  <X className="w-2.5 h-2.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* ── Bottom row: Plus button + textarea + mic/send ── */}
+        <div className="pill-input-row">
         {/* Plus (+) Action Popover */}
         <div className="relative self-end mb-0.5" ref={plusMenuRef}>
           <button
@@ -723,6 +754,7 @@ export const ChatInput = React.memo(function ChatInput({
             </button>
           )}
         </div>
+        </div>{/* end pill-input-row */}
       </div>
 
       <div className="flex items-center justify-center text-[11px] text-[#808080] px-1 pt-1.5 font-normal tracking-wide">

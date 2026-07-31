@@ -11,6 +11,10 @@ def _trim_messages_for_token_budget(messages: List[Dict[str, str]], max_chars: i
     Ensures total message payload stays within Groq's payload & token limit (~16k chars).
     Preserves system instruction at [0] and the latest user turn at [-1].
     Trims middle messages if payload exceeds max_chars.
+
+    System prompt is capped at 60% of max_chars to guarantee room for conversation
+    history — this prevents RAG chunks embedded in the system prompt from eating
+    the entire budget and triggering HTTP 413 errors.
     """
     if not messages:
         return []
@@ -21,22 +25,36 @@ def _trim_messages_for_token_budget(messages: List[Dict[str, str]], max_chars: i
     sys_msg = [m for m in messages if m.get("role") == "system"]
     non_sys = [m for m in messages if m.get("role") != "system"]
 
+    # ── Cap the system prompt at 60% of max_chars ─────────────────────────────
+    # The system prompt embeds RAG chunks which can be very large. We cap it so
+    # that conversation history always has room — preventing HTTP 413 errors.
+    sys_budget = int(max_chars * 0.60)
+    if sys_msg:
+        sys_content = sys_msg[0].get("content", "")
+        if len(sys_content) > sys_budget:
+            sys_msg = [{
+                **sys_msg[0],
+                "content": sys_content[:sys_budget] + "\n[System Context Truncated to fit token budget]"
+            }]
+
     if not non_sys:
-        # If sys_msg itself is huge, truncate its text
-        if sys_msg and len(sys_msg[0].get("content", "")) > max_chars:
-            sys_msg[0] = {**sys_msg[0], "content": sys_msg[0]["content"][:max_chars] + "\n[System Context Truncated]"}
         return sys_msg
 
     last_user_msg = non_sys[-1]
     middle_msgs = non_sys[:-1]
 
+    # Budget remaining for conversation history after system prompt + last user message
+    sys_used = sum(len(m.get("content", "")) for m in sys_msg)
+    last_user_len = len(last_user_msg.get("content", ""))
+    budget = max_chars - sys_used - last_user_len
+
     # Keep adding middle messages from right (newest first) until budget is full
-    budget = max_chars - sum(len(m.get("content", "")) for m in sys_msg) - len(last_user_msg.get("content", ""))
     kept_middle = []
     current_size = 0
     for m in reversed(middle_msgs):
         m_len = len(m.get("content", ""))
-        if current_size + m_len <= max(budget, 2000):
+        # Never use a negative or zero budget floor
+        if budget > 0 and current_size + m_len <= budget:
             kept_middle.insert(0, m)
             current_size += m_len
         else:
@@ -136,9 +154,10 @@ class GroqProvider(BaseLLMProvider):
           data = response.json()
           break
         elif response.status_code == 413:
-          # Payload too large — perform emergency budget trim and retry
+          # Payload too large — perform emergency budget trim and retry with progressively smaller budgets
           if attempt < max_retries:
-            payload["messages"] = _trim_messages_for_token_budget(trimmed_messages, max_chars=8000)
+            emergency_budget = 6000 - (attempt * 1000)  # 6000 → 5000 → 4000 chars
+            payload["messages"] = _trim_messages_for_token_budget(trimmed_messages, max_chars=max(emergency_budget, 3000))
             await asyncio.sleep(0.5)
             continue
           else:
@@ -244,7 +263,8 @@ class GroqProvider(BaseLLMProvider):
         async with client.stream("POST", url, json=payload, headers=headers) as response:
           if response.status_code == 413:
             if attempt < max_retries:
-              payload["messages"] = _trim_messages_for_token_budget(trimmed_messages, max_chars=8000)
+              emergency_budget = 6000 - (attempt * 1000)  # 6000 → 5000 → 4000 chars
+              payload["messages"] = _trim_messages_for_token_budget(trimmed_messages, max_chars=max(emergency_budget, 3000))
               await asyncio.sleep(0.5)
               continue
             else:
@@ -332,6 +352,9 @@ class GroqProvider(BaseLLMProvider):
             "tokens_output": out_tokens,
             "cost_estimate": (input_tokens * 0.00005 + out_tokens * 0.00015) / 1000,
             "confidence_score": 0.85,
-            "memory_hits": 0
+            # memory_hits and chunks_used are placeholders; nodes.py overwrites these
+            # with the real values derived from retrieved_items after all nodes execute.
+            "memory_hits": 0,
+            "chunks_used": 0,
         }
     }

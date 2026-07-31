@@ -335,6 +335,54 @@ class ParserService:
             )
 
     @classmethod
+    def extract_text_image_bytes(cls, image_bytes: bytes) -> OcrResult:
+        """
+        Extract text from raw image bytes (PNG/JPEG/WEBP/BMP/TIFF) using pytesseract
+        with image preprocessing. Used as a fallback when vision API is unavailable.
+        """
+        try:
+            import io
+            from PIL import Image
+            import pytesseract
+        except ImportError:
+            return OcrResult(
+                text="[OCR unavailable: install pytesseract and Pillow]",
+                confidence=0.0,
+                has_tables=False,
+                layout_type="text",
+            )
+
+        try:
+            with Image.open(io.BytesIO(image_bytes)) as raw_img:
+                img = cls._preprocess_image_for_ocr(raw_img)
+                text = pytesseract.image_to_string(img, config="--oem 3 --psm 6")
+                
+                try:
+                    data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
+                    confs = [
+                        c for c in data.get("conf", [])
+                        if isinstance(c, (int, float)) and int(c) >= 0
+                    ]
+                    confidence = round(sum(confs) / (len(confs) * 100), 3) if confs else 0.5
+                except Exception:
+                    confidence = 0.5
+
+                return OcrResult(
+                    text=text.strip(),
+                    confidence=confidence,
+                    has_tables=False,
+                    layout_type="text",
+                )
+        except Exception as exc:
+            logger.warning(f"[OCR] Failed on image bytes: {exc}")
+            return OcrResult(
+                text=f"[OCR failed on image bytes: {exc}]",
+                confidence=0.0,
+                has_tables=False,
+                layout_type="text",
+            )
+
+    @classmethod
     def extract_text_pdf_ocr(cls, file_path: str) -> OcrResult:
         """
         OCR a scanned PDF by:

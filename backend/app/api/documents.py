@@ -38,6 +38,9 @@ ALLOWED_MIME_TYPES = {
     ".bmp":  ["image/bmp", "image/x-ms-bmp"],
     ".gif":  ["image/gif"],
     ".tiff": ["image/tiff"],
+    ".webp": ["image/webp"],
+    ".heic": ["image/heic"],
+    ".heif": ["image/heif"],
 }
 
 # ---------------------------------------------------------------------------

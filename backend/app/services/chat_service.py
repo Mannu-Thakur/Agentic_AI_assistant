@@ -168,6 +168,44 @@ class ChatService:
     return result.rowcount
 
   @staticmethod
+  async def delete_single_message(
+      db: AsyncSession, chat_id: str, message_id: str
+  ) -> int:
+    """Delete a specific message and any associated response that belongs to it."""
+    res = await db.execute(
+        select(Message).where(Message.id == message_id, Message.chat_id == chat_id)
+    )
+    target = res.scalar_one_or_none()
+    if not target:
+      return 0
+
+    ids_to_delete = [target.id]
+
+    # If deleting a user question, find its direct assistant answer(s)
+    if target.role == "user":
+      sub_res = await db.execute(
+          select(Message).where(
+              Message.chat_id == chat_id,
+              Message.created_at >= target.created_at
+          ).order_by(Message.created_at)
+      )
+      all_after = sub_res.scalars().all()
+      for m in all_after:
+        if m.id == target.id:
+          continue
+        if m.parent_id == target.id or m.role == "assistant":
+          ids_to_delete.append(m.id)
+        if m.role == "user" and m.id != target.id:
+          break
+
+    result = await db.execute(
+        delete(Message).where(Message.id.in_(ids_to_delete))
+    )
+    await db.commit()
+    return result.rowcount
+
+
+  @staticmethod
   async def update_chat_title(
       db: AsyncSession, chat_id: str, user_id: str, title: str
   ) -> Optional[Chat]:

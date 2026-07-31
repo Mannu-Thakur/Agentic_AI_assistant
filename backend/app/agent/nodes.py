@@ -146,6 +146,25 @@ def _extract_last_user_query(messages: list) -> str:
     return ""
 
 
+def _perform_tesseract_ocr_on_images(images: list) -> str:
+    """Extract text from base64 image payload using local Tesseract OCR fallback."""
+    import base64
+    from app.services.parser_service import ParserService
+    ocr_outputs = []
+    for idx, img in enumerate(images, start=1):
+        b64 = img.get("base64")
+        if not b64:
+            continue
+        try:
+            raw_bytes = base64.b64decode(b64)
+            res = ParserService.extract_text_image_bytes(raw_bytes)
+            if res and res.text and res.text.strip():
+                ocr_outputs.append(f"[Image {idx} OCR Text]:\n{res.text.strip()}")
+        except Exception as exc:
+            logger.warning(f"[Tesseract OCR Fallback] Error processing image {idx}: {exc}")
+    return "\n\n".join(ocr_outputs)
+
+
 def _extract_api_keys(config: dict) -> dict:
     """Return a dict of provider → api_key from graph config, falling back to server settings/env."""
     cfg = config.get("configurable", {})
@@ -1595,11 +1614,11 @@ async def grade_documents_node(
     memory_items = [d for d in retrieved_docs if d.get("type") != "chunk"]
 
     if not doc_chunks:
-        # Attempt live web search for public queries when vector DB has no chunks
-        if not is_private:
+        # Attempt live web search ONLY for search-specific public queries when vector DB has no chunks
+        if not is_private and intent in (INTENT_WEB_SEARCH, INTENT_NEWS, INTENT_CURRENT_EVENTS, INTENT_FINANCE):
             if last_query:
                 logger.info(
-                    f"CRAG: No doc chunks for public query (intent={intent}) → forcing web search fallback."
+                    f"CRAG: No doc chunks for public search query (intent={intent}) → forcing web search fallback."
                 )
                 try:
                     import re as _re2
@@ -1704,8 +1723,8 @@ async def grade_documents_node(
             should_search_web = True
         elif freshness_required and (has_outdated or not relevant_chunks):
             should_search_web = True
-        elif not relevant_chunks and not is_private:
-            # Public query with 0 relevant document chunks -> web search fallback
+        elif not relevant_chunks and not is_private and intent in (INTENT_WEB_SEARCH, INTENT_NEWS, INTENT_CURRENT_EVENTS, INTENT_FINANCE):
+            # Public search query with 0 relevant document chunks -> web search fallback
             should_search_web = True
 
     # 5. Handle web fallback
@@ -2042,23 +2061,42 @@ async def generate_response_node(
                 except Exception:
                     pass
         else:
-            # No vision-capable provider configured — drop images with a clear message
-            warning_text = (
-                "⚠️ Image analysis is not available. "
-                f"The selected model **{model}** does not support vision, "
-                "and no Gemini or OpenRouter API key is configured to use as a fallback. "
-                "Please add a Gemini API key in Settings or switch to a vision-capable model."
-            )
-            logger.warning(
-                f"generate_response_node: '{model}' is not vision-capable and no "
-                "Gemini/OpenRouter key available — dropping images."
-            )
+            # No vision-capable provider configured — perform Tesseract OCR fallback!
+            ocr_text = _perform_tesseract_ocr_on_images(images)
+            if ocr_text:
+                ocr_note = f"*(Extracted text from image using Tesseract OCR fallback — Gemini Vision key not configured for **{model}**)*\n\n"
+                logger.info(
+                    f"generate_response_node: Tesseract OCR fallback extracted text from {len(images)} images."
+                )
+                if on_token:
+                    try:
+                        await on_token(ocr_note)
+                    except Exception:
+                        pass
+                # Append OCR text into message state
+                for msg in reversed(messages):
+                    if hasattr(msg, "type") and getattr(msg, "type") in ("human", "user"):
+                        msg.content = f"{msg.content}\n\n[Extracted Image Text (Tesseract OCR Fallback)]:\n{ocr_text}"
+                        break
+                    elif isinstance(msg, dict) and msg.get("role") in ("human", "user"):
+                        msg["content"] = f"{msg.get('content', '')}\n\n[Extracted Image Text (Tesseract OCR Fallback)]:\n{ocr_text}"
+                        break
+            else:
+                warning_text = (
+                    "⚠️ Image analysis unavailable: Gemini Vision key is not configured, "
+                    "and Tesseract OCR did not find extractable text in the attached image."
+                )
+                logger.warning(
+                    f"generate_response_node: '{model}' is not vision-capable, no Gemini key, "
+                    "and Tesseract OCR returned empty text."
+                )
+                if on_token:
+                    try:
+                        await on_token(warning_text + "\n\n")
+                    except Exception:
+                        pass
             images = []
-            if on_token:
-                try:
-                    await on_token(warning_text + "\n\n")
-                except Exception:
-                    pass
+
 
 
     # ── Build system prompt ───────────────────────────────────────────────────
@@ -2385,6 +2423,42 @@ async def generate_response_node(
             logger.warning(f"[fallback] attempt {attempt_idx} failed ({current_model}): {str(e)[:120]} — trying next provider")
             continue
 
+    # ── Tesseract OCR Rescue: If all vision provider attempts failed ──────────
+    if not success and images and not full_response:
+        logger.info("[Vision Fallback] All vision attempts failed. Attempting Tesseract OCR rescue...")
+        ocr_text = _perform_tesseract_ocr_on_images(images)
+        if ocr_text:
+            ocr_rescue_note = "*(Gemini Vision API key is not configured or rate-limited — using local Tesseract OCR fallback. Note: for handwritten image notes, add a Gemini API key in Settings for 99%+ vision accuracy)*\n\n"
+            if on_token:
+                try:
+                    await on_token(ocr_rescue_note)
+                except Exception:
+                    pass
+            for m in reversed(raw_messages):
+                if m.get("role") == "user":
+                    m["content"] = f"{m['content']}\n\n[Extracted Image Text (Tesseract OCR Rescue)]:\n{ocr_text}"
+                    break
+            images = []
+            rescue_attempts = []
+            if keys.get("groq"):
+                rescue_attempts.append((groq_provider, "llama-3.3-70b-versatile", keys["groq"]))
+            if keys.get("openrouter"):
+                rescue_attempts.append((openrouter_provider, "meta-llama/llama-3.3-70b-instruct", keys["openrouter"]))
+            if keys.get("gemini") or keys.get("google"):
+                rescue_attempts.append((gemini_provider, "gemini-2.5-flash", keys.get("gemini") or keys.get("google")))
+
+            for r_prov, r_mod, r_key in rescue_attempts:
+                try:
+                    tool_calls = await _stream(r_prov, r_mod, r_key)
+                    success = True
+                    break
+                except Exception as r_err:
+                    logger.warning(f"[OCR Rescue] Attempt with {r_mod} failed: {r_err}")
+
+    # Track whether the final response is a transient error (should NOT be saved to history)
+    _is_error_response = False
+
+
     if not success:
         err_msg = str(primary_error or last_error or "")
         if "429" in err_msg or "rate limit" in err_msg.lower() or "quota" in err_msg.lower():
@@ -2399,6 +2473,10 @@ async def generate_response_node(
                 except Exception:
                     pass
             full_response = friendly_msg
+            # BUG FIX: Mark this as a transient error — do NOT save it into the conversation
+            # history as an AI message. If saved, the next LLM call would see the error text
+            # as a prior assistant turn and generate a confused response trying to address it.
+            _is_error_response = True
         else:
             # Surface the primary provider's error if it failed, otherwise use last error
             raise (primary_error or last_error or Exception("No active provider models were able to process the request."))
@@ -2454,11 +2532,19 @@ async def generate_response_node(
             "generation_mode":  gen_mode,
         }
 
-    ai_msg = AIMessage(content=full_response)
+    # Only append to conversation history when the response is a real AI turn.
+    # Error/rate-limit messages must NOT be stored — they would appear as prior assistant
+    # responses and cause the LLM to generate confused output on the next request.
+    if _is_error_response:
+        updated_messages = messages  # leave history unchanged
+    else:
+        ai_msg = AIMessage(content=full_response)
+        updated_messages = messages + [ai_msg]
+
     return {
         "response_text":   full_response,
         "tool_calls":      [],
-        "messages":        messages + [ai_msg],
+        "messages":        updated_messages,
         "steps":           steps,
         "iteration_count": iteration_count + 1,
         "source_documents": final_source_docs,   # ← authoritative: only used=True docs

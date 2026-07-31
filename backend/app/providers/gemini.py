@@ -263,7 +263,13 @@ class GeminiProvider(BaseLLMProvider):
                   "You have reached the API request limit. Please wait a moment before trying again or switch to another model."
               )
           elif response.status_code != 200:
-            raise Exception(f"Gemini streaming API returned error {response.status_code}")
+            error_body = await response.aread()
+            try:
+              err_data = json.loads(error_body)
+              err_msg = err_data.get("error", {}).get("message") or str(err_data)
+            except Exception:
+              err_msg = error_body.decode("utf-8", errors="ignore") or f"HTTP {response.status_code}"
+            raise Exception(f"Gemini streaming API error ({response.status_code}): {err_msg}")
           
           async for line in response.aiter_lines():
             line = line.strip()
@@ -273,7 +279,35 @@ class GeminiProvider(BaseLLMProvider):
             raw_data = line[6:]
             try:
               parsed = json.loads(raw_data)
-              parts = parsed["candidates"][0]["content"]["parts"]
+            except json.JSONDecodeError:
+              continue
+
+            # Surface API-level errors embedded in the SSE stream
+            if "error" in parsed:
+              err_info = parsed["error"]
+              err_msg = err_info.get("message") if isinstance(err_info, dict) else str(err_info)
+              raise Exception(f"Gemini API error: {err_msg}")
+
+            # Handle finish reasons that indicate no content (e.g. SAFETY, RECITATION)
+            candidates = parsed.get("candidates", [])
+            if not candidates:
+              # Could be a promptFeedback-only chunk — skip silently
+              continue
+
+            candidate = candidates[0]
+            finish_reason = candidate.get("finishReason", "")
+            if finish_reason in ("SAFETY", "RECITATION", "OTHER", "BLOCKED"):
+              block_msg = f"Response blocked by Gemini safety filters (reason: {finish_reason})."
+              # Check for safety ratings detail
+              ratings = candidate.get("safetyRatings", [])
+              if ratings:
+                blocked = [r["category"] for r in ratings if r.get("blocked")]
+                if blocked:
+                  block_msg += f" Blocked categories: {', '.join(blocked)}."
+              raise Exception(block_msg)
+
+            try:
+              parts = candidate["content"]["parts"]
               for part in parts:
                 if "text" in part:
                   chunk_text = part["text"]
@@ -288,7 +322,7 @@ class GeminiProvider(BaseLLMProvider):
                       "name": fc["name"],
                       "arguments": fc.get("args", {})
                   })
-            except (KeyError, IndexError, json.JSONDecodeError):
+            except (KeyError, IndexError):
               continue
 
           break
@@ -311,6 +345,9 @@ class GeminiProvider(BaseLLMProvider):
             "tokens_output": out_tokens or len(tool_calls) * 5,
             "cost_estimate": (input_tokens * 0.000075 + (out_tokens or len(tool_calls) * 5) * 0.0003) / 1000,
             "confidence_score": 0.92,
-            "memory_hits": 0
+            # memory_hits and chunks_used are placeholders; nodes.py overwrites these
+            # with the real values derived from retrieved_items after all nodes execute.
+            "memory_hits": 0,
+            "chunks_used": 0,
         }
     }

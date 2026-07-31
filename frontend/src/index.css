@@ -461,13 +461,14 @@
     mask-image: linear-gradient(to right, black 80%, transparent 100%);
   }
 
-  /* User message bubble — sleek dark pill / rounded capsule */
+  /* User message bubble — sleek dark pill / rounded capsule (GPT style) */
   .user-bubble {
-    background: #212121;
-    border: 1px solid #2B2B2B;
+    background: #2f2f2f;
+    border: 1px solid rgba(255, 255, 255, 0.1);
     color: #F2F2F2;
-    border-radius: 20px;
-    box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+    border-radius: 22px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+    word-break: break-word;
   }
 
   /* Assistant message — clean no-bg */
@@ -560,11 +561,14 @@
 /* ============================================================
    MARKDOWN PROSE  (ChatGPT-grade Typography Overhaul)
    ============================================================ */
+/* ============================================================
+   MARKDOWN PROSE  (ChatGPT Presentation Overhaul)
+   ============================================================ */
 .prose-chat {
-  color: #F3F4F6;
-  line-height: 1.68;
-  font-size: 1rem;            /* 16px */
-  font-weight: 450;
+  color: #F9FAFB;
+  line-height: 1.7;
+  font-size: 0.98rem;
+  font-weight: 400;
   word-break: break-word;
   overflow-wrap: anywhere;
   min-width: 0;
@@ -583,44 +587,48 @@
 .prose-chat h5,
 .prose-chat h6 {
   font-weight: 700;
-  line-height: 1.33;
+  line-height: 1.35;
   margin-top: 1.6em;
-  margin-bottom: 0.6em;
+  margin-bottom: 0.65em;
   color: #FFFFFF;
-  letter-spacing: -0.015em;
+  letter-spacing: -0.01em;
 }
 .prose-chat :first-child { margin-top: 0; }
 
 .prose-chat h1 {
-  font-size: 1.5rem;
-  border-bottom: 1px solid #2B2B2B;
+  font-size: 1.45rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
   padding-bottom: 0.4em;
 }
 .prose-chat h2 {
-  font-size: 1.25rem;
-  border-bottom: 1px solid #2B2B2B;
-  padding-bottom: 0.3em;
+  font-size: 1.22rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding-bottom: 0.35em;
 }
-.prose-chat h3 { font-size: 1.125rem; font-weight: 650; color: #F3F4F6; }
-.prose-chat h4 { font-size: 1rem; font-weight: 600; color: #D1D5DB; }
-.prose-chat h5, .prose-chat h6 { font-size: 0.9rem; font-weight: 600; color: #9CA3AF; }
+.prose-chat h3 { font-size: 1.1rem; font-weight: 650; color: #FFFFFF; }
+.prose-chat h4 { font-size: 0.98rem; font-weight: 600; color: #F3F4F6; }
+.prose-chat h5, .prose-chat h6 { font-size: 0.9rem; font-weight: 600; color: #D1D5DB; }
 
 /* ── Paragraphs ── */
-.prose-chat p { margin-bottom: 1.15em; }
+.prose-chat p { margin-bottom: 1.1em; color: #F9FAFB; }
 .prose-chat p:last-child { margin-bottom: 0; }
 
 /* ── Lists ── */
 .prose-chat ul,
 .prose-chat ol {
-  padding-left: 1.75rem;
+  padding-left: 1.4rem;
   margin-bottom: 1.15em;
 }
 .prose-chat ul { list-style-type: disc; }
 .prose-chat ol { list-style-type: decimal; }
 .prose-chat li {
-  margin-bottom: 0.4em;
-  padding-left: 0.25rem;
+  margin-bottom: 0.45em;
+  padding-left: 0.2rem;
   line-height: 1.65;
+  color: #F9FAFB;
+}
+.prose-chat li::marker {
+  color: #D1D5DB;
 }
 .prose-chat li:last-child { margin-bottom: 0; }
 
@@ -631,7 +639,7 @@
 .prose-chat ol ul {
   margin-top: 0.35em;
   margin-bottom: 0.35em;
-  padding-left: 1.5rem;
+  padding-left: 1.3rem;
 }
 .prose-chat ul ul     { list-style-type: circle; }
 .prose-chat ul ul ul  { list-style-type: square; }
@@ -667,42 +675,50 @@
   font-weight: 800;
 }
 
-/* ── Blockquotes ── */
+/* ── Blockquotes (ChatGPT Callout Accent Style) ── */
 .prose-chat blockquote {
-  border-left: 3px solid #4B5563;
+  border-left: 3px solid #6b7280;
   padding: 0.65em 1.1em;
   margin: 1.25em 0;
-  background: rgba(255, 255, 255, 0.025);
-  border-radius: 0 8px 8px 0;
-  color: #D1D5DB;
-  font-style: italic;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 0 10px 10px 0;
+  color: #FFFFFF;
+  font-style: normal;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+}
+.prose-chat blockquote p {
+  margin-bottom: 0.3em;
+  color: #FFFFFF;
+}
+.prose-chat blockquote p:last-child {
+  margin-bottom: 0;
 }
 
 /* ── Links ── */
 .prose-chat a {
-  color: #F3F4F6;
+  color: #FFFFFF;
   text-decoration: underline;
   text-underline-offset: 3px;
-  text-decoration-color: #4B5563;
+  text-decoration-color: #6B7280;
   text-decoration-thickness: 1px;
   transition: color 0.15s, text-decoration-color 0.15s;
 }
 .prose-chat a:hover { color: #FFFFFF; text-decoration-color: #9CA3AF; }
 
 /* ── Inline emphasis ── */
-.prose-chat strong { font-weight: 750; color: #FFFFFF; }
-.prose-chat em    { font-style: italic; color: #E5E7EB; }
+.prose-chat strong { font-weight: 700; color: #FFFFFF; }
+.prose-chat em    { font-style: italic; color: #F3F4F6; }
 
-/* ── Inline code ── */
+/* ── Inline code (ChatGPT Dark Pill Badge) ── */
 .prose-chat code {
   font-size: 0.85em;
-  background: #1F2937;
-  padding: 0.18em 0.45em;
-  border-radius: 5px;
-  border: 1px solid #374151;
-  color: #F9FAFB;
-  font-family: 'JetBrains Mono', monospace;
-  font-weight: 500;
+  background: #27272a;
+  padding: 0.18em 0.55em;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #FFFFFF;
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  font-weight: 600;
   white-space: pre-wrap;
   word-break: break-word;
   overflow-wrap: anywhere;
@@ -712,20 +728,20 @@
 .prose-chat .table-wrapper {
   overflow-x: auto;
   margin: 1.5em 0;
-  border-radius: 10px;
-  border: 1px solid #374151;
-  box-shadow: 0 2px 12px rgba(0,0,0,0.2);
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
 }
 .prose-chat table {
   width: 100%;
   border-collapse: collapse;
   font-size: 0.875rem;
-  border-radius: 10px;
+  border-radius: 12px;
   overflow: hidden;
 }
 .prose-chat thead {
-  background: #111827;
-  border-bottom: 2px solid #374151;
+  background: #18181b;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
 }
 .prose-chat th {
   padding: 0.75em 1em;
@@ -740,30 +756,66 @@
 .prose-chat td {
   padding: 0.65em 1em;
   color: #E5E7EB;
-  border-top: 1px solid #374151;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
   vertical-align: top;
   line-height: 1.55;
 }
 .prose-chat tbody tr:nth-child(even) td {
-  background: rgba(255, 255, 255, 0.02);
+  background: rgba(255, 255, 255, 0.015);
 }
 .prose-chat tbody tr:hover td {
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.04);
   color: #FFFFFF;
 }
 
-/* ── Horizontal Rule ── */
+/* ── Horizontal Rule (ChatGPT Subtle Lining) ── */
 .prose-chat hr {
   border: none;
   height: 1px;
-  background: #374151;
-  margin: 2em 0;
+  background: rgba(255, 255, 255, 0.12);
+  margin: 1.75em 0;
+}
+
+/* ── Code Block Card Container (ChatGPT Dark Rounded Pill) ── */
+.code-block-wrapper {
+  margin: 1.25em 0;
+  border-radius: 16px;
+  overflow: hidden;
+  background: #18181b;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+}
+
+.code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 1rem;
+  background: #27272a;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: #a1a1aa;
+}
+
+.code-block-header .lang-badge {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-family: 'JetBrains Mono', Consolas, monospace;
+}
+
+.code-block-header .lang-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #71717a;
 }
 
 /* ── Images ── */
 .prose-chat img {
   max-width: 100%;
-  border-radius: 8px;
+  border-radius: 12px;
   border: 1px solid hsl(var(--border));
   margin: 0.75em 0;
 }
@@ -1064,16 +1116,17 @@ select {
   transform: scale(0.92);
 }
 
-/* Prose chat inline code override (cleaner than Tailwind classes in JSX) */
+/* Prose chat inline code override (ChatGPT dark pill badge) */
 .prose-chat-inline-code {
-  font-size: 0.83em;
-  background: hsl(var(--accent) / 0.1);
-  padding: 0.18em 0.5em;
-  border-radius: 5px;
-  border: 1px solid hsl(var(--accent) / 0.2);
-  color: hsl(245 80% 80%);
-  font-family: 'JetBrains Mono', monospace;
-  white-space: pre-wrap;   /* was nowrap — caused overflow on long flowchart lines */
+  font-size: 0.85em;
+  background: #27272a;
+  padding: 0.18em 0.55em;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #FFFFFF;
+  font-weight: 600;
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  white-space: pre-wrap;
   word-break: break-word;
   overflow-wrap: anywhere;
 }
@@ -1386,6 +1439,111 @@ select {
   cursor: not-allowed;
   background: #ffffff;
   color: #000000;
+}
+
+/* ============================================================
+   PILL INPUT BAR — column variant (for inline image previews)
+   ============================================================ */
+.pill-input-bar--col {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  padding: 0;
+}
+
+/* The bottom action row (Plus + textarea + send) */
+.pill-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px 8px 14px;
+}
+
+/* ─── Inline image thumbnail strip ─── */
+.pill-image-preview-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 14px 6px 14px;
+}
+
+/* Individual thumbnail card */
+.pill-image-thumb {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  border-radius: 10px;
+  overflow: hidden;
+  flex-shrink: 0;
+  background: #2a2a2a;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.45);
+  transition: transform 0.15s ease;
+}
+
+.pill-image-thumb:hover {
+  transform: scale(1.03);
+}
+
+.pill-image-thumb__img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  border-radius: 10px;
+}
+
+/* Loading overlay */
+.pill-image-thumb__loading {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+}
+
+/* Spinner ring */
+.pill-image-thumb__spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid rgba(255,255,255,0.25);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Floating remove (×) button */
+.pill-image-thumb__remove {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.75);
+  color: #ffffff;
+  border: 1px solid rgba(255,255,255,0.18);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transform: scale(0.8);
+  transition: opacity 0.15s, transform 0.15s, background 0.12s;
+}
+
+.pill-image-thumb:hover .pill-image-thumb__remove {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.pill-image-thumb__remove:hover {
+  background: rgba(220, 38, 38, 0.85);
 }
 
 

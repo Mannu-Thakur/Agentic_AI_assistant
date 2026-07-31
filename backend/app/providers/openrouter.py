@@ -213,6 +213,9 @@ class OpenRouterProvider(BaseLLMProvider):
             "tokens_output": out_tokens,
             "cost_estimate": (input_tokens * 0.00015 + out_tokens * 0.00045) / 1000,
             "confidence_score": 0.88,
-            "memory_hits": 0
+            # memory_hits and chunks_used are placeholders; nodes.py overwrites these
+            # with the real values derived from retrieved_items after all nodes execute.
+            "memory_hits": 0,
+            "chunks_used": 0,
         }
     }

@@ -157,6 +157,19 @@ async def delete_chat(
     raise HTTPException(status_code=404, detail="Conversation session not found")
   return {"detail": "Chat deleted successfully"}
 
+@router.delete("/{chat_id}/messages/{message_id}")
+async def delete_message(
+    chat_id: str,
+    message_id: str,
+    current_user: UserOut = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+  chat = await ChatService.get_chat_by_id(db, chat_id, current_user.id)
+  if not chat:
+    raise HTTPException(status_code=404, detail="Conversation session not found")
+  deleted_count = await ChatService.delete_single_message(db, chat_id, message_id)
+  return {"detail": "Message deleted", "deleted_count": deleted_count}
+
 @router.post("/{chat_id}/messages")
 async def stream_agent_message(
     chat_id: str,

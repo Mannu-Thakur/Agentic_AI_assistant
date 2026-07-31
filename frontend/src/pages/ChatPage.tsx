@@ -33,7 +33,7 @@ import {
   MessageSquare, Pencil, Trash2, Pin,
   BookOpen, Share2, Download, FileJson, FileText,
   MoreHorizontal, Archive, FolderClosed, ChevronDown, ChevronUp, Files,
-  Settings, LogOut, ListOrdered, GitBranch, Link, PenLine
+  Settings, LogOut, ListOrdered, GitBranch, Link, PenLine, Eye, ExternalLink
 } from 'lucide-react';
 
 // ─────────────────────────────────────────────────────────────
@@ -290,11 +290,11 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
                 setTimeout(() => setCopied(false), 2000);
               });
             }}
-            className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold text-foreground-3 hover:text-foreground hover:bg-surface-2 transition-all"
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium text-gray-400 hover:text-white hover:bg-white/10 transition-all cursor-pointer"
             aria-label="Copy code"
           >
-            {copied ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
-            <span>{copied ? 'Copied' : 'Copy'}</span>
+            {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
+            <span>{copied ? 'Copied!' : 'Copy'}</span>
           </button>
         </div>
       </div>
@@ -304,8 +304,8 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
         PreTag="pre"
         showLineNumbers={lineCount > 4}
         wrapLongLines={false}
-        customStyle={{ margin: 0, borderRadius: 0, fontSize: '0.82rem', background: '#0d1117' }}
-        codeTagProps={{ style: { fontFamily: "'JetBrains Mono', monospace" } }}
+        customStyle={{ margin: 0, padding: '1rem', borderRadius: 0, fontSize: '0.85rem', background: '#1e1e1e' }}
+        codeTagProps={{ style: { fontFamily: "'JetBrains Mono', Consolas, monospace", color: '#ffffff' } }}
       >
         {code}
       </SyntaxHighlighter>
@@ -676,6 +676,7 @@ export default function ChatPage() {
   const [renameValue, setRenameValue]             = useState('');
   const [editingMsgId, setEditingMsgId]           = useState<string | null>(null);
   const [selectedUserFile, setSelectedUserFile]   = useState<{ name: string; content: string } | null>(null);
+  const [selectedLightboxImage, setSelectedLightboxImage] = useState<string | null>(null);
   const [editValue, setEditValue]                 = useState('');
   const [editImages, setEditImages]               = useState<{ id: string; base64: string; mimeType: string; previewUrl: string }[]>([]);
   const [connectedChat, setConnectedChat]         = useState<{ id: string; title: string } | null>(null);
@@ -1168,7 +1169,8 @@ export default function ChatPage() {
         for (const img of imagesToSend) {
           const mimeToExt: Record<string, string> = {
             'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif',
-            'image/bmp': '.bmp', 'image/tiff': '.tiff', 'image/webp': '.png',
+            'image/bmp': '.bmp', 'image/tiff': '.tiff', 'image/webp': '.webp',
+            'image/heic': '.heic', 'image/heif': '.heif',
           };
           const ext = mimeToExt[img.mimeType] || '.png';
           const byteChars = atob(img.base64);
@@ -1738,8 +1740,30 @@ export default function ChatPage() {
   };
 
   const handleDeleteMessage = (msgId: string) => {
-    const nextMsgs = messages.filter((m) => m.id !== msgId);
+    const targetIdx = messages.findIndex((m) => m.id === msgId);
+    if (targetIdx === -1) return;
+
+    const targetMsg = messages[targetIdx];
+    const idsToRemove = new Set<string>([msgId]);
+
+    // When a question (user message) is deleted, also delete the associated answer (assistant message)
+    if (targetMsg.role === 'user') {
+      for (let i = targetIdx + 1; i < messages.length; i++) {
+        const nextMsg = messages[i];
+        if (nextMsg.parent_id === msgId || (i === targetIdx + 1 && nextMsg.role === 'assistant')) {
+          idsToRemove.add(nextMsg.id);
+        } else if (nextMsg.role === 'user') {
+          break;
+        }
+      }
+    }
+
+    const nextMsgs = messages.filter((m) => !idsToRemove.has(m.id));
     setMessages(nextMsgs);
+
+    if (activeChatId) {
+      apiRequest(`/chats/${activeChatId}/messages/${msgId}`, { method: 'DELETE' }).catch(() => { /* silent */ });
+    }
   };
 
   // ── Share ────────────────────────────────────────────────────
@@ -2671,28 +2695,28 @@ export default function ChatPage() {
                         highlightedMsgId === m.id ? 'message-highlight' : ''
                       }`}
                     >
-                      <div className={`max-w-[85%] flex flex-col gap-1 ${isUser ? 'items-end' : 'items-start'}`}>
+                      <div className={`max-w-[88%] sm:max-w-[82%] flex flex-col gap-1 ${isUser ? 'items-end' : 'items-start'}`}>
                         {/* User message block */}
                         {isUser && (
                           isEditing ? (
-                            <div className="w-full min-w-[320px] sm:min-w-[440px] md:min-w-[520px] bg-[#212121] border border-[#2B2B2B] rounded-2xl p-4 shadow-xl animate-fade-in-up">
+                            <div className="w-full min-w-[320px] sm:min-w-[500px] md:min-w-[620px] bg-[#212121] border border-[#383838] rounded-2xl p-4 shadow-2xl animate-fade-in-up">
                               {/* Image previews inside edit box */}
                               {editImages.length > 0 && (
-                                <div className="flex flex-wrap gap-2 mb-3">
+                                <div className="flex flex-wrap gap-2.5 mb-3">
                                   {editImages.map((img) => (
                                     <div key={img.id} className="relative group/editImg">
                                       <img
                                         src={img.previewUrl}
                                         alt="attached image"
-                                        className="w-16 h-16 rounded-xl object-cover border border-[#2B2B2B]"
+                                        className="w-20 h-20 sm:w-24 sm:h-24 rounded-xl object-cover border border-[#383838]"
                                       />
                                       <button
                                         type="button"
                                         onClick={() => setEditImages((prev) => prev.filter((i) => i.id !== img.id))}
-                                        className="absolute -top-1.5 -right-1.5 p-1 rounded-full bg-[#212121] hover:bg-red-600 text-[#F2F2F2] border border-[#2B2B2B] transition-colors shadow-md"
+                                        className="absolute -top-1.5 -right-1.5 p-1 rounded-full bg-[#212121] hover:bg-red-600 text-[#F2F2F2] border border-[#383838] transition-colors shadow-md"
                                         title="Remove image"
                                       >
-                                        <X className="w-3 h-3" />
+                                        <X className="w-3.5 h-3.5" />
                                       </button>
                                     </div>
                                   ))}
@@ -2764,8 +2788,12 @@ export default function ChatPage() {
                                 ? m.images.map((img) => img.base64.startsWith('data:') ? img.base64 : `data:${img.mimeType || 'image/png'};base64,${img.base64}`)
                                 : []);
 
-                            return (
-                              <div className="user-bubble rounded-2xl rounded-tr-sm px-4 py-3 text-sm flex flex-col gap-2">
+                            const hasAttachments = displayImageUrls.length > 0 || userAttachedFiles.length > 0;
+
+                             return (
+                              <div className={`user-bubble rounded-2xl rounded-tr-sm px-4 py-3 sm:px-4.5 sm:py-3.5 text-sm flex flex-col gap-2.5 transition-all ${
+                                hasAttachments ? 'w-fit max-w-full min-w-[160px] sm:min-w-[220px]' : ''
+                              }`}>
                                 {refTitle && (
                                   <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#2a2a2a] border border-[#2B2B2B] text-[11px] font-medium text-[#BDBDBD] mb-0.5 w-fit">
                                     <Link className="w-3 h-3 text-[#BDBDBD]" />
@@ -2773,18 +2801,33 @@ export default function ChatPage() {
                                   </div>
                                 )}
                                 {displayImageUrls.length > 0 && (
-                                  <div className="flex flex-wrap gap-1.5 mb-1">
+                                  <div className="flex flex-wrap gap-2 my-0.5 max-w-full">
                                     {displayImageUrls.map((url, idx) => (
-                                      <img key={idx} src={url} alt="attached image" className="max-w-[200px] max-h-[150px] rounded-lg object-contain border border-[#2B2B2B] cursor-pointer hover:opacity-90 transition-opacity" onClick={() => window.open(url, '_blank')} />
+                                      <div
+                                        key={idx}
+                                        className="relative group/userImg overflow-hidden rounded-xl border border-white/10 bg-[#161616] shadow-sm transition-all hover:border-white/20"
+                                      >
+                                        <img
+                                          src={url}
+                                          alt="attached image"
+                                          className="max-h-[220px] sm:max-h-[260px] w-auto max-w-[280px] sm:max-w-[340px] rounded-xl object-contain cursor-pointer hover:scale-[1.015] transition-transform duration-200"
+                                          onClick={() => setSelectedLightboxImage(url)}
+                                        />
+                                        <div className="absolute inset-0 bg-black/0 group-hover/userImg:bg-black/25 transition-colors pointer-events-none flex items-center justify-center">
+                                          <span className="opacity-0 group-hover/userImg:opacity-100 transition-opacity bg-black/75 backdrop-blur-sm text-white px-2.5 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 shadow-md border border-white/10">
+                                            <Eye className="w-3.5 h-3.5" /> View
+                                          </span>
+                                        </div>
+                                      </div>
                                     ))}
                                   </div>
                                 )}
                                 {userAttachedFiles.length > 0 && (
-                                  <div className="flex flex-col gap-2 my-1">
+                                  <div className="flex flex-col gap-2 my-0.5">
                                     {userAttachedFiles.map((file, fIdx) => (
-                                      <div key={fIdx} className="flex items-center justify-between gap-3 p-2.5 rounded-xl bg-[#2a2a2a] border border-[#2B2B2B]">
-                                        <div className="flex items-center gap-2 min-w-0">
-                                          <FileText className="w-4 h-4 text-[#BDBDBD]" />
+                                      <div key={fIdx} className="flex items-center justify-between gap-3 p-3 rounded-xl bg-[#2a2a2a] border border-[#383838]">
+                                        <div className="flex items-center gap-2.5 min-w-0">
+                                          <FileText className="w-4 h-4 text-[#BDBDBD] flex-shrink-0" />
                                           <div className="min-w-0">
                                             <p className="text-xs font-medium text-[#F2F2F2] truncate">{file.name}</p>
                                             <p className="text-[10px] text-[#BDBDBD]">{file.content.length.toLocaleString()} chars</p>
@@ -2793,7 +2836,7 @@ export default function ChatPage() {
                                         <button
                                           type="button"
                                           onClick={() => setSelectedUserFile(file)}
-                                          className="px-2.5 py-1 text-[11px] font-medium rounded-lg bg-[#333] hover:bg-[#3a3a3a] text-[#F2F2F2] border border-[#2B2B2B] transition-colors flex items-center gap-1"
+                                          className="px-3 py-1 text-xs font-medium rounded-lg bg-[#333] hover:bg-[#444] text-[#F2F2F2] border border-[#444] transition-colors flex items-center gap-1 flex-shrink-0"
                                         >
                                           View
                                         </button>
@@ -2801,7 +2844,11 @@ export default function ChatPage() {
                                     ))}
                                   </div>
                                 )}
-                                {userPrompt && <p className="whitespace-pre-wrap break-words leading-relaxed text-[#F2F2F2]">{userPrompt}</p>}
+                                {userPrompt && (
+                                  <p className="whitespace-pre-wrap break-words leading-relaxed text-[#F2F2F2] selection:bg-[#3b82f6]/30">
+                                    {userPrompt}
+                                  </p>
+                                )}
                               </div>
                             );
                           })()
@@ -2834,7 +2881,9 @@ export default function ChatPage() {
                             /\b(current|now|what is|what's|tell me|show me|is it|right now|give me)\b/i.test(prevUserMsg);
 
                           return (
-                            <div className="assistant-bubble text-foreground rounded-2xl rounded-bl-sm px-4 py-3 text-sm w-full">
+                            <div className={`assistant-bubble text-foreground rounded-2xl rounded-bl-sm px-4 py-3 text-sm w-full transition-all ${
+                              developerMode && selectedMessageId === m.id ? 'ring-2 ring-accent/60 bg-accent/[0.03] shadow-sm' : ''
+                            }`}>
                               {/* Response meta bar — premium editorial style */}
                               {responseMeta?.isLong && !isStreaming && (
                                 <div className="response-meta-bar">
@@ -2891,6 +2940,17 @@ export default function ChatPage() {
                               />
                               <div className="w-px h-3.5 bg-border mx-0.5" />
                               <ActionBtn icon={RefreshCw} label="Regenerate" onClick={() => handleRetry(idx)} />
+                              {developerMode && (
+                                <>
+                                  <div className="w-px h-3.5 bg-border mx-0.5" />
+                                  <ActionBtn
+                                    icon={Terminal}
+                                    label="Telemetry"
+                                    onClick={() => setSelectedMessageId(m.id)}
+                                    active={selectedMessageId === m.id}
+                                  />
+                                </>
+                              )}
                               <div className="w-px h-3.5 bg-border mx-0.5" />
                               <AnswerContextMenu
                                 createdAt={m.created_at}
@@ -3033,18 +3093,45 @@ export default function ChatPage() {
                   const hasTool = msg.tool_calls && msg.tool_calls.length > 0;
                   return (
                     <div className="space-y-4 animate-scale-in">
+
+                      {/* Fallback warning badge — shown when actual model ≠ selected model */}
+                      {(() => {
+                        const actualModelUsed = mx.model_used || '';
+                        if (!actualModelUsed || actualModelUsed === activeModel) return null;
+                        return (
+                          <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-400">
+                            <svg className="w-3 h-3 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" /></svg>
+                            <span className="text-[9px] font-semibold leading-tight">Fallback used — selected model unavailable</span>
+                          </div>
+                        );
+                      })()}
                       {/* Telemetry metadata Grid */}
                       <div className="grid grid-cols-2 gap-2">
-                        {[
-                          { label: 'Provider',   val: currentModel.provider, color: '' },
-                          { label: 'Model',      val: mx.model_used || currentModel.name,   color: '' },
-                          { label: 'Latency',    val: mx.latency_ms >= 1000 ? `${(mx.latency_ms/1000).toFixed(2)}s` : `${mx.latency_ms}ms`, color: '' },
-                          { label: 'Est. Cost',  val: `$${(mx.cost_estimate ?? 0).toFixed(6)}`, color: 'text-green-400' },
-                          { label: 'Tokens In',  val: mx.tokens_input?.toLocaleString(),  color: '' },
-                          { label: 'Tokens Out', val: mx.tokens_output?.toLocaleString(), color: '' },
-                          { label: 'Mem Hits',   val: String(mx.memory_hits ?? 0), color: '' },
-                          { label: 'RAG Chunks', val: String(mx.chunks_used ?? 0), color: '' },
-                        ].map(({ label, val, color }) => (
+                        {(() => {
+                          const actualModelUsed = mx.model_used || '';
+                          const derivedProvider = (() => {
+                            if (!actualModelUsed) return currentModel.provider;
+                            const m = actualModelUsed.toLowerCase();
+                            if (m.startsWith('openrouter/') || m === 'openrouter') return 'OpenRouter';
+                            if (m.includes('gemini') || m.includes('google')) return 'Google Gemini';
+                            if (m.includes('llama') || m.includes('mixtral') || m.includes('groq')) return 'Groq';
+                            if (m.includes('gpt') || m.includes('o1-') || m.includes('o3-') || m.includes('o4-')) return 'OpenAI';
+                            if (m.includes('claude')) return 'Anthropic';
+                            if (m.includes('deepseek')) return 'DeepSeek';
+                            if (m.includes('qwen') || m.includes('glm')) return 'Alibaba';
+                            return currentModel.provider;
+                          })();
+                          return [
+                            { label: 'Provider',   val: derivedProvider, color: '' },
+                            { label: 'Model',      val: actualModelUsed || currentModel.name, color: '' },
+                            { label: 'Latency',    val: mx.latency_ms >= 1000 ? `${(mx.latency_ms/1000).toFixed(2)}s` : `${mx.latency_ms}ms`, color: '' },
+                            { label: 'Est. Cost',  val: `$${(mx.cost_estimate ?? 0).toFixed(6)}`, color: 'text-green-400' },
+                            { label: 'Tokens In',  val: mx.tokens_input?.toLocaleString(),  color: '' },
+                            { label: 'Tokens Out', val: mx.tokens_output?.toLocaleString(), color: '' },
+                            { label: 'Mem Hits',   val: String(mx.memory_hits ?? 0), color: '' },
+                            { label: 'RAG Chunks', val: String(mx.chunks_used ?? 0), color: '' },
+                          ];
+                        })().map(({ label, val, color }) => (
                           <div key={label} className="p-2.5 rounded-xl border border-border bg-surface-2 space-y-1">
                             <span className="text-[9px] font-semibold uppercase tracking-wider text-foreground-3">{label}</span>
                             <p className={`text-xs font-bold truncate ${color || 'text-foreground'}`}>{val ?? '—'}</p>
@@ -3066,6 +3153,7 @@ export default function ChatPage() {
                       {activeHudTab === 'flow' && (
                         <div className="pl-5 space-y-5 relative before:absolute before:left-2 before:top-1 before:bottom-1 before:w-px before:bg-border">
                           {[
+                            { key: 'classify_intent',    label: 'classify_intent',   icon: GitBranch, detail: 'Intent classification & routing' },
                             { key: 'plan',             label: 'plan',             icon: Sparkles, detail: 'Decompose execution paths' },
                             { key: 'check_retrieval',  label: 'check_retrieval',  icon: Search,   detail: 'Self-RAG evaluation verdict' },
                             { key: 'retrieve_context', label: 'retrieve_context', icon: Database, detail: `Hits: ${mx.memory_hits ?? 0} memory / ${mx.chunks_used ?? 0} RAG chunk` },
@@ -3073,6 +3161,7 @@ export default function ChatPage() {
                             { key: 'generate_response',label: 'generate_response',icon: Cpu,      detail: 'Processed prompt + system instructions' },
                             { key: 'execute_tools',    label: 'execute_tools',    icon: Terminal, detail: hasTool ? `${msg.tool_calls!.length} tool calls` : 'Bypassed' },
                             { key: 'reflect',          label: 'reflect',          icon: RefreshCw, detail: 'Quality score criteria check' },
+                            { key: 'memory_write',     label: 'memory_write',     icon: Database, detail: 'Semantic memory indexing' },
                           ].map(({ key, label, icon: Icon, detail }) => {
                             const active = steps.includes(key) || (key === 'execute_tools' && hasTool);
                             return (
@@ -3154,6 +3243,9 @@ export default function ChatPage() {
 
       {/* Attached text file viewer modal */}
       <UserFileModal file={selectedUserFile} onClose={() => setSelectedUserFile(null)} />
+
+      {/* High-res Image Lightbox Preview Modal */}
+      <ImageLightboxModal imageUrl={selectedLightboxImage} onClose={() => setSelectedLightboxImage(null)} />
 
       {/* Per-Answer Share Modal */}
       <ShareModal
@@ -3627,6 +3719,117 @@ export const UserFileModal = React.memo(function UserFileModal({
             Close
           </button>
         </div>
+      </div>
+    </div>
+  );
+});
+
+// Image Lightbox Modal helper component
+export const ImageLightboxModal = React.memo(function ImageLightboxModal({
+  imageUrl,
+  onClose,
+}: {
+  imageUrl: string | null;
+  onClose: () => void;
+}) {
+  if (!imageUrl) return null;
+
+  const handleOpenOriginal = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (imageUrl.startsWith('data:')) {
+      try {
+        const parts = imageUrl.split(';base64,');
+        const mime = parts[0].replace('data:', '') || 'image/png';
+        const bstr = atob(parts[1]);
+        let n = bstr.length;
+        const u8arr = new Uint8Array(n);
+        while (n--) {
+          u8arr[n] = bstr.charCodeAt(n);
+        }
+        const blob = new Blob([u8arr], { type: mime });
+        const blobUrl = URL.createObjectURL(blob);
+        const win = window.open(blobUrl, '_blank');
+        if (!win) {
+          const a = document.createElement('a');
+          a.href = blobUrl;
+          a.download = `image-${Date.now()}.${mime.split('/')[1] || 'png'}`;
+          a.click();
+        }
+      } catch {
+        window.open(imageUrl, '_blank');
+      }
+    } else {
+      window.open(imageUrl, '_blank');
+    }
+  };
+
+  const handleDownload = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const a = document.createElement('a');
+    a.href = imageUrl;
+    a.download = `image-${Date.now()}.png`;
+    a.click();
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex flex-col items-center justify-center p-4 sm:p-6 animate-fade-in select-none"
+      onClick={onClose}
+    >
+      {/* Top action bar */}
+      <div
+        className="w-full max-w-5xl flex items-center justify-between mb-3 px-2 z-10"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-medium text-[#BDBDBD] bg-white/10 px-3 py-1 rounded-full border border-white/10 backdrop-blur-sm">
+            Image Preview
+          </span>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={handleDownload}
+            className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white border border-white/15 transition-all shadow-md flex items-center gap-1.5 text-xs font-medium backdrop-blur-sm active:scale-95"
+            title="Download Image"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>Download</span>
+          </button>
+          <button
+            type="button"
+            onClick={handleOpenOriginal}
+            className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white border border-white/15 transition-all shadow-md flex items-center gap-1.5 text-xs font-medium backdrop-blur-sm active:scale-95"
+            title="Open original image in new tab"
+          >
+            <ExternalLink className="w-3.5 h-3.5" />
+            <span>Open Original</span>
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white border border-white/15 transition-all shadow-md backdrop-blur-sm active:scale-95"
+            title="Close (Esc)"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+      </div>
+
+      {/* Image container — sleek & screen proportional */}
+      <div
+        className="relative max-w-5xl max-h-[82vh] flex items-center justify-center"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <img
+          src={imageUrl}
+          alt="Expanded preview"
+          className="max-h-[80vh] max-w-full rounded-2xl object-contain shadow-2xl border border-white/15 animate-scale-up"
+        />
       </div>
     </div>
   );
