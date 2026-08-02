@@ -8,6 +8,7 @@ import io
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 from app.core.database import get_db
 from app.api.auth import get_current_user
 from app.schemas.auth import UserOut
@@ -15,6 +16,8 @@ from app.schemas.document import DocumentOut
 from app.services.document_service import DocumentService
 from app.services.parser_service import ParserService
 from app.core.config import settings
+from app.core.security import decrypt_api_key
+from app.models.user import ApiKey
 
 logger = logging.getLogger(__name__)
 
@@ -335,6 +338,26 @@ async def upload_document(
             chat_id=chat_id,
         )
 
+        # ── Resolve user's Gemini API key for real semantic ingestion ────────
+        # User keys are stored encrypted in the DB — decrypt and pass to
+        # the ingestion pipeline so chunks get real Gemini embeddings.
+        user_api_key: Optional[str] = None
+        try:
+            key_result = await db.execute(
+                select(ApiKey).where(
+                    ApiKey.user_id == current_user.id,
+                    ApiKey.provider_name.in_(["google", "gemini"]),
+                )
+            )
+            db_key = key_result.scalar_one_or_none()
+            if db_key and db_key.encrypted_api_key:
+                user_api_key = decrypt_api_key(db_key.encrypted_api_key)
+        except Exception as _key_exc:
+            logger.warning(f"[Upload] Could not fetch user Gemini key for ingestion: {_key_exc}")
+        # Fall back to server-level key if user key is absent
+        if not user_api_key:
+            user_api_key = settings.GEMINI_API_KEY or None
+
         asyncio.create_task(
             ParserService.process_document_ingestion(
                 document_id=doc.id,
@@ -342,6 +365,7 @@ async def upload_document(
                 file_path=storage_path,
                 filename=sanitized_filename,
                 file_type=file_type_cleaned,
+                api_key=user_api_key,  # FIX-12: pass real key for semantic embeddings
             )
         )
         logger.info(f"[Upload] Scheduled ingestion for doc {doc.id} ({sanitized_filename})")

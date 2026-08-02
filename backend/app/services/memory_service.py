@@ -263,12 +263,16 @@ class MemoryService:
 
         memories_to_create: List[dict] = []
 
-        if user_gemini_key and not str(user_gemini_key).startswith("mock_"):
-            memories_to_create = await _llm_based_extraction(
-                provider, user_gemini_key, user_content, assistant_content
+        if not user_gemini_key:
+            logger.warning(
+                f"[MemoryService] No Gemini API key found for user {user_id} — "
+                "memory extraction skipped. Configure your Gemini key in Settings."
             )
-        else:
-            memories_to_create = _rule_based_extraction(user_content)
+            return
+
+        memories_to_create = await _llm_based_extraction(
+            provider, user_gemini_key, user_content, assistant_content
+        )
 
         if not memories_to_create:
             return
@@ -363,6 +367,7 @@ class MemoryService:
                         importance_score=importance,
                         project_id=project_id,
                         session_id=session_id,
+                        api_key=user_gemini_key,  # real Gemini key for live embeddings
                     )
                 except Exception as exc:
                     logger.warning(f"Memory vector store sync failed in extraction: {exc}")

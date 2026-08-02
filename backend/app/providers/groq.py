@@ -18,7 +18,12 @@ def _trim_messages_for_token_budget(messages: List[Dict[str, str]], max_chars: i
     """
     if not messages:
         return []
-    total_len = sum(len(m.get("content", "")) for m in messages)
+    def _content_len(m: Dict) -> int:
+        c = m.get("content", "")
+        if isinstance(c, list):  # multimodal (vision) content array
+            return sum(len(p.get("text", "")) if p.get("type") == "text" else 500 for p in c)
+        return len(c or "")
+    total_len = sum(_content_len(m) for m in messages)
     if total_len <= max_chars:
         return messages
 
@@ -31,7 +36,7 @@ def _trim_messages_for_token_budget(messages: List[Dict[str, str]], max_chars: i
     sys_budget = int(max_chars * 0.60)
     if sys_msg:
         sys_content = sys_msg[0].get("content", "")
-        if len(sys_content) > sys_budget:
+        if isinstance(sys_content, str) and len(sys_content) > sys_budget:
             sys_msg = [{
                 **sys_msg[0],
                 "content": sys_content[:sys_budget] + "\n[System Context Truncated to fit token budget]"
@@ -44,15 +49,15 @@ def _trim_messages_for_token_budget(messages: List[Dict[str, str]], max_chars: i
     middle_msgs = non_sys[:-1]
 
     # Budget remaining for conversation history after system prompt + last user message
-    sys_used = sum(len(m.get("content", "")) for m in sys_msg)
-    last_user_len = len(last_user_msg.get("content", ""))
+    sys_used = sum(_content_len(m) for m in sys_msg)
+    last_user_len = _content_len(last_user_msg)
     budget = max_chars - sys_used - last_user_len
 
     # Keep adding middle messages from right (newest first) until budget is full
     kept_middle = []
     current_size = 0
     for m in reversed(middle_msgs):
-        m_len = len(m.get("content", ""))
+        m_len = _content_len(m)
         # Never use a negative or zero budget floor
         if budget > 0 and current_size + m_len <= budget:
             kept_middle.insert(0, m)
@@ -66,47 +71,50 @@ def _trim_messages_for_token_budget(messages: List[Dict[str, str]], max_chars: i
 
 class GroqProvider(BaseLLMProvider):
   def __init__(self):
+    # Server-level key fallback; runtime per-request key takes priority via api_key param
     self.api_key = settings.GROQ_API_KEY
-    self.is_mock = not self.api_key or self.api_key.startswith("mock_")
 
-  def _check_mock_tool_call(self, messages: List[Dict[str, str]]) -> Optional[List[Dict[str, Any]]]:
+  def _inject_images_into_messages(
+      self,
+      messages: List[Dict[str, Any]],
+      images: Optional[List[Dict[str, str]]],
+  ) -> List[Dict[str, Any]]:
     """
-    Utility to match patterns in mock mode and return simulated tool calls.
-    Ensures that it does not loop on tool execution outputs.
+    Convert the last user message into an OpenAI-compatible multimodal content
+    array so that Groq vision models (llama-3.2-11b-vision-preview, llama-3.2-90b-vision-preview) can see images.
+    Note: llama-4-scout-17b-16e-instruct was deprecated on Groq July 17, 2026.
+    Each image dict must have 'base64' and 'mimeType' keys.
     """
-    if not messages:
-        return None
-        
-    last_msg = messages[-1]
-    # Only trigger tool call if the last message is from the user and not a tool output
-    if last_msg.get("role") != "user":
-        return None
-        
-    content = last_msg.get("content", "")
-    if "[Tool Output:" in content:
-        return None
-
-    content_lower = content.lower()
-    if "calculate" in content_lower:
-        expr = content_lower.split("calculate")[-1].strip()
-        return [{"name": "calculate", "arguments": {"expression": expr or "2 + 2"}}]
-    elif "search" in content_lower:
-        query = content_lower.split("search")[-1].replace("for", "", 1).strip()
-        return [{"name": "tavily_search", "arguments": {"query": query or "weather in Paris"}}]
-    elif "run python" in content_lower or "execute python" in content_lower:
-        code = content_lower.split("python")[-1].strip().strip(":").strip()
-        return [{"name": "python_sandbox", "arguments": {"code": code or "print('mock output')"}}]
-        
-    return None
+    if not images:
+        return messages
+    messages = [dict(m) for m in messages]  # shallow copy
+    for i in reversed(range(len(messages))):
+        if messages[i].get("role") == "user":
+            existing_text = messages[i].get("content", "") or ""
+            if isinstance(existing_text, list):
+                parts = existing_text  # already multimodal
+            else:
+                parts: List[Dict[str, Any]] = [{"type": "text", "text": existing_text}]
+            for img in images:
+                mime = img.get("mimeType", "image/jpeg")
+                b64  = img.get("base64", "")
+                parts.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime};base64,{b64}"}
+                })
+            messages[i]["content"] = parts
+            break
+    return messages
 
   async def generate(
       self,
-      messages: List[Dict[str, str]],
+      messages: List[Dict[str, Any]],
       model: str = "llama-3.1-8b-instant",
       temperature: float = 0.7,
       max_tokens: int = 2048,
       tools: Optional[List[Dict[str, Any]]] = None,
       api_key: Optional[str] = None,
+      images: Optional[List[Dict[str, str]]] = None,
   ) -> Dict[str, Any]:
     key_to_use = api_key or self.api_key
     if not key_to_use or str(key_to_use).startswith("mock_"):
@@ -114,6 +122,8 @@ class GroqProvider(BaseLLMProvider):
             "Groq API key is missing or invalid. Please configure a valid Groq API key in Settings to run real-time requests."
         )
 
+    # Inject images for vision models before trimming
+    messages = self._inject_images_into_messages(messages, images)
     trimmed_messages = _trim_messages_for_token_budget(messages, max_chars=16000)
 
     payload = {
@@ -208,12 +218,13 @@ class GroqProvider(BaseLLMProvider):
 
   async def generate_stream(
       self,
-      messages: List[Dict[str, str]],
+      messages: List[Dict[str, Any]],
       model: str = "llama-3.1-8b-instant",
       temperature: float = 0.7,
       max_tokens: int = 2048,
       tools: Optional[List[Dict[str, Any]]] = None,
       api_key: Optional[str] = None,
+      images: Optional[List[Dict[str, str]]] = None,
   ) -> AsyncGenerator[Dict[str, Any], None]:
     key_to_use = api_key or self.api_key
     if not key_to_use or str(key_to_use).startswith("mock_"):
@@ -221,6 +232,8 @@ class GroqProvider(BaseLLMProvider):
           "Groq API key missing or invalid. Please configure your Groq API key in Settings to stream real-time responses."
       )
 
+    # Inject images for vision models before trimming
+    messages = self._inject_images_into_messages(messages, images)
     trimmed_messages = _trim_messages_for_token_budget(messages, max_chars=16000)
 
     payload = {

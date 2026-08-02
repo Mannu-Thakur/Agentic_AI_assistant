@@ -200,15 +200,15 @@ class ParserService:
             cv_img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2GRAY)
 
             # Step 4: CLAHE (Contrast Limited Adaptive Histogram Equalization)
-            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
             cv_img = clahe.apply(cv_img)
 
-            # Step 5: Gaussian blur for noise removal
-            cv_img = cv2.GaussianBlur(cv_img, (3, 3), 0)
+            # Step 5: Bilateral filter to smooth noise while preserving sharp handwriting/pen edges
+            cv_img = cv2.bilateralFilter(cv_img, 5, 75, 75)
 
-            # Step 6: Otsu binarization
-            _, cv_img = cv2.threshold(
-                cv_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+            # Step 6: Adaptive thresholding (drastically superior to global Otsu for camera photos & handwriting)
+            cv_img = cv2.adaptiveThreshold(
+                cv_img, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 25, 12
             )
 
             # Convert back to PIL
@@ -354,22 +354,44 @@ class ParserService:
 
         try:
             with Image.open(io.BytesIO(image_bytes)) as raw_img:
-                img = cls._preprocess_image_for_ocr(raw_img)
-                text = pytesseract.image_to_string(img, config="--oem 3 --psm 6")
-                
-                try:
-                    data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
-                    confs = [
-                        c for c in data.get("conf", [])
-                        if isinstance(c, (int, float)) and int(c) >= 0
-                    ]
-                    confidence = round(sum(confs) / (len(confs) * 100), 3) if confs else 0.5
-                except Exception:
-                    confidence = 0.5
+                preproc_img = cls._preprocess_image_for_ocr(raw_img)
+                candidates = []
+
+                # Multi-pass OCR: try combinations of preprocessed & raw images with PSM 6, PSM 11 (sparse text), and PSM 3 (auto layout)
+                passes = [
+                    (preproc_img, "--oem 3 --psm 6"),
+                    (preproc_img, "--oem 3 --psm 11"),
+                    (preproc_img, "--oem 3 --psm 3"),
+                    (raw_img.convert("RGB"), "--oem 3 --psm 6"),
+                    (raw_img.convert("RGB"), "--oem 3 --psm 11"),
+                ]
+
+                for img_target, config_str in passes:
+                    try:
+                        t = pytesseract.image_to_string(img_target, config=config_str).strip()
+                        if t:
+                            data = pytesseract.image_to_data(img_target, output_type=pytesseract.Output.DICT)
+                            confs = [c for c in data.get("conf", []) if isinstance(c, (int, float)) and int(c) >= 0]
+                            conf = round(sum(confs) / (len(confs) * 100), 3) if confs else 0.5
+                            word_count = len(t.split())
+                            candidates.append((word_count, conf, t))
+                    except Exception:
+                        continue
+
+                if candidates:
+                    # Pick candidate with highest word count (most text extracted) and best confidence
+                    candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
+                    best_words, best_conf, best_text = candidates[0]
+                    return OcrResult(
+                        text=best_text,
+                        confidence=best_conf,
+                        has_tables=False,
+                        layout_type="handwriting" if best_conf < 0.6 else "text",
+                    )
 
                 return OcrResult(
-                    text=text.strip(),
-                    confidence=confidence,
+                    text="[No readable text found in image]",
+                    confidence=0.0,
                     has_tables=False,
                     layout_type="text",
                 )
@@ -583,6 +605,7 @@ class ParserService:
         file_path: str,
         filename: str,
         file_type: str,
+        api_key: Optional[str] = None,
     ):
         """
         Background task: extract, chunk (with page metadata), embed, index.
@@ -590,6 +613,8 @@ class ParserService:
         FIX-9:  Scanned PDFs (zero native text) fall back to OCR automatically.
         FIX-10: Old vector chunks are deleted before re-indexing to prevent duplicates.
         FIX-11: Encrypted / corrupted PDFs produce a clear failure message.
+        FIX-12: api_key is now forwarded to EmbeddingService so document chunks
+                are indexed with real Gemini semantic vectors, not mock random ones.
         """
         logger.info(f"[Parser] Starting ingestion for document {document_id} ({filename})")
         try:
@@ -657,7 +682,11 @@ class ParserService:
                 filename=filename,
                 chunks=chunk_texts,
                 chunk_metadatas=chunk_metadatas,
+                api_key=api_key,  # FIX-12: forward user key for real semantic embeddings
             )
+
+            from app.core.cache_service import retrieval_cache
+            await retrieval_cache.invalidate_user(user_id)
 
             async with AsyncSessionLocal() as db:
                 from sqlalchemy import select

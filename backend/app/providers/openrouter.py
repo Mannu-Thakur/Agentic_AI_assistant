@@ -8,8 +8,8 @@ from app.core.config import settings
 
 class OpenRouterProvider(BaseLLMProvider):
   def __init__(self):
+    # Server-level key fallback; runtime per-request key takes priority via api_key param
     self.api_key = settings.OPENROUTER_API_KEY
-    self.is_mock = not self.api_key or self.api_key.startswith("mock_")
 
   def _inject_images_into_messages(
       self,

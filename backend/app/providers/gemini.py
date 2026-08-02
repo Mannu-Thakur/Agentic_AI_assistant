@@ -8,8 +8,8 @@ from app.core.config import settings
 
 class GeminiProvider(BaseLLMProvider):
   def __init__(self):
+    # Server-level key fallback; runtime per-request key takes priority via api_key param
     self.api_key = settings.GEMINI_API_KEY
-    self.is_mock = not self.api_key or self.api_key.startswith("mock_")
 
   def _convert_schema_to_gemini(self, schema: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -80,36 +80,6 @@ class GeminiProvider(BaseLLMProvider):
           break
 
     return contents, system_instruction
-
-  def _check_mock_tool_call(self, messages: List[Dict[str, str]]) -> Optional[List[Dict[str, Any]]]:
-    """
-    Utility to match patterns in mock mode and return simulated tool calls.
-    Ensures that it does not loop on tool execution outputs.
-    """
-    if not messages:
-        return None
-        
-    last_msg = messages[-1]
-    # Only trigger tool call if the last message is from the user and not a tool output
-    if last_msg.get("role") != "user":
-        return None
-        
-    content = last_msg.get("content", "")
-    if "[Tool Output:" in content:
-        return None
-
-    content_lower = content.lower()
-    if "calculate" in content_lower:
-        expr = content_lower.split("calculate")[-1].strip()
-        return [{"name": "calculate", "arguments": {"expression": expr or "2 + 2"}}]
-    elif "search" in content_lower:
-        query = content_lower.split("search")[-1].replace("for", "", 1).strip()
-        return [{"name": "tavily_search", "arguments": {"query": query or "weather in Paris"}}]
-    elif "run python" in content_lower or "execute python" in content_lower:
-        code = content_lower.split("python")[-1].strip().strip(":").strip()
-        return [{"name": "python_sandbox", "arguments": {"code": code or "print('mock output')"}}]
-        
-    return None
 
   async def generate(
       self,

@@ -541,7 +541,7 @@ export const ChatInput = React.memo(function ChatInput({
             aria-label="Add photos, files, and skills"
             className="pill-input-side-btn"
           >
-            <Plus className="w-4 h-4" strokeWidth={2.6} />
+            <Plus className="w-5 h-5" strokeWidth={3} />
           </button>
 
           {showPlusMenu && (
@@ -709,7 +709,7 @@ export const ChatInput = React.memo(function ChatInput({
           placeholder={isLocked ? 'Configure API keys to unlock…' : placeholder}
           disabled={isLocked}
           rows={1}
-          className="flex-1 bg-transparent resize-none text-sm text-foreground placeholder:text-foreground-3/60 focus:outline-none leading-relaxed disabled:cursor-not-allowed py-1 custom-scrollbar"
+          className="flex-1 bg-transparent resize-none text-base font-medium text-foreground placeholder:text-foreground-3/80 focus:outline-none leading-relaxed disabled:cursor-not-allowed py-1 custom-scrollbar"
           style={{ maxHeight: '180px', minHeight: '24px' }}
           aria-label="Message input"
         />

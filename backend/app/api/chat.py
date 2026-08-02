@@ -301,7 +301,7 @@ async def stream_agent_message(
   _MAX_HISTORY_CHARS    = 60_000   # ~15k tokens at 4 chars/token
 
   # Step 1: apply hard turn cap — take the N most recent messages
-  db_messages_trimmed = db_messages[-_MAX_HISTORY_MESSAGES:] if len(db_messages) > _MAX_HISTORY_MESSAGES else db_messages
+  db_messages_trimmed = list(db_messages[-_MAX_HISTORY_MESSAGES:]) if len(db_messages) > _MAX_HISTORY_MESSAGES else list(db_messages)
 
   # Step 2: apply character budget — drop oldest messages until under budget
   _total_chars = sum(len(m.content or "") for m in db_messages_trimmed)
@@ -323,11 +323,17 @@ async def stream_agent_message(
       langchain_messages.append(AIMessage(content=msg.content))
 
 
+  _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tiff", ".heic", ".heif"}
   uploaded_file_paths = [
       doc.storage_path
       for doc in user_docs
-      if doc.storage_path and os.path.exists(doc.storage_path)
+      if doc.storage_path
       and doc.status in ("ready", "pending")
+      # Exclude raw image uploads — those are handled as base64 vision input,
+      # not as file paths for code execution. Including them in the system prompt
+      # caused the LLM to generate Python/Pytesseract code to open them instead
+      # of directly performing vision/OCR.
+      and not any(doc.storage_path.lower().endswith(ext) for ext in _IMAGE_EXTENSIONS)
   ]
 
   initial_state = {
@@ -451,21 +457,34 @@ async def stream_agent_message(
       # wasting LLM tokens and compute.
       while not task.done() or not queue.empty():
         try:
-          # GAP-1: Periodically check if client has disconnected
+          # Check if client disconnected mid-stream
           if await request.is_disconnected():
             logger.info(f"Client disconnected for chat_id={chat_id} — cancelling graph task")
             task.cancel()
             return
 
-          try:
-            chunk = queue.get_nowait()
-          except asyncio.QueueEmpty:
-            if task.done():
-              break
-            await asyncio.sleep(0.01)
-            continue
-          yield f"data: {json.dumps(chunk)}\n\n"
-          queue.task_done()
+          # Event-driven queue fetch: zero polling delay between tokens
+          get_task = asyncio.create_task(queue.get())
+          done_set, _ = await asyncio.wait(
+              [get_task, task],
+              return_when=asyncio.FIRST_COMPLETED
+          )
+
+          if get_task in done_set:
+            chunk = get_task.result()
+            yield f"data: {json.dumps(chunk)}\n\n"
+            queue.task_done()
+          else:
+            # Graph task completed — cancel pending queue get if not finished
+            if not get_task.done():
+              get_task.cancel()
+
+            # Drain any remaining buffered tokens instantly
+            while not queue.empty():
+              chunk = queue.get_nowait()
+              yield f"data: {json.dumps(chunk)}\n\n"
+              queue.task_done()
+            break
         except Exception as err:
           logger.error(f"ERROR IN QUEUE LOOP: {err}")
           yield f"data: {json.dumps({'event': 'error', 'detail': str(err)})}\n\n"

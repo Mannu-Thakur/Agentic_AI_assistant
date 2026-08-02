@@ -33,7 +33,7 @@ import {
   MessageSquare, Pencil, Trash2, Pin,
   BookOpen, Share2, Download, FileJson, FileText,
   MoreHorizontal, Archive, FolderClosed, ChevronDown, ChevronUp, Files,
-  Settings, LogOut, ListOrdered, GitBranch, Link, PenLine, Eye, ExternalLink
+  Settings, LogOut, GitBranch, Link, PenLine, Eye, ExternalLink
 } from 'lucide-react';
 
 // ─────────────────────────────────────────────────────────────
@@ -225,6 +225,21 @@ function decodeHtmlEntities(str: string): string {
     .replace(/&gt;/g, '>');
 }
 
+function sanitizeAssistantContent(str: string): string {
+  if (!str) return '';
+  return str
+    .replace(/function\s*=>\s*\{[^{}]*"query"[^{}]*\}\s*(?:<\/function>)?/gi, '')
+    .replace(/function\s*=>\s*\{.*?\}(?:<\/function>)?/gi, '')
+    .replace(/function\s*=>\s*.*?(?:<\/function>|\n|$)/gi, '')
+    .replace(/<\/?function\b[^>]*>/gi, '')
+    .replace(/<\/?tool_call\b[^>]*>/gi, '')
+    .replace(/<\/?search_query\b[^>]*>/gi, '')
+    .replace(/<\/?search\b[^>]*>/gi, '')
+    .replace(/\[System Context:[^\]]*\]\s*/gi, '')
+    .replace(/\[System Context\]\s*/gi, '')
+    .trim();
+}
+
 function parseUserMessageFiles(content: string) {
   let cleanPrompt = decodeHtmlEntities(content);
   let refTitle: string | null = null;
@@ -232,6 +247,8 @@ function parseUserMessageFiles(content: string) {
   // Strip injected System Context and User Location Context tags
   cleanPrompt = cleanPrompt.replace(/\[System Context:[^\]]*\]\n?/gi, '');
   cleanPrompt = cleanPrompt.replace(/\[User Location Context:[^\]]*\]\n?/gi, '');
+  cleanPrompt = cleanPrompt.replace(/function\s*=>\s*\{[^{}]*"query"[^{}]*\}\s*(?:<\/function>)?/gi, '');
+  cleanPrompt = cleanPrompt.replace(/<\/?function\b[^>]*>/gi, '');
   cleanPrompt = cleanPrompt.replace(/<>?\s*\{[^{}]*"query"[^{}]*\}\s*<\/>?/gi, '');
 
   // Extract and strip connected reference context block if present
@@ -428,29 +445,47 @@ function CitedContent({
     <div>
       <MarkdownContent content={mainContent} isStreaming={isStreaming} />
 
-      {sources && sources.length > 0 && (
-        <div className="mt-4 pt-3 border-t border-border space-y-2">
-          <p className="text-[9px] font-bold uppercase tracking-widest text-foreground-3 flex items-center gap-1">
-            <BookOpen className="w-3 h-3" /> Sources
-          </p>
-          <div className="flex flex-wrap gap-1.5">
-            {sources.map((src) => (
-              <button
-                key={src.index}
-                onClick={() => setActiveSource(activeSource === src.index ? null : src.index)}
-                className={`px-2.5 py-1 rounded-full text-[10px] font-semibold border transition-all ${
-                  activeSource === src.index
-                    ? 'bg-accent/20 border-accent/40 text-accent'
-                    : 'bg-surface-2 border-border text-foreground-3 hover:text-foreground hover:border-accent/30'
-                }`}
-              >
-                [{src.index}] {src.filename}
-              </button>
-            ))}
-          </div>
-          {activeSource !== null && (() => {
-            const src = sources.find((s) => s.index === activeSource);
-            return src ? (
+      {sources && sources.length > 0 && (() => {
+        // Group / deduplicate sources by filename
+        const groupedSources: { filename: string; indices: number[]; chunks: SourceDocument[] }[] = [];
+        sources.forEach((src) => {
+          const fn = src.filename || 'Source Document';
+          const existing = groupedSources.find((g) => g.filename === fn);
+          if (existing) {
+            existing.indices.push(src.index);
+            existing.chunks.push(src);
+          } else {
+            groupedSources.push({ filename: fn, indices: [src.index], chunks: [src] });
+          }
+        });
+
+        return (
+          <div className="mt-4 pt-3 border-t border-border space-y-2">
+            <p className="text-[9px] font-bold uppercase tracking-widest text-foreground-3 flex items-center gap-1">
+              <BookOpen className="w-3 h-3" /> Sources
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {groupedSources.map((grp, gIdx) => {
+                const isSelected = grp.chunks.some((c) => c.index === activeSource);
+                const countBadge = grp.chunks.length > 1 ? ` (${grp.chunks.length} chunks)` : '';
+                return (
+                  <button
+                    key={grp.filename + gIdx}
+                    onClick={() => setActiveSource(isSelected ? null : grp.chunks[0].index)}
+                    className={`px-2.5 py-1 rounded-full text-[10px] font-semibold border transition-all ${
+                      isSelected
+                        ? 'bg-accent/20 border-accent/40 text-accent'
+                        : 'bg-surface-2 border-border text-foreground-3 hover:text-foreground hover:border-accent/30'
+                    }`}
+                  >
+                    [{grp.indices.join(', ')}] {grp.filename}{countBadge}
+                  </button>
+                );
+              })}
+            </div>
+            {activeSource !== null && (() => {
+              const src = sources.find((s) => s.index === activeSource);
+              return src ? (
               <div className="p-3 rounded-xl bg-surface-2 border border-border-2 space-y-1.5 animate-slide-up">
                 <p className="text-[10px] font-semibold text-foreground">{src.filename}</p>
                 {src.distance != null && (
@@ -463,7 +498,8 @@ function CitedContent({
             ) : null;
           })()}
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
@@ -1098,24 +1134,6 @@ export default function ChatPage() {
 
     setIsStreaming(true);
 
-    if (isNewChat) {
-      try {
-        const initialTitle = formatShortTitle(trimmed);
-        const nc = await apiRequest('/chats', { method: 'POST', json: { title: initialTitle } });
-        addChat(nc);
-        chatId = nc.id;
-        skipFetchRef.current = true;
-        setActiveChatId(chatId);
-        navigate(`/c/${chatId}`, { replace: true });
-      } catch (err) {
-        creatingChatRef.current = false;
-        setIsStreaming(false);
-        return;
-      } finally {
-        creatingChatRef.current = false;
-      }
-    }
-
     const userMsgId = crypto.randomUUID();
     const asstMsgId = crypto.randomUUID();
 
@@ -1134,6 +1152,7 @@ export default function ChatPage() {
         : undefined,
     };
 
+    // Instant 0ms optimistic UI rendering
     addMessage(userMsg);
     addMessage({
       id: asstMsgId,
@@ -1146,41 +1165,33 @@ export default function ChatPage() {
       created_at: new Date().toISOString(),
     });
 
-    // ── Upload any attached document files or images to Documents API ─────────────
-    if ((attachedFiles.length > 0 || imagesToSend.length > 0) && chatId) {
+    if (isNewChat) {
+      try {
+        const initialTitle = formatShortTitle(trimmed);
+        const nc = await apiRequest('/chats', { method: 'POST', json: { title: initialTitle } });
+        addChat(nc);
+        chatId = nc.id;
+        skipFetchRef.current = true;
+        setActiveChatId(chatId);
+        navigate(`/c/${chatId}`, { replace: true });
+      } catch (err) {
+        creatingChatRef.current = false;
+        setIsStreaming(false);
+        updateMessage(asstMsgId, { content: '*[Failed to create conversation session]*' });
+        return;
+      } finally {
+        creatingChatRef.current = false;
+      }
+    }
+
+    // ── Upload any attached document files to Documents API ─────────────
+    if (attachedFiles.length > 0 && chatId) {
       try {
         const uploads: Promise<any>[] = [];
 
-        // Upload document files (PDFs, DOCX, XLSX, PPTX, TXT, etc.)
         for (const docFile of attachedFiles) {
           const fd = new FormData();
           fd.append('file', docFile);
-          fd.append('chat_id', chatId);
-          uploads.push(
-            fetch('/api/v1/documents/upload', {
-              method: 'POST',
-              headers: { Authorization: `Bearer ${token}` },
-              body: fd,
-            })
-          );
-        }
-
-        // Upload images
-        for (const img of imagesToSend) {
-          const mimeToExt: Record<string, string> = {
-            'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif',
-            'image/bmp': '.bmp', 'image/tiff': '.tiff', 'image/webp': '.webp',
-            'image/heic': '.heic', 'image/heif': '.heif',
-          };
-          const ext = mimeToExt[img.mimeType] || '.png';
-          const byteChars = atob(img.base64);
-          const byteArr = new Uint8Array(byteChars.length);
-          for (let i = 0; i < byteChars.length; i++) byteArr[i] = byteChars.charCodeAt(i);
-          const blob = new Blob([byteArr], { type: img.mimeType });
-          const filename = `image_${Date.now()}${ext}`;
-          const file = new File([blob], filename, { type: img.mimeType });
-          const fd = new FormData();
-          fd.append('file', file);
           fd.append('chat_id', chatId);
           uploads.push(
             fetch('/api/v1/documents/upload', {
@@ -1209,6 +1220,15 @@ export default function ChatPage() {
     const controller = new AbortController();
     abortControllerRef.current = controller;
     let asstText = '';
+    let animFrameId: number | null = null;
+
+    const scheduleTokenRender = (text: string) => {
+      if (animFrameId !== null) return;
+      animFrameId = requestAnimationFrame(() => {
+        animFrameId = null;
+        updateMessage(asstMsgId, { content: text });
+      });
+    };
 
     try {
       let payloadContent = language && language !== 'Auto-detect' ? `${trimmed}\n\n(Note: Please reply in ${language})` : trimmed;
@@ -1217,7 +1237,6 @@ export default function ChatPage() {
       if (isLocationOn && userLoc) {
         payloadContent = `[User Location Context: ${userLoc}]\n${payloadContent}`;
       }
-      // Always inject the real current datetime so the AI gives accurate time answers
       const _now = new Date();
       const _dateCtx = `[System Context: The current date and time is ${_now.toLocaleString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true })} (UTC${_now.getTimezoneOffset() <= 0 ? '+' : '-'}${String(Math.floor(Math.abs(_now.getTimezoneOffset()) / 60)).padStart(2,'0')}:${String(Math.abs(_now.getTimezoneOffset()) % 60).padStart(2,'0')})]`;
       payloadContent = `${_dateCtx}\n${payloadContent}`;
@@ -1278,7 +1297,7 @@ export default function ChatPage() {
       }
 
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      
+
       const reader  = res.body?.getReader();
       const decoder = new TextDecoder('utf-8');
       if (!reader) throw new Error('No reader');
@@ -1299,7 +1318,7 @@ export default function ChatPage() {
             const parsed = JSON.parse(raw);
             if (parsed.event === 'chunk') {
               asstText += parsed.text;
-              updateMessage(asstMsgId, { content: asstText });
+              scheduleTokenRender(asstText);
             } else if (parsed.event === 'metrics') {
               updateMessage(asstMsgId, { developer_metrics: parsed.metrics });
             } else if (parsed.event === 'title') {
@@ -1308,7 +1327,7 @@ export default function ChatPage() {
               if (liveChat) liveUpdateChat({ ...liveChat, title: formatChatTitle(parsed.title) });
             } else if (parsed.event === 'error') {
               asstText += `\n\n*[Error: ${parsed.detail || 'Failed to generate response'}]*`;
-              updateMessage(asstMsgId, { content: asstText });
+              scheduleTokenRender(asstText);
             }
           } catch { /* ignore parse errors */ }
         }
@@ -1319,16 +1338,25 @@ export default function ChatPage() {
         const formattedErr = errorMsg.includes('401')
           ? 'Authentication failed - Invalid or missing API key (HTTP 401)'
           : `Error: ${errorMsg || 'Response interrupted or connection lost'}`;
-        updateMessage(asstMsgId, { content: asstText + `\n\n*[${formattedErr}]*` });
+        asstText += `\n\n*[${formattedErr}]*`;
+        updateMessage(asstMsgId, { content: asstText });
       }
     } finally {
+      if (animFrameId !== null) {
+        cancelAnimationFrame(animFrameId);
+        animFrameId = null;
+      }
+      updateMessage(asstMsgId, { content: asstText });
       setIsStreaming(false);
       const { chats: liveChats, updateChat: liveUpdateChat } = useChatStore.getState();
       const liveChat = liveChats.find((c: any) => c.id === chatId);
       if (liveChat && liveChat.title === 'New Chat' && trimmed) {
         const autoTitle = formatChatTitle(trimmed);
-        liveUpdateChat({ ...liveChat, title: autoTitle });
+        liveUpdateChat({ ...liveChat, title: autoTitle, updated_at: new Date().toISOString() });
         apiRequest(`/chats/${chatId}`, { method: 'PATCH', json: { title: autoTitle } }).catch(() => {});
+      } else if (liveChat) {
+        // Bump updated_at so the sidebar moves this chat to "Today"
+        liveUpdateChat({ ...liveChat, updated_at: new Date().toISOString() });
       }
       // ── Background DB sync after streaming ──────────────────────────────
       // The assistant message is committed to the DB AFTER streaming ends.
@@ -1530,6 +1558,12 @@ export default function ChatPage() {
     setMessages([...trimmedMessages, newUserMsg, newAsstMsg]);
     setIsStreaming(true);
 
+    // Bump the chat's updated_at in the store so the sidebar re-groups it under "Today"
+    const _editActiveChat = chats.find((c) => c.id === activeChatId);
+    if (_editActiveChat) {
+      updateChat({ ..._editActiveChat, updated_at: new Date().toISOString() });
+    }
+
     const resolvedProv = currentModel?.apiProvider || resolveProvider(activeModel);
     const validationError = validateChatRequest(activeModel, resolvedProv);
     if (validationError) {
@@ -1658,6 +1692,12 @@ export default function ChatPage() {
     // Atomic: replace from userMsgIdx onward — no race condition
     setMessages([...trimmedMsgs, newUserMsg, newAsstMsg]);
     setIsStreaming(true);
+
+    // Bump the chat's updated_at in the store so the sidebar re-groups it under "Today"
+    const _retryActiveChat = chats.find((c) => c.id === activeChatId);
+    if (_retryActiveChat) {
+      updateChat({ ..._retryActiveChat, updated_at: new Date().toISOString() });
+    }
 
     const resolvedProv = currentModel?.apiProvider || resolveProvider(activeModel);
     const validationError = validateChatRequest(activeModel, resolvedProv);
@@ -2291,7 +2331,7 @@ export default function ChatPage() {
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden relative bg-background">
 
         {/* Toolbar */}
-        <header className="h-[var(--header-height)] px-4 flex items-center justify-between bg-background flex-shrink-0 z-10">
+        <header className="h-[var(--header-height)] px-4 flex items-center justify-between bg-background flex-shrink-0 z-10 relative">
           <div className="flex items-center gap-2.5 min-w-0">
             <button onClick={() => setConvoOpen((v) => !v)} className="lg:hidden p-1.5 text-foreground-3 hover:text-foreground">
               <MessageSquare className="w-4 h-4" />
@@ -2303,10 +2343,10 @@ export default function ChatPage() {
                   setModelDropdownOpen((v) => !v);
                   setModelSearchQuery('');
                 }}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-border/60 bg-surface-2/70 hover:bg-surface-3 hover:border-accent/40 text-xs font-semibold text-foreground transition-all duration-200 active:scale-[0.97] outline-none shadow-xs backdrop-blur-md"
+                className="flex items-center gap-1 px-1 py-1 rounded-lg text-xs font-semibold text-white/90 hover:text-white transition-all duration-150 active:scale-[0.97] outline-none"
               >
                 {currentModel.icon && <currentModel.icon className="w-3.5 h-3.5 text-accent flex-shrink-0" />}
-                <span className="truncate max-w-[110px] sm:max-w-[150px] tracking-tight text-xs font-medium">{currentModel.name || 'Select Model'}</span>
+                <span className="truncate max-w-[80px] tracking-tight text-xs font-semibold text-white">{currentModel.name || 'Model'}</span>
                 <ChevronDown className={`w-3.5 h-3.5 text-foreground-3 transition-transform duration-200 flex-shrink-0 ${modelDropdownOpen ? 'rotate-180 text-foreground' : ''}`} />
               </button>
 
@@ -2388,65 +2428,57 @@ export default function ChatPage() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2 flex-shrink-0">
 
-            {/* Questions hover popup button */}
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+
+            {/* ── Follow-ups trigger ── */}
             {messages.filter((m) => m.role === 'user').length > 0 && (
               <div
-                className="questions-popup-wrap"
+                className="followups-wrap"
                 onMouseEnter={() => {
                   if (popupLeaveTimer.current) { clearTimeout(popupLeaveTimer.current); popupLeaveTimer.current = null; }
                   setQuestionsPopupOpen(true);
                 }}
                 onMouseLeave={() => {
-                  popupLeaveTimer.current = setTimeout(() => setQuestionsPopupOpen(false), 150);
+                  popupLeaveTimer.current = setTimeout(() => setQuestionsPopupOpen(false), 180);
                 }}
               >
                 <button
-                  className={`flex items-center justify-center w-8 h-8 rounded-lg border text-xs font-semibold shadow-sm transition-all duration-150 ${
-                    questionsPopupOpen
-                      ? 'border-accent/40 bg-accent/15 text-accent'
-                      : 'border-border/85 bg-surface-2/65 text-foreground-2 hover:text-foreground hover:bg-surface-3 hover:border-accent/35'
-                  }`}
-                  aria-label="Questions Navigator"
+                  className={`followups-btn ${questionsPopupOpen ? 'active' : ''}`}
+                  aria-label="Follow-ups navigator"
                 >
-                  <ListOrdered className="w-4 h-4" />
+                  <span className="followups-lines">
+                    <span />
+                    <span />
+                    <span />
+                  </span>
                 </button>
 
                 {questionsPopupOpen && (
-                  <>
-                    <div className="fixed inset-0 z-40 bg-black/20 backdrop-blur-[1px] animate-fade-in" onClick={() => setQuestionsPopupOpen(false)} />
-                    <div className="questions-popup animate-popover-in z-50">
-                      <div className="questions-popup-header flex items-center justify-between">
-                        <span>Follow-ups</span>
-                        <span className="text-[9px] font-bold text-[#BDBDBD] bg-[#2a2a2a] px-2 py-0.5 rounded-full">
-                          {userQuestions.length}
-                        </span>
-                      </div>
-                      <div className="questions-popup-list">
-                        {userQuestions.map((q) => {
-                          const cleanText = q.content
-                            .replace(/&#x27;/g, "'")
-                            .replace(/&quot;/g, '"')
-                            .replace(/&amp;/g, '&')
-                            .replace(/&#39;/g, "'");
-                          return (
-                            <button
-                              key={q.id}
-                              className={`questions-popup-item ${highlightedMsgId === q.id ? 'active' : ''}`}
-                              onClick={() => {
-                                jumpToMessage(q.id);
-                                setQuestionsPopupOpen(false);
-                              }}
-                            >
-                              <span className="questions-popup-item-num">{q.index}</span>
-                              <span className="questions-popup-item-text">{cleanText}</span>
-                            </button>
-                          );
-                        })}
-                      </div>
+                  <div className="followups-popup">
+                    <div className="followups-popup-header">?</div>
+                    <div className="followups-popup-list">
+                      {userQuestions.map((q) => {
+                        const cleanText = q.content
+                          .replace(/&#x27;/g, "'")
+                          .replace(/&quot;/g, '"')
+                          .replace(/&amp;/g, '&')
+                          .replace(/&#39;/g, "'");
+                        return (
+                          <button
+                            key={q.id}
+                            className={`followups-popup-item ${highlightedMsgId === q.id ? 'highlighted' : ''}`}
+                            onClick={() => {
+                              jumpToMessage(q.id);
+                              setQuestionsPopupOpen(false);
+                            }}
+                          >
+                            {cleanText}
+                          </button>
+                        );
+                      })}
                     </div>
-                  </>
+                  </div>
                 )}
               </div>
             )}
@@ -2456,10 +2488,10 @@ export default function ChatPage() {
               <div className="relative">
                 <Tooltip content="More options" side="bottom">
                   <button onClick={() => setMenuOpen((v) => !v)}
-                    className={`flex items-center justify-center w-8 h-8 rounded-lg border text-xs font-semibold shadow-sm hover:shadow-md hover:shadow-black/20 hover:scale-[1.03] active:scale-[0.97] transition-all duration-150 ${
+                    className={`flex items-center justify-center w-8 h-8 rounded-lg text-xs transition-all duration-150 ${
                       menuOpen 
-                        ? 'border-accent/40 bg-accent/15 text-accent shadow-accent/5' 
-                        : 'border-border/85 bg-surface-2/65 text-foreground-2 hover:text-foreground hover:bg-surface-3 hover:border-accent/35'
+                        ? 'text-white' 
+                        : 'text-foreground-3 hover:text-white'
                     }`}
                     aria-label="More actions">
                     <MoreHorizontal className="w-4 h-4" />
@@ -2666,8 +2698,8 @@ export default function ChatPage() {
           /* ── CHAT STATE: flex-row so Sources panel is inline ── */
           <div className="flex-1 flex flex-row min-h-0 overflow-hidden">
             {/* ── Left: messages + floating input ── */}
-            <div className="flex-1 flex flex-col min-h-0 relative overflow-hidden">
-              <div ref={chatScrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-4 sm:px-6 md:px-8 pt-6 pb-36 space-y-6" style={{ scrollBehavior: 'smooth' }}>
+            <div className="flex-1 flex flex-col min-h-0 relative">
+              <div ref={chatScrollRef} onScroll={handleScroll} className="chat-main-scroll flex-1 overflow-y-auto px-4 sm:px-6 md:px-8 pt-6 pb-36 space-y-6" style={{ scrollBehavior: 'smooth' }}>
               <div className="max-w-chat mx-auto space-y-6">
                 {messages.map((m, idx) => {
                   if (m.role === 'system' || m.role === 'tool') return null;
@@ -2845,7 +2877,7 @@ export default function ChatPage() {
                                   </div>
                                 )}
                                 {userPrompt && (
-                                  <p className="whitespace-pre-wrap break-words leading-relaxed text-[#F2F2F2] selection:bg-[#3b82f6]/30">
+                                  <p className="whitespace-pre-wrap break-words leading-relaxed font-medium text-white selection:bg-[#3b82f6]/30">
                                     {userPrompt}
                                   </p>
                                 )}
@@ -2858,7 +2890,7 @@ export default function ChatPage() {
                         {!isUser && (() => {
                           if (isStreamingThis) return <TypingIndicator />;
                           const { clean, error } = parseErrorFromContent(m.content);
-                          const displayContent = clean || m.content;
+                          const displayContent = sanitizeAssistantContent(clean || m.content);
                           // Find the actual last user message before this assistant reply (skip system/tool)
                           let prevUserMsg = '';
                           for (let i = idx - 1; i >= 0; i--) {
@@ -2875,10 +2907,9 @@ export default function ChatPage() {
                             }
                           }
                           // Only show the clock widget when the user explicitly asked about time/date.
-                          // Require a time-NOUN AND a time-REQUEST verb together, in the cleaned query.
                           const isTimeQuery =
                             /\b(time|date|clock|hour|minute|second)\b/i.test(prevUserMsg) &&
-                            /\b(current|now|what is|what's|tell me|show me|is it|right now|give me)\b/i.test(prevUserMsg);
+                            /\b(current|now|what|tell|show|is|give|also|right now|today|what's)\b/i.test(prevUserMsg);
 
                           return (
                             <div className={`assistant-bubble text-foreground rounded-2xl rounded-bl-sm px-4 py-3 text-sm w-full transition-all ${

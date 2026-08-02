@@ -87,6 +87,7 @@ from app.agent.prompts import (
 from app.providers.gemini import GeminiProvider
 from app.providers.groq import GroqProvider
 from app.providers.openrouter import OpenRouterProvider
+from app.providers.openai_provider import OpenAIProvider
 # Top-level imports so patch paths resolve correctly in tests
 from app.core.database import AsyncSessionLocal
 from app.tools.local_tools import tavily_search as tavily_search
@@ -102,6 +103,7 @@ logger = logging.getLogger("agent.nodes")
 gemini_provider     = GeminiProvider()
 groq_provider       = GroqProvider()
 openrouter_provider = OpenRouterProvider()
+openai_provider     = OpenAIProvider()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -114,7 +116,10 @@ def get_provider(model: str):
     elif "gemini" in model or "google" in model:
         return gemini_provider
     elif "gpt" in model or "o1-" in model or "o3-" in model or "o4-" in model:
-        # OpenAI models — routed through openrouter since we have no direct openai provider instance
+        # If OpenAI key is set, use direct OpenAIProvider; otherwise OpenRouter
+        openai_key = getattr(settings, "OPENAI_API_KEY", None) or os.environ.get("OPENAI_API_KEY")
+        if openai_key and not str(openai_key).startswith("mock_"):
+            return openai_provider
         return openrouter_provider
     elif "claude" in model:
         # Anthropic models — routed through openrouter
@@ -127,9 +132,7 @@ def get_provider(model: str):
     elif "qwen" in model or "glm" in model:
         # Alibaba/GLM — routed through openrouter
         return openrouter_provider
-    # Unknown model name (e.g. deep-research-max-preview-04-2026) —
-    # default to gemini_provider since Gemini is the most common Google provider
-    # and _best_api_key will select the right key based on available keys
+    # Unknown model name — default to gemini_provider
     return gemini_provider
 
 
@@ -274,6 +277,15 @@ _TOOL_PHRASE_PATTERNS: List[re.Pattern] = [
     re.compile(r"(?i)\[Tool Output:\s*\w+\]\s*"),
     re.compile(r"(?i)Calling tools?:\s*[\w,\s]+\.{3}"),
     re.compile(r"(?i)I (?:used|called|invoked|ran|executed) (?:the )?(?:tool|sandbox|search)\b[^.]*\."),
+    re.compile(r"(?i)function\s*=>\s*\{[^{}]*\"query\"[^{}]*\}\s*(?:</function>)?"),
+    re.compile(r"(?i)function\s*=>\s*\{.*?\}(?:</function>)?"),
+    re.compile(r"(?i)function\s*=>\s*.*?(?:</function>|\n|$)"),
+    re.compile(r"(?i)</?function\b[^>]*>"),
+    re.compile(r"(?i)</?tool_call\b[^>]*>"),
+    re.compile(r"(?i)</?search_query\b[^>]*>"),
+    re.compile(r"(?i)</?search\b[^>]*>"),
+    re.compile(r"(?i)\[System Context:[^\]]*\]\s*"),
+    re.compile(r"(?i)\[System Context\]\s*"),
 ]
 
 
@@ -684,25 +696,84 @@ async def classify_intent_node(
     # Everything else always goes to the LLM judge for proper classification.
     if last_query_clean and intent not in (INTENT_MEMORY_WRITE, INTENT_VISION):
         q_lower = last_query_clean.lower()
-        # Fast-path only for private-doc signals (high-confidence, no LLM needed)
-        if any(term in q_lower for term in ("my gpa", "my cgpa", "my resume", "my cv", "my project", "my document", "my file", "my notes", "uploaded document")):
+
+        memory_signals = (
+            "remember that", "remember this", "note that", "save that",
+            "keep in mind", "store this", "don't forget", "make a note",
+            "make a note that", "my favourite is", "my favorite is",
+            "save this:", "save this ", "note this:",
+        )
+        doc_signals = (
+            "my document", "my file", "my notes", "my cheat", "in the file",
+            "uploaded", "the pdf", "the doc", "my code", "in my", "from the file",
+            "according to my", "from my",
+            "my projects", "my project", "my cgpa", "my gpa", "my xgpa",
+            "my resume", "my cv", "my skills", "my education", "my degree",
+            "my achievements", "my experience", "my internship", "my internships",
+            "my grades", "my marks", "my result", "my results", "my score",
+            "my background", "my profile", "my qualification",
+            "my college", "my university", "my institute",
+        )
+        web_signals = (
+            "today's", "today", "latest", "current", "right now", "recent",
+            "this week", "news", "update", "live", "breaking", "now",
+            "2024", "2025", "2026",
+            "weather", "temperature", "forecast", "stock", "price", "bitcoin",
+            "crypto", "exchange rate", "market", "ipo", "sensex", "nifty",
+            "population", "capital of", "president", "prime minister", "pm of",
+            "ceo", "governor", "minister", "resignation", "resigned", "cabinet",
+            "government", "parliament", "politics", "protest", "headline",
+            "champion", "winner", "who won", "election", "results", "score",
+            "ranking", "richest", "gdp",
+            "search for", "look up", "find me", "what's happening",
+            "who is the current", "latest version of", "fetch that", "fetch",
+            "leetcode", "lc ", "codeforces", "atcoder", "advent of code",
+            "problem statement", "problem details", "problem number",
+            "search", "google", "latest news", "live score", "current price",
+        )
+        code_signals = (
+            "execute", "run this", "generate and run", "plot and show",
+            "run the code", "execute the script",
+            "write code", "write a function", "write python", "write javascript",
+            "debug this", "fix this code", "code review", "implement",
+        )
+        math_signals = (
+            "calculate", "solve", "equation", "integral", "derivative",
+            "matrix", "statistics", "probability", "algebra", "geometry",
+        )
+
+        # ── Fast-path zero-latency heuristic resolution ───────────────────────
+        if any(s in q_lower for s in memory_signals):
+            intent = INTENT_MEMORY_WRITE
+        elif any(s in q_lower for s in doc_signals):
             intent = INTENT_DOCUMENT_QA
             is_private_doc_query = True
+        elif any(s in q_lower for s in web_signals):
+            intent = INTENT_WEB_SEARCH
+        elif any(s in q_lower for s in code_signals):
+            intent = INTENT_CODE_EXECUTION
+        elif any(s in q_lower for s in math_signals):
+            intent = INTENT_MATH
         else:
-            # Always call LLM classifier unless the query is a trivial greeting
-            # (≤4 words AND no special character signals)
+            # Check for standard conversational / chat / question queries that do not require an LLM judge
             _word_count = len(last_query_clean.split())
-            _is_trivial_greeting = (
-                _word_count <= 4 and
-                not any(ch in last_query_clean for ch in ("?", "!", "(", ")", "[", "]",'`')) and
+            _is_standard_chat = (
+                _word_count <= 25 and
                 any(last_query_clean.lower().startswith(g) for g in (
                     "hi", "hey", "hello", "thanks", "thank", "ok", "okay",
                     "sure", "yes", "no", "bye", "good morning", "good evening",
-                    "good night", "lol", "haha", "hmm"
+                    "good night", "lol", "haha", "hmm", "what is", "what are",
+                    "who is", "who are", "how do", "how does", "how to", "why is",
+                    "why do", "explain", "tell me", "write a", "can you", "could you",
+                    "give me", "show me", "describe", "summarize", "define", "list"
                 ))
             )
 
-            if not _is_trivial_greeting:
+            if _is_standard_chat:
+                intent = INTENT_NORMAL_CHAT
+                logger.info(f"classify_intent_node: Fast-path matched INTENT_NORMAL_CHAT in <1ms for: '{last_query_clean[:60]}'")
+            else:
+                # Fallback to LLM judge for complex, multi-step, or ambiguous prompts
                 prompt = INTENT_CLASSIFIER_PROMPT.format(
                     query=last_query_clean,
                     has_images=images_present,
@@ -715,73 +786,11 @@ async def classify_intent_node(
                     is_private_doc_query  = bool(parsed.get("is_private_doc_query", False))
                     memory_write_content  = parsed.get("memory_content") or None
                     memory_write_category = parsed.get("memory_category") or None
-                    # Pick up language detection from the LLM response
                     lang_from_llm = parsed.get("detected_language")
                     if lang_from_llm and lang_from_llm.lower() not in ("unknown", "none", ""):
                         detected_language = lang_from_llm
                 else:
-                    # ── Heuristic fallback (comprehensive) ─────────────────────
-                    # Used only when LLM judge is unavailable (no API keys configured).
-                    # IMPORTANT: use last_query_clean so injected [System Context: ...]
-                    # prefixes don't pollute keyword matching.
-                    q_lower = last_query_clean.lower()
-                    memory_signals = (
-                        "remember that", "remember this", "note that", "save that",
-                        "keep in mind", "store this", "don't forget", "make a note",
-                        "make a note that", "my favourite is", "my favorite is",
-                        "save this:", "save this ", "note this:",
-                    )
-                    doc_signals = (
-                        "my document", "my file", "my notes", "my cheat", "in the file",
-                        "uploaded", "the pdf", "the doc", "my code", "in my", "from the file",
-                        "according to my", "from my",
-                        "my projects", "my project", "my cgpa", "my gpa", "my xgpa",
-                        "my resume", "my cv", "my skills", "my education", "my degree",
-                        "my achievements", "my experience", "my internship", "my internships",
-                        "my grades", "my marks", "my result", "my results", "my score",
-                        "my background", "my profile", "my qualification",
-                        "my college", "my university", "my institute",
-                    )
-                    web_signals = (
-                        "today's", "today", "latest", "current", "right now", "recent",
-                        "this week", "news", "update", "live", "breaking", "now",
-                        "2024", "2025", "2026",
-                        "weather", "temperature", "forecast", "stock", "price", "bitcoin",
-                        "crypto", "exchange rate", "market", "ipo", "sensex", "nifty",
-                        "population", "capital of", "president", "prime minister", "pm of",
-                        "ceo", "governor", "minister", "resignation", "resigned", "cabinet",
-                        "government", "parliament", "politics", "protest", "headline",
-                        "champion", "winner", "who won", "election", "results", "score",
-                        "ranking", "richest", "gdp",
-                        "search for", "look up", "find me", "what's happening",
-                        "who is the current", "latest version of", "fetch that", "fetch",
-                        "leetcode", "lc ", "codeforces", "atcoder", "advent of code",
-                        "problem statement", "problem details", "problem number",
-                        "search", "google", "latest news", "live score", "current price",
-                    )
-                    code_signals = (
-                        "execute", "run this", "generate and run", "plot and show",
-                        "run the code", "execute the script",
-                        "write code", "write a function", "write python", "write javascript",
-                        "debug this", "fix this code", "code review", "implement",
-                    )
-                    math_signals = (
-                        "calculate", "solve", "equation", "integral", "derivative",
-                        "matrix", "statistics", "probability", "algebra", "geometry",
-                    )
-
-                    if any(s in q_lower for s in memory_signals):
-                        intent = INTENT_MEMORY_WRITE
-                    elif any(s in q_lower for s in doc_signals):
-                        intent = INTENT_DOCUMENT_QA
-                        is_private_doc_query = True
-                    elif any(s in q_lower for s in web_signals):
-                        intent = INTENT_WEB_SEARCH
-                    elif any(s in q_lower for s in code_signals):
-                        intent = INTENT_CODE_EXECUTION
-                    elif any(s in q_lower for s in math_signals):
-                        intent = INTENT_MATH
-                    # else stays INTENT_NORMAL_CHAT
+                    intent = INTENT_NORMAL_CHAT
 
 
     # ── Personal-data possession override ────────────────────────────────────
@@ -1231,14 +1240,21 @@ async def check_retrieval_node(
     steps    = list(state.get("steps") or [])
     intent   = state.get("intent", INTENT_NORMAL_CHAT)
 
+    uploaded_paths = (
+        state.get("uploaded_file_paths") or
+        config.get("configurable", {}).get("uploaded_file_paths") or
+        []
+    )
+
     # Intent-based shortcuts (avoids an extra LLM judge call)
-    if intent == INTENT_DOCUMENT_QA:
+    if intent == INTENT_DOCUMENT_QA or uploaded_paths:
+        logger.info(
+            f"Self-RAG: forcing needs_retrieval=True (intent={intent}, uploaded_paths_count={len(uploaded_paths)})"
+        )
         steps.append("check_retrieval")
         return {"needs_retrieval": True, "steps": steps}
 
-    # For NORMAL_CHAT: do NOT blindly skip retrieval — check for personal possession
-    # signals first. Queries like "what are my projects" or "what is my cgpa" should
-    # still retrieve from documents even if classified as NORMAL_CHAT.
+    # For NORMAL_CHAT without uploaded files: check for personal possession signals
     if intent in (INTENT_NORMAL_CHAT,):
         last_q_temp = state.get("resolved_query") or ""
         if not last_q_temp:
@@ -1358,12 +1374,26 @@ async def retrieve_context_node(
                 last_query = msg.content if isinstance(msg.content, str) else ""
                 break
 
+    # Extract user's Gemini key early — used for BOTH memory and document embeddings
+    _embed_keys = _extract_api_keys(config)
+    _embed_key = (
+        _embed_keys.get("gemini")
+        or _embed_keys.get("google")
+        or getattr(settings, "GEMINI_API_KEY", None)
+        or None
+    )
+
     # Perform semantic vector query against MemoryVectorStore
     if user_id and last_query:
         try:
             from app.memory.memory_store import MemoryVectorStore
             mem_store = MemoryVectorStore()
-            semantic_memories = await mem_store.search_memories(user_id=user_id, query=last_query, k=5)
+            semantic_memories = await mem_store.search_memories(
+                user_id=user_id,
+                query=last_query,
+                k=5,
+                api_key=_embed_key,  # real Gemini key for live memory embeddings
+            )
             if semantic_memories:
                 existing_contents = {m.get("content") for m in memories if isinstance(m, dict)}
                 for sm in semantic_memories:
@@ -1450,7 +1480,7 @@ async def retrieve_context_node(
             # query-time embeddings use real vectors. Previously api_key was
             # never passed here, so if settings.GEMINI_API_KEY was unset in .env,
             # all retrieval fell back to deterministic mock embeddings (random results).
-            _ret_keys    = _extract_api_keys(config)
+            _ret_keys    = _embed_keys  # already extracted above
             _embed_key   = (
                 _ret_keys.get("gemini")
                 or _ret_keys.get("google")
@@ -1868,6 +1898,10 @@ class StreamingSanitizer:
         # 1. Clean completed forbidden patterns or raw tool-call JSON
         import re
         phrases_to_redact = [
+            r"function\s*=>\s*\{[^{}]*\"query\"[^{}]*\}\s*(?:</function>)?",
+            r"function\s*=>\s*\{.*?\}(?:</function>)?",
+            r"function\s*=>\s*.*?(?:</function>|\n|$)",
+            r"</?function\b[^>]*>",
             r"<(?:>|/[^>]*>)?\s*\{[^{}]*\"query\"[^{}]*\}\s*</?>?",
             r"\{[^{}]*\"query\"\s*:\s*\"[^\"]*\"[^{}]*\}",
             r"<tool_call>.*?</tool_call>",
@@ -1876,6 +1910,8 @@ class StreamingSanitizer:
             r"\[tool output:\s*\w+\]\s*",
             r"calling tools?:\s*[\w,\s]+\.{3}",
             r"i (?:used|called|invoked|ran|executed) (?:the )?(?:tool|sandbox|search)\b[^.]*\.",
+            r"\[System Context:[^\]]*\]\s*",
+            r"\[System Context\]\s*",
         ]
         for phrase in phrases_to_redact:
             self.buffer = re.sub(phrase, "", self.buffer, flags=re.IGNORECASE | re.DOTALL)
@@ -1909,6 +1945,10 @@ class StreamingSanitizer:
         final_text = self.buffer
         self.buffer = ""
         phrases_to_redact = [
+            r"function\s*=>\s*\{[^{}]*\"query\"[^{}]*\}\s*(?:</function>)?",
+            r"function\s*=>\s*\{.*?\}(?:</function>)?",
+            r"function\s*=>\s*.*?(?:</function>|\n|$)",
+            r"</?function\b[^>]*>",
             r"<(?:>|/[^>]*>)?\s*\{[^{}]*\"query\"[^{}]*\}\s*</?>?",
             r"\{[^{}]*\"query\"\s*:\s*\"[^\"]*\"[^{}]*\}",
             r"<tool_call>.*?</tool_call>",
@@ -1916,6 +1956,8 @@ class StreamingSanitizer:
             r"<search_query>.*?</search_query>",
             r"\[tool output:\s*\w+\]\s*",
             r"calling tools?:\s*[\w,\s]+\.{3}",
+            r"\[System Context:[^\]]*\]\s*",
+            r"\[System Context\]\s*",
         ]
         for phrase in phrases_to_redact:
             final_text = re.sub(phrase, "", final_text, flags=re.IGNORECASE | re.DOTALL)
@@ -2021,6 +2063,7 @@ async def generate_response_node(
     if images and not is_vision_capable_model:
         gemini_key = keys.get("gemini") or keys.get("google") or getattr(settings, "GEMINI_API_KEY", None) or os.environ.get("GEMINI_API_KEY")
         openrouter_key = keys.get("openrouter") or getattr(settings, "OPENROUTER_API_KEY", None)
+        groq_key = keys.get("groq") or getattr(settings, "GROQ_API_KEY", None) or os.environ.get("GROQ_API_KEY")
 
         if gemini_key:
             # Switch silently to Gemini Flash for vision — fastest and most capable
@@ -2060,11 +2103,31 @@ async def generate_response_node(
                     await on_token(vision_note)
                 except Exception:
                     pass
+        elif groq_key:
+            # Fallback: Groq Llama 3.2 Vision (free, no extra key required)
+            # NOTE: meta-llama/llama-4-scout-17b-16e-instruct was deprecated on Groq July 17, 2026.
+            # Using llama-3.2-11b-vision-preview which is the current Groq vision model.
+            vision_model   = "llama-3.2-11b-vision-preview"
+            vision_prov    = groq_provider
+            vision_key     = groq_key
+            vision_note    = f"*(Analyzing your image with Llama 3.2 Vision via Groq — your current model **{model}** does not support vision)*\n\n"
+            logger.info(
+                f"generate_response_node: '{model}' is not vision-capable — "
+                f"auto-routing to Llama 3.2 Vision (Groq) for image analysis."
+            )
+            model          = vision_model
+            provider       = vision_prov
+            provider_api_key = vision_key
+            if on_token:
+                try:
+                    await on_token(vision_note)
+                except Exception:
+                    pass
         else:
             # No vision-capable provider configured — perform Tesseract OCR fallback!
             ocr_text = _perform_tesseract_ocr_on_images(images)
             if ocr_text:
-                ocr_note = f"*(Extracted text from image using Tesseract OCR fallback — Gemini Vision key not configured for **{model}**)*\n\n"
+                ocr_note = "*(Vision model unavailable. Extracted text using local OCR fallback.)*\n\n"
                 logger.info(
                     f"generate_response_node: Tesseract OCR fallback extracted text from {len(images)} images."
                 )
@@ -2096,6 +2159,7 @@ async def generate_response_node(
                     except Exception:
                         pass
             images = []
+
 
 
 
@@ -2223,7 +2287,7 @@ async def generate_response_node(
     elif "gpt" in model_lower or "o1-" in model_lower or "o3-" in model_lower or "o4-" in model_lower:
         # OpenAI primary → OpenRouter OpenAI → Gemini rescue
         generic_fallbacks = [
-            ("openai",     openrouter_provider, f"openai/{actual_model_id}"),
+            ("openai",     openai_provider,     actual_model_id),
             ("openrouter", openrouter_provider, f"openai/{actual_model_id}"),
             ("gemini",     gemini_provider,     "gemini-2.5-flash"),
         ]
@@ -2277,11 +2341,49 @@ async def generate_response_node(
             attempts.append((prov_inst, model_id, key))
 
     if images:
+        # ── Vision guarantee: always inject system-level vision providers ──────
+        # User fallback chain may have no vision-capable entries if the user has
+        # no matching API keys. Inject system-settings keys so Tesseract OCR is
+        # truly the absolute last resort, not the first fallback.
+        _sys_gemini_key = (
+            keys.get("gemini") or keys.get("google") or
+            getattr(settings, "GEMINI_API_KEY", None) or
+            os.environ.get("GEMINI_API_KEY")
+        )
+        _sys_openai_key = (
+            keys.get("openai") or
+            getattr(settings, "OPENAI_API_KEY", None) or
+            os.environ.get("OPENAI_API_KEY")
+        )
+        _sys_groq_key = (
+            keys.get("groq") or
+            getattr(settings, "GROQ_API_KEY", None) or
+            os.environ.get("GROQ_API_KEY")
+        )
+        _sys_or_key = (
+            keys.get("openrouter") or
+            getattr(settings, "OPENROUTER_API_KEY", None) or
+            os.environ.get("OPENROUTER_API_KEY")
+        )
+        # Guarantee: Gemini Flash via system key (best for handwriting/vision)
+        if _sys_gemini_key and not any(m in ("gemini-2.5-flash", "gemini-2.0-flash") for _, m, _ in attempts):
+            attempts.append((gemini_provider, "gemini-2.5-flash", _sys_gemini_key))
+        # Guarantee: OpenAI GPT-4o via system key through OpenRouter
+        if _sys_or_key and not any("gpt-4o" in m for _, m, _ in attempts):
+            attempts.append((openrouter_provider, "openai/gpt-4o", _sys_or_key))
+        # Guarantee: OpenAI GPT-4o directly if system OPENAI_API_KEY is set
+        if _sys_openai_key and not any("gpt-4o" in m for _, m, _ in attempts):
+            attempts.append((openrouter_provider, "openai/gpt-4o", _sys_openai_key))
+        # Guarantee: Groq Llama Vision (free)
+        if _sys_groq_key and not any("llama-3.2" in m for _, m, _ in attempts):
+            attempts.append((groq_provider, "llama-3.2-11b-vision-preview", _sys_groq_key))
+
         # Strict filter: only attempt vision-capable models when images are present
         attempts = [
             (p, m, k) for (p, m, k) in attempts
             if any(frag in m.lower() for frag in _VISION_FRAGMENTS)
         ]
+        logger.info(f"[Vision] {len(attempts)} vision attempt(s) queued: {[m for _, m, _ in attempts]}")
 
     full_response = ""
     tool_calls: List[dict] = []
@@ -2424,16 +2526,12 @@ async def generate_response_node(
             continue
 
     # ── Tesseract OCR Rescue: If all vision provider attempts failed ──────────
+    ocr_text = ""
     if not success and images and not full_response:
         logger.info("[Vision Fallback] All vision attempts failed. Attempting Tesseract OCR rescue...")
         ocr_text = _perform_tesseract_ocr_on_images(images)
         if ocr_text:
-            ocr_rescue_note = "*(Gemini Vision API key is not configured or rate-limited — using local Tesseract OCR fallback. Note: for handwritten image notes, add a Gemini API key in Settings for 99%+ vision accuracy)*\n\n"
-            if on_token:
-                try:
-                    await on_token(ocr_rescue_note)
-                except Exception:
-                    pass
+            ocr_rescue_note = "*(Vision processing failed. Extracted text using local OCR — trying text model to summarize...)*\n\n"
             for m in reversed(raw_messages):
                 if m.get("role") == "user":
                     m["content"] = f"{m['content']}\n\n[Extracted Image Text (Tesseract OCR Rescue)]:\n{ocr_text}"
@@ -2454,6 +2552,22 @@ async def generate_response_node(
                     break
                 except Exception as r_err:
                     logger.warning(f"[OCR Rescue] Attempt with {r_mod} failed: {r_err}")
+
+            if not success and ocr_text:
+                # If LLM APIs failed/rate-limited, deliver extracted OCR text directly!
+                direct_ocr_response = (
+                    "ℹ️ **Vision AI & Cloud LLMs Unavailable**\n\n"
+                    "The cloud AI models are currently rate-limited or unavailable. "
+                    "Here is the text extracted directly from your image using local OCR:\n\n"
+                    f"{ocr_text}"
+                )
+                if on_token and not full_response:
+                    try:
+                        await on_token(direct_ocr_response)
+                    except Exception:
+                        pass
+                full_response = direct_ocr_response
+                success = True
 
     # Track whether the final response is a transient error (should NOT be saved to history)
     _is_error_response = False

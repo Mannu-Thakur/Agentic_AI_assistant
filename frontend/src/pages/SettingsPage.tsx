@@ -132,41 +132,8 @@ const ALL_MODELS = [
   { id: 'qwen-turbo', label: 'Qwen Turbo', provider: 'Alibaba', apiProvider: 'alibaba' },
 ];
 
-async function detectUserLocation(): Promise<string> {
-  if ('geolocation' in navigator) {
-    try {
-      const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 6000, enableHighAccuracy: true });
-      });
-      const { latitude, longitude } = pos.coords;
-      const res = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${latitude}&lon=${longitude}&format=json`);
-      if (res.ok) {
-        const data = await res.json();
-        const address = data.address || {};
-        const parts = [
-          address.suburb || address.neighbourhood || address.residential || address.village,
-          address.city || address.town || address.county,
-          address.state,
-          address.country
-        ].filter(Boolean);
-        if (parts.length > 0) return parts.join(', ');
-      }
-    } catch (e) {
-      console.warn('Geolocation API unavailable or permission denied, trying IP fallback:', e);
-    }
-  }
-
-  try {
-    const ipRes = await fetch('https://ipapi.co/json/').catch(() => null);
-    if (ipRes && ipRes.ok) {
-      const ipData = await ipRes.json();
-      const parts = [ipData.city, ipData.region, ipData.country_name].filter(Boolean);
-      if (parts.length > 0) return parts.join(', ');
-    }
-  } catch { /* fallback */ }
-
-  return 'Mithapur, Bihar, India';
-}
+import { detectUserLocation } from '../services/locationService';
+export { detectUserLocation };
 
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // â”€â”€ Premium Toggle Switch â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

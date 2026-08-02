@@ -79,10 +79,13 @@ class VectorStore:
         filename: str,
         chunks: List[str],
         chunk_metadatas: Optional[List[Dict[str, Any]]] = None,
+        api_key: Optional[str] = None,
     ):
         """
         Generates embeddings with cache-awareness and indexes chunks into ChromaDB.
         chunk_metadatas: optional per-chunk extra metadata (e.g., page_number).
+        api_key: user's runtime Gemini API key. Must be passed so ingestion uses
+                 real semantic embeddings instead of mock random vectors.
         """
         if not chunks:
             return
@@ -105,7 +108,7 @@ class VectorStore:
                 embeddings.append([])  # placeholder
 
         if uncached_texts:
-            fresh = await EmbeddingService.get_embeddings(uncached_texts)
+            fresh = await EmbeddingService.get_embeddings(uncached_texts, api_key=api_key)
             for idx, vec in zip(uncached_indices, fresh):
                 embeddings[idx] = vec
             await embedding_cache.set_batch(dict(zip(uncached_texts, fresh)))
@@ -190,11 +193,12 @@ class VectorStore:
         chroma_filter: Dict[str, Any] = {"user_id": user_id}
         if where_filter:
             # Combine where_filter keys with user_id
-            for k, v in where_filter.items():
-                if k != "user_id" and v is not None:
-                    chroma_filter[k] = v
+            # NOTE: Use fk/fv to avoid shadowing the function parameter `k` (retrieval depth)
+            for fk, fv in where_filter.items():
+                if fk != "user_id" and fv is not None:
+                    chroma_filter[fk] = fv
 
-        filter_clause = chroma_filter if len(chroma_filter) == 1 else {"$and": [{k: v} for k, v in chroma_filter.items()]}
+        filter_clause = chroma_filter if len(chroma_filter) == 1 else {"$and": [{fk: fv} for fk, fv in chroma_filter.items()]}
 
         # 1. Fetch dense vector query candidates
         dense_docs, dense_metas, dense_dists = [], [], []

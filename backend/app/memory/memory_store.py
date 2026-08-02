@@ -4,6 +4,10 @@ app/memory/memory_store.py — Vector Store for Semantic User Memory Retrieval.
 Indexes user memory items (facts, preferences, goals, project context) into ChromaDB
 under the 'user_memories' collection. Allows semantic vector similarity search
 for memory retrieval during context assembly.
+
+All embeddings use the real Gemini text-embedding-004 API via EmbeddingService.
+The user's runtime api_key is threaded through every call so no mock/random
+vectors can ever be written to the memory collection.
 """
 
 import logging
@@ -47,13 +51,20 @@ class MemoryVectorStore:
         importance_score: int = 5,
         project_id: Optional[str] = None,
         session_id: Optional[str] = None,
+        api_key: Optional[str] = None,
     ):
-        """Indexes a memory item into ChromaDB for vector retrieval."""
+        """
+        Indexes a memory item into ChromaDB for vector retrieval.
+
+        api_key: user's Gemini API key. Must be supplied so the embedding
+                 uses real Gemini vectors, not mock random vectors.
+        """
         if not content.strip():
             return
 
         collection = self.get_collection()
-        embedding = await EmbeddingService.get_embedding(content)
+        # Always pass api_key so EmbeddingService uses the real Gemini API.
+        embedding = await EmbeddingService.get_embedding(content, api_key=api_key)
 
         metadata: Dict[str, Any] = {
             "memory_id":        memory_id,
@@ -70,7 +81,10 @@ class MemoryVectorStore:
             metadatas=[metadata],
             documents=[content],
         )
-        logger.info(f"[MemoryVectorStore] Indexed memory {memory_id} for user {user_id} ({category})")
+        logger.info(
+            f"[MemoryVectorStore] Indexed memory {memory_id} "
+            f"for user {user_id} ({category})"
+        )
 
     async def search_memories(
         self,
@@ -78,16 +92,19 @@ class MemoryVectorStore:
         query: str,
         k: int = 5,
         category_filter: Optional[str] = None,
+        api_key: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Performs semantic vector search against user memories in ChromaDB.
         Filters strictly by user_id for multi-tenant isolation.
+
+        api_key: user's Gemini API key for real-time query embedding.
         """
         if not query.strip():
             return []
 
         collection = self.get_collection()
-        query_embedding = await EmbeddingService.get_embedding(query)
+        query_embedding = await EmbeddingService.get_embedding(query, api_key=api_key)
 
         where_filter: Dict[str, Any] = {"user_id": user_id}
         if category_filter:

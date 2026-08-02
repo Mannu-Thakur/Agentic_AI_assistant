@@ -1,4 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { RefreshCw, MapPin } from 'lucide-react';
+import { detectUserLocation } from '../../services/locationService';
 
 interface TimeWidgetProps {
   location?: string;
@@ -77,7 +79,24 @@ function ClockFace({ size }: { size: number }) {
 
 export const TimeWidget: React.FC<TimeWidgetProps> = () => {
   const [now, setNow] = useState(new Date());
-  const loc = getLocationLabel();
+  const [locLabel, setLocLabel] = useState(getLocationLabel());
+  const [isDetectingLoc, setIsDetectingLoc] = useState(false);
+
+  const refreshLocation = useCallback(async () => {
+    setIsDetectingLoc(true);
+    try {
+      const freshLoc = await detectUserLocation();
+      const parts = freshLoc.split(',').map((s) => s.trim());
+      setLocLabel({
+        city: parts[0] || 'Your Location',
+        region: parts[1] || '',
+        country: parts[2] || '',
+      });
+    } catch (_) {
+    } finally {
+      setIsDetectingLoc(false);
+    }
+  }, []);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -85,6 +104,16 @@ export const TimeWidget: React.FC<TimeWidgetProps> = () => {
     }, 1000);
     return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    // Auto-detect real-time location if not refreshed recently
+    const lastTimestamp = Number(localStorage.getItem('omni_user_location_timestamp') || '0');
+    const isStale = Date.now() - lastTimestamp > 3600000; // 1 hour
+    const rawLoc = localStorage.getItem('omni_user_location');
+    if (!rawLoc || isStale) {
+      refreshLocation();
+    }
+  }, [refreshLocation]);
 
   const SIZE = 96;
   const CX = SIZE / 2;
@@ -112,7 +141,7 @@ export const TimeWidget: React.FC<TimeWidgetProps> = () => {
   const minuteHand = handCoords(minuteDeg, 30);
   const secondHand = handCoords(secondDeg, 34);
 
-  const locationText = [loc.city, loc.region, loc.country].filter(Boolean).join(', ');
+  const locationText = [locLabel.city, locLabel.region, locLabel.country].filter(Boolean).join(', ');
 
   return (
     <div className="my-3 block">
@@ -125,8 +154,19 @@ export const TimeWidget: React.FC<TimeWidgetProps> = () => {
           <div className="text-[28px] font-bold text-[#F2F2F2] tracking-tight leading-none tabular-nums">
             {formatDigital(now)}
           </div>
-          <div className="text-[13px] text-[#BDBDBD] font-medium mt-1.5 truncate">
-            {locationText || 'Your Location'}
+          <div className="flex items-center gap-1.5 mt-1.5 min-w-0 group">
+            <MapPin className="w-3.5 h-3.5 text-[#3b82f6] flex-shrink-0" />
+            <span className="text-[13px] text-[#BDBDBD] font-medium truncate" title={locationText}>
+              {locationText || 'Your Location'}
+            </span>
+            <button
+              onClick={refreshLocation}
+              disabled={isDetectingLoc}
+              title="Detect real-time location"
+              className="p-1 rounded hover:bg-[#333] text-[#808080] hover:text-[#fff] transition-colors cursor-pointer flex-shrink-0"
+            >
+              <RefreshCw className={`w-3 h-3 ${isDetectingLoc ? 'animate-spin text-[#3b82f6]' : ''}`} />
+            </button>
           </div>
           <div className="text-[11px] text-[#808080] font-normal mt-0.5">
             {getDayBadge(now)}, {getOffset()}

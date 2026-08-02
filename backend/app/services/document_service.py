@@ -14,9 +14,10 @@ class DocumentService:
         """
         Retrieves all documents owned by a specific user, optionally filtered by chat_id.
         """
+        from sqlalchemy import or_
         query = select(Document).where(Document.user_id == user_id)
         if chat_id:
-            query = query.where(Document.chat_id == chat_id)
+            query = query.where(or_(Document.chat_id == chat_id, Document.chat_id.is_(None)))
         query = query.order_by(desc(Document.uploaded_at))
         result = await db.execute(query)
         return list(result.scalars().all())
