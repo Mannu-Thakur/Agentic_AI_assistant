@@ -125,7 +125,7 @@ async def search_tavily(query: str, api_key: str, max_results: int = 8) -> List[
             return results
 
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, _sync_search)
+        return await asyncio.wait_for(loop.run_in_executor(None, _sync_search), timeout=8.0)
     except (ImportError, ModuleNotFoundError, Exception) as exc:
         logger.info(f"Tavily SDK search failed or not installed ({exc}); using direct HTTP REST call.")
         import httpx
@@ -189,7 +189,7 @@ async def search_serpapi(query: str, api_key: str, max_results: int = 8) -> List
             return results
 
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, _sync_search)
+        return await asyncio.wait_for(loop.run_in_executor(None, _sync_search), timeout=8.0)
     except (ImportError, ModuleNotFoundError, Exception) as exc:
         logger.info(f"SerpAPI SDK search failed or not installed ({exc}); using direct HTTP REST call.")
         import httpx
@@ -250,7 +250,7 @@ async def search_exa(query: str, api_key: str, max_results: int = 8) -> List[Sea
             return results
 
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, _sync_search)
+        return await asyncio.wait_for(loop.run_in_executor(None, _sync_search), timeout=8.0)
     except (ImportError, ModuleNotFoundError, Exception) as exc:
         logger.info(f"Exa SDK search failed or not installed ({exc}); using direct HTTP REST call.")
         import httpx
@@ -300,7 +300,7 @@ async def search_duckduckgo(query: str, max_results: int = 8) -> List[SearchResu
                 return list(ddgs.text(query, max_results=max_results))
 
         loop = asyncio.get_running_loop()
-        raw = await loop.run_in_executor(None, _sync_search)
+        raw = await asyncio.wait_for(loop.run_in_executor(None, _sync_search), timeout=8.0)
         if raw:
             results = []
             for r in raw:

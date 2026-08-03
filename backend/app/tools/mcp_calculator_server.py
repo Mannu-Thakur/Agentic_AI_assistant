@@ -22,6 +22,55 @@ def save_store(store):
     except Exception:
         pass
 
+
+# Category aliases: map informal names to canonical categories
+CATEGORY_ALIASES = {
+    "fooding": "food",
+    "foodings": "food",
+    "food": "food",
+    "fast food": "food",
+    "fastfood": "food",
+    "lunch": "food",
+    "dinner": "food",
+    "breakfast": "food",
+    "bf": "food",
+    "lun": "food",
+    "dnnr": "food",
+    "snack": "food",
+    "snacks": "food",
+    "meal": "food",
+    "meals": "food",
+    "coupon": "food",
+    "groceries": "food",
+    "grocery": "food",
+    "eating": "food",
+    "restaurant": "food",
+    "restaurants": "food",
+    "transport": "transport",
+    "travel": "transport",
+    "cab": "transport",
+    "uber": "transport",
+    "bills": "bills",
+    "bill": "bills",
+    "electricity": "bills",
+    "rent": "bills",
+    "shopping": "shopping",
+    "clothing": "shopping",
+    "entertainment": "entertainment",
+    "movie": "entertainment",
+    "health": "health",
+    "medicine": "health",
+    "medical": "health",
+}
+
+def normalize_category(category: str) -> str:
+    """Normalize informal category names to canonical ones."""
+    if not category:
+        return "food"
+    key = category.strip().lower()
+    return CATEGORY_ALIASES.get(key, key)
+
+
 def calculate(expression: str) -> str:
     """
     Safely evaluate basic mathematical expressions.
@@ -53,28 +102,80 @@ def calculate(expression: str) -> str:
     except Exception as e:
         return f"Error evaluating expression: {str(e)}"
 
-def add_expense(amount: float, description: str, category: str = "food") -> str:
+def add_expense(amount: float, description: str, category: str = "food", date: str = None) -> str:
     store = load_store()
+    canonical_cat = normalize_category(category)
     expense = {
         "amount": amount,
         "description": description,
-        "category": category
+        "category": canonical_cat,
+        "date": date or "",          # ISO date string e.g. "2026-07-02", or empty
     }
     store["expenses"].append(expense)
     save_store(store)
-    return f"Successfully added expense: ₹{amount} for '{description}' (Category: {category})."
+    date_str = f" on {date}" if date else ""
+    return f"✅ Added expense: ₹{amount} for '{description}' (Category: {canonical_cat}{date_str})."
 
-def get_expenses(category: str = None) -> str:
+def get_expenses(category: str = None, date: str = None) -> str:
     store = load_store()
     expenses = store["expenses"]
+
+    # Category filter with alias normalization
     if category:
-        expenses = [e for e in expenses if e["category"].lower() == category.lower()]
+        cat_norm = normalize_category(category)
+        expenses = [e for e in expenses if normalize_category(e.get("category", "")) == cat_norm]
+
+    # Date filter (partial match: "2026-07-02" or "July 2026" etc.)
+    if date:
+        date_lower = date.strip().lower()
+        expenses = [e for e in expenses if date_lower in e.get("date", "").lower()]
+
     if not expenses:
-        return f"No expenses found{f' for category {category}' if category else ''}."
+        filter_desc = []
+        if category:
+            filter_desc.append(f"category '{category}'")
+        if date:
+            filter_desc.append(f"date '{date}'")
+        return f"No expenses found{' for ' + ' and '.join(filter_desc) if filter_desc else ''}."
     
     total = sum(float(e["amount"]) for e in expenses)
-    details = "\n".join(f"- ₹{e['amount']}: {e['description']} ({e['category']})" for e in expenses)
-    return f"Expenses:\n{details}\nTotal spent: ₹{total:.2f}"
+    details = "\n".join(
+        f"  • ₹{e['amount']} — {e['description']} [{e['category']}]"
+        + (f" on {e['date']}" if e.get("date") else "")
+        for e in expenses
+    )
+    filter_desc = []
+    if category:
+        filter_desc.append(f"category '{normalize_category(category)}'")
+    if date:
+        filter_desc.append(f"date '{date}'")
+    header = f"Expenses{' (' + ', '.join(filter_desc) + ')' if filter_desc else ''}:"
+    return f"{header}\n{details}\n\n💰 Total spent: ₹{total:.2f}"
+
+def summarize_expenses() -> str:
+    """Return a summary of all expenses grouped by category with per-category totals."""
+    store = load_store()
+    expenses = store["expenses"]
+    if not expenses:
+        return "No expenses tracked yet."
+
+    # Group by category
+    groups: dict = {}
+    for e in expenses:
+        cat = e.get("category", "uncategorized")
+        groups.setdefault(cat, []).append(e)
+
+    lines = []
+    grand_total = 0.0
+    for cat, items in sorted(groups.items()):
+        cat_total = sum(float(x["amount"]) for x in items)
+        grand_total += cat_total
+        lines.append(f"\n📂 {cat.upper()} — ₹{cat_total:.2f}")
+        for x in items:
+            date_str = f" ({x['date']})" if x.get("date") else ""
+            lines.append(f"    • ₹{x['amount']} — {x['description']}{date_str}")
+
+    return "📊 Expense Summary:\n" + "\n".join(lines) + f"\n\n💰 Grand Total: ₹{grand_total:.2f}"
 
 def create_reminder(time: str, text: str) -> str:
     store = load_store()
@@ -84,7 +185,7 @@ def create_reminder(time: str, text: str) -> str:
     }
     store["reminders"].append(reminder)
     save_store(store)
-    return f"Successfully created reminder for {time}: '{text}'."
+    return f"✅ Reminder set for {time}: '{text}'."
 
 def send_email(to: str, subject: str, body: str) -> str:
     store = load_store()
@@ -95,7 +196,8 @@ def send_email(to: str, subject: str, body: str) -> str:
     }
     store["emails"].append(email)
     save_store(store)
-    return f"Successfully sent email to {to} with subject '{subject}'."
+    return f"✅ Email sent to {to} with subject '{subject}'."
+
 
 def send_response(req_id: int, result: dict = None, error: dict = None):
     response = {
@@ -111,7 +213,7 @@ def send_response(req_id: int, result: dict = None, error: dict = None):
     sys.stdout.flush()
 
 def main():
-    sys.stderr.write("Starting Mock Calculator & Workspace MCP server...\n")
+    sys.stderr.write("Starting Workspace MCP server...\n")
     sys.stderr.flush()
     
     while True:
@@ -146,7 +248,7 @@ def main():
                         "tools": {}
                     },
                     "serverInfo": {
-                        "name": "MockWorkspaceMcpServer",
+                        "name": "WorkspaceMcpServer",
                         "version": "1.0.0"
                     }
                 }
@@ -170,21 +272,25 @@ def main():
                     },
                     {
                         "name": "add_expense",
-                        "description": "Add a new expense to track spending (e.g. dinner, groceries).",
+                        "description": "Add a new expense entry. Category accepts natural language (e.g. 'fooding', 'fast food', 'lunch', 'bf', 'lun', 'dnnr', 'coupon', 'groceries') — they are all normalised to canonical categories automatically. Optionally include a date (ISO format YYYY-MM-DD or natural text like '2026-07-02').",
                         "inputSchema": {
                             "type": "object",
                             "properties": {
                                 "amount": {
                                     "type": "number",
-                                    "description": "The expense amount"
+                                    "description": "The expense amount in rupees"
                                 },
                                 "description": {
                                     "type": "string",
-                                    "description": "Description of what was bought"
+                                    "description": "What was bought or the expense label"
                                 },
                                 "category": {
                                     "type": "string",
-                                    "description": "Category of the expense (e.g. food, transport, bills)"
+                                    "description": "Category — accepts informal names like 'fooding', 'fast food', 'lunch', 'bf', 'coupon', 'groceries', 'transport', 'bills', etc."
+                                },
+                                "date": {
+                                    "type": "string",
+                                    "description": "Optional date of the expense, e.g. '2026-07-02' or '2nd July 2026'"
                                 }
                             },
                             "required": ["amount", "description"]
@@ -192,15 +298,27 @@ def main():
                     },
                     {
                         "name": "get_expenses",
-                        "description": "Retrieve tracked expenses and total spending.",
+                        "description": "Retrieve tracked expenses and calculate total spending. Supports filtering by category (accepts informal names like 'fooding', 'food', 'fast food') and/or by date.",
                         "inputSchema": {
                             "type": "object",
                             "properties": {
                                 "category": {
                                     "type": "string",
-                                    "description": "Optional category filter"
+                                    "description": "Optional category filter — accepts 'fooding', 'food', 'fast food', 'lunch', 'transport', 'bills', etc."
+                                },
+                                "date": {
+                                    "type": "string",
+                                    "description": "Optional date filter e.g. '2026-07-02'"
                                 }
                             }
+                        }
+                    },
+                    {
+                        "name": "summarize_expenses",
+                        "description": "Show a full breakdown of all expenses grouped by category with per-category subtotals and a grand total. Use this when the user asks for overall spending or a complete summary.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {}
                         }
                     },
                     {
@@ -266,7 +384,8 @@ def main():
                     amount = float(arguments.get("amount", 0))
                     description = arguments.get("description", "")
                     category = arguments.get("category", "food")
-                    res_str = add_expense(amount, description, category)
+                    date = arguments.get("date", None)
+                    res_str = add_expense(amount, description, category, date)
                     result = {
                         "content": [
                             {
@@ -278,7 +397,19 @@ def main():
                     send_response(req_id, result=result)
                 elif tool_name == "get_expenses":
                     category = arguments.get("category")
-                    res_str = get_expenses(category)
+                    date = arguments.get("date")
+                    res_str = get_expenses(category, date)
+                    result = {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": res_str
+                            }
+                        ]
+                    }
+                    send_response(req_id, result=result)
+                elif tool_name == "summarize_expenses":
+                    res_str = summarize_expenses()
                     result = {
                         "content": [
                             {

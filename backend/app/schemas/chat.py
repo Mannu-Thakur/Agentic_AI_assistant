@@ -3,10 +3,12 @@ from pydantic import BaseModel, ConfigDict
 from datetime import datetime
 
 class ToolCallSchema(BaseModel):
-  name: str
-  args: Dict[str, Any]
+  name: Optional[str] = "tool"
+  args: Optional[Dict[str, Any]] = {}
   result: Optional[str] = None
-  status: str  # running, completed, failed
+  status: Optional[str] = "completed"  # running, completed, failed
+
+  model_config = ConfigDict(extra="allow", from_attributes=True)
 
 class DeveloperMetricsSchema(BaseModel):
   model_used: Optional[str] = None
@@ -29,6 +31,8 @@ class ImageAttachment(BaseModel):
   base64: str
   mimeType: str
 
+  model_config = ConfigDict(extra="allow", from_attributes=True)
+
 class MessageCreate(BaseModel):
   content: str
   model: str
@@ -46,7 +50,7 @@ class MessageOut(BaseModel):
   images: Optional[List[ImageAttachment]] = None  # Persisted inline images
   created_at: datetime
 
-  model_config = ConfigDict(from_attributes=True)
+  model_config = ConfigDict(extra="allow", from_attributes=True)
 
 class ChatCreate(BaseModel):
   title: Optional[str] = "New Chat"

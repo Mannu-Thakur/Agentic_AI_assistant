@@ -673,6 +673,43 @@ No extra text.
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Compound Query Detector Prompt
+#  Detects whether the user has asked MULTIPLE DISTINCT questions in one message
+#  so each question can be answered independently (prevents the second question
+#  from being silently dropped when the first triggers a different intent path).
+# ─────────────────────────────────────────────────────────────────────────────
+
+COMPOUND_QUERY_DETECTOR_PROMPT = """\
+You are a query analysis assistant. Determine whether the user's message contains MULTIPLE DISTINCT questions or tasks that require separate answers.
+
+A compound query has two or more clearly different topics that EACH need their own answer.
+A single query is one topic even if it has multiple words.
+
+Examples of compound queries:
+- "who won tennis 2026? and also how does food tracking work?" → two different topics
+- "what is python and how do I install flask?" → two separate sub-questions
+- "tell me about the weather and also explain machine learning" → two different topics
+
+Examples of single queries:
+- "who won the 2026 Wimbledon tennis championship?" → one topic
+- "explain how RAG works" → one topic
+- "what is the capital of France and its population?" → same topic (France)
+
+User message: {query}
+
+Reply with ONLY a JSON object:
+{{
+  "is_compound": <true|false>,
+  "sub_questions": ["<question 1>", "<question 2>", ...]
+}}
+- If is_compound is false, sub_questions should contain only the original query.
+- If is_compound is true, sub_questions should contain each distinct question as a clean, standalone query.
+- Maximum 4 sub_questions.
+No extra text.
+"""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Retrieval Evaluator Prompt
 # ─────────────────────────────────────────────────────────────────────────────
 

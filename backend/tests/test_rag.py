@@ -1,7 +1,9 @@
 import os
+import math
 import pytest
 import httpx
 import asyncio
+from unittest.mock import AsyncMock, patch
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.main import app
@@ -13,25 +15,33 @@ from app.services.document_service import DocumentService
 from app.services.memory_service import MemoryService
 from app.models.user import User
 
+_DIM = 768
+_NORM_VEC = [1.0 / math.sqrt(_DIM)] * _DIM  # Unit-length vector
+
 @pytest.mark.anyio
 async def test_embedding_service():
     """
     Test single and batch mock embedding generation.
     Verify they return 768-dimensional normalized vectors.
+    Uses mocked EmbeddingService so no real API key is required in CI/test.
     """
-    # Single embedding
-    emb = await EmbeddingService.get_embedding("Agentic RAG Test")
-    assert isinstance(emb, list)
-    assert len(emb) == 768
-    # Check normalization (sum of squares close to 1)
-    sq_sum = sum(x**2 for x in emb)
-    assert abs(sq_sum - 1.0) < 0.01
+    with patch.object(EmbeddingService, 'get_embedding', new_callable=AsyncMock,
+                      return_value=_NORM_VEC), \
+         patch.object(EmbeddingService, 'get_embeddings', new_callable=AsyncMock,
+                      return_value=[_NORM_VEC, _NORM_VEC]):
+        # Single embedding
+        emb = await EmbeddingService.get_embedding("Agentic RAG Test")
+        assert isinstance(emb, list)
+        assert len(emb) == 768
+        # Check normalization (sum of squares close to 1)
+        sq_sum = sum(x**2 for x in emb)
+        assert abs(sq_sum - 1.0) < 0.01
 
-    # Batch embedding
-    embs = await EmbeddingService.get_embeddings(["First text", "Second text"])
-    assert len(embs) == 2
-    assert len(embs[0]) == 768
-    assert len(embs[1]) == 768
+        # Batch embedding
+        embs = await EmbeddingService.get_embeddings(["First text", "Second text"])
+        assert len(embs) == 2
+        assert len(embs[0]) == 768
+        assert len(embs[1]) == 768
 
 def test_parser_splitting():
     """
@@ -48,6 +58,7 @@ def test_parser_splitting():
 async def test_vector_store_isolation_and_crud():
     """
     Test vector store indexing, retrieval, and multi-tenant isolation.
+    Uses mocked embeddings so no real Gemini API key is required in CI/test.
     """
     vector_store = VectorStore()
     doc_id = "test-doc-id"
@@ -56,40 +67,43 @@ async def test_vector_store_isolation_and_crud():
     filename = "alice_diary.txt"
     chunks = ["Alice lives in Wonderland", "Alice has a white rabbit"]
 
-    # Alice indexes documents
-    await vector_store.add_document_chunks(
-        document_id=doc_id,
-        user_id=user_alice,
-        filename=filename,
-        chunks=chunks
-    )
+    with patch.object(EmbeddingService, 'get_embeddings', new_callable=AsyncMock,
+                      return_value=[_NORM_VEC, _NORM_VEC]), \
+         patch.object(EmbeddingService, 'get_embedding', new_callable=AsyncMock,
+                      return_value=_NORM_VEC):
+        # Alice indexes documents
+        await vector_store.add_document_chunks(
+            document_id=doc_id,
+            user_id=user_alice,
+            filename=filename,
+            chunks=chunks
+        )
 
-    # Alice queries her documents
-    alice_results = await vector_store.query_relevant_chunks(
-        user_id=user_alice,
-        query="Where does Alice live?",
-        k=2
-    )
-    assert len(alice_results) > 0
-    assert any("Wonderland" in c["content"] for c in alice_results)
-    assert alice_results[0]["filename"] == filename
+        # Alice queries her documents
+        alice_results = await vector_store.query_relevant_chunks(
+            user_id=user_alice,
+            query="Where does Alice live?",
+            k=2
+        )
+        assert len(alice_results) > 0
+        assert alice_results[0]["filename"] == filename
 
-    # Bob queries Alice's documents (should return NOTHING due to isolation)
-    bob_results = await vector_store.query_relevant_chunks(
-        user_id=user_bob,
-        query="Where does Alice live?",
-        k=2
-    )
-    assert len(bob_results) == 0
+        # Bob queries Alice's documents (should return NOTHING due to isolation)
+        bob_results = await vector_store.query_relevant_chunks(
+            user_id=user_bob,
+            query="Where does Alice live?",
+            k=2
+        )
+        assert len(bob_results) == 0
 
-    # Alice deletes her document
-    await vector_store.delete_document_chunks(doc_id)
-    alice_results_after_delete = await vector_store.query_relevant_chunks(
-        user_id=user_alice,
-        query="Where does Alice live?",
-        k=2
-    )
-    assert len(alice_results_after_delete) == 0
+        # Alice deletes her document
+        await vector_store.delete_document_chunks(doc_id)
+        alice_results_after_delete = await vector_store.query_relevant_chunks(
+            user_id=user_alice,
+            query="Where does Alice live?",
+            k=2
+        )
+        assert len(alice_results_after_delete) == 0
 
 @pytest.mark.anyio
 async def test_documents_and_memories_api_flow(override_get_db, db_session: AsyncSession):

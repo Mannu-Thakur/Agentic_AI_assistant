@@ -16,6 +16,14 @@ from app.core.security import encrypt_api_key, decrypt_api_key
 router = APIRouter(prefix="/api-keys", tags=["API Keys"])
 providers_router = APIRouter(prefix="/providers", tags=["Providers"])
 
+class ApiKeyAuthError(Exception):
+    """Raised when an API key is explicitly rejected by the provider due to invalid credentials."""
+    pass
+
+class ApiKeyNetworkError(Exception):
+    """Raised when provider API check fails due to transient network or server reachability issues."""
+    pass
+
 # ─── Live Provider Verification & Model Fetching ───────────────────────────────────
 
 async def verify_google(api_key: str) -> List[str]:
@@ -40,16 +48,16 @@ async def verify_google(api_key: str) -> List[str]:
                     detail = err_json.get("error", {}).get("message", detail)
                 except:
                     pass
-                if res.status_code == 400 or "API key not valid" in detail or "invalid" in detail.lower():
-                    raise Exception(
+                if res.status_code in (400, 401, 403) or "API key not valid" in detail or "invalid" in detail.lower():
+                    raise ApiKeyAuthError(
                         f"Google/Gemini API verification failed: {detail}. "
                         "Make sure: (1) the key is copied correctly with no extra spaces, "
                         "(2) the 'Generative Language API' is enabled in your Google Cloud Console, "
                         "(3) the key has no API restrictions blocking it."
                     )
-                raise Exception(f"Google/Gemini API verification failed: {detail}")
+                raise ApiKeyNetworkError(f"Google/Gemini API server error ({res.status_code}): {detail}")
     except httpx.RequestError as e:
-        raise Exception(f"Could not connect to Google API: {str(e)}")
+        raise ApiKeyNetworkError(f"Could not connect to Google API: {str(e)}")
 
 async def verify_openai(api_key: str) -> List[str]:
     url = "https://api.openai.com/v1/models"
@@ -71,9 +79,11 @@ async def verify_openai(api_key: str) -> List[str]:
                     detail = err_json.get("error", {}).get("message", detail)
                 except:
                     pass
-                raise Exception(f"OpenAI API verification failed: {detail}")
+                if res.status_code in (400, 401, 403) or "invalid" in detail.lower():
+                    raise ApiKeyAuthError(f"OpenAI API verification failed: {detail}")
+                raise ApiKeyNetworkError(f"OpenAI API server error ({res.status_code}): {detail}")
     except httpx.RequestError as e:
-        raise Exception(f"Could not connect to OpenAI API: {str(e)}")
+        raise ApiKeyNetworkError(f"Could not connect to OpenAI API: {str(e)}")
 
 async def verify_anthropic(api_key: str) -> List[str]:
     url = "https://api.anthropic.com/v1/models"
@@ -95,9 +105,11 @@ async def verify_anthropic(api_key: str) -> List[str]:
                     detail = err_json.get("error", {}).get("message", detail)
                 except:
                     pass
-                raise Exception(f"Anthropic API verification failed: {detail}")
+                if res.status_code in (400, 401, 403) or "invalid" in detail.lower():
+                    raise ApiKeyAuthError(f"Anthropic API verification failed: {detail}")
+                raise ApiKeyNetworkError(f"Anthropic API server error ({res.status_code}): {detail}")
     except httpx.RequestError as e:
-        raise Exception(f"Could not connect to Anthropic API: {str(e)}")
+        raise ApiKeyNetworkError(f"Could not connect to Anthropic API: {str(e)}")
 
 async def verify_deepseek(api_key: str) -> List[str]:
     url = "https://api.deepseek.com/models"
@@ -116,9 +128,11 @@ async def verify_deepseek(api_key: str) -> List[str]:
                     detail = err_json.get("error", {}).get("message", detail)
                 except:
                     pass
-                raise Exception(f"DeepSeek API verification failed: {detail}")
+                if res.status_code in (400, 401, 403) or "invalid" in detail.lower():
+                    raise ApiKeyAuthError(f"DeepSeek API verification failed: {detail}")
+                raise ApiKeyNetworkError(f"DeepSeek API server error ({res.status_code}): {detail}")
     except httpx.RequestError as e:
-        raise Exception(f"Could not connect to DeepSeek API: {str(e)}")
+        raise ApiKeyNetworkError(f"Could not connect to DeepSeek API: {str(e)}")
 
 async def verify_groq(api_key: str) -> List[str]:
     url = "https://api.groq.com/openai/v1/models"
@@ -140,9 +154,11 @@ async def verify_groq(api_key: str) -> List[str]:
                     detail = err_json.get("error", {}).get("message", detail)
                 except:
                     pass
-                raise Exception(f"Groq API verification failed: {detail}")
+                if res.status_code in (400, 401, 403) or "invalid" in detail.lower():
+                    raise ApiKeyAuthError(f"Groq API verification failed: {detail}")
+                raise ApiKeyNetworkError(f"Groq API server error ({res.status_code}): {detail}")
     except httpx.RequestError as e:
-        raise Exception(f"Could not connect to Groq API: {str(e)}")
+        raise ApiKeyNetworkError(f"Could not connect to Groq API: {str(e)}")
 
 async def verify_openrouter(api_key: str) -> List[str]:
     auth_url = "https://openrouter.ai/api/v1/auth/key"
@@ -157,7 +173,9 @@ async def verify_openrouter(api_key: str) -> List[str]:
                     detail = err_json.get("error", {}).get("message", detail)
                 except:
                     pass
-                raise Exception(f"OpenRouter API verification failed: {detail}")
+                if res.status_code in (400, 401, 403) or "invalid" in detail.lower():
+                    raise ApiKeyAuthError(f"OpenRouter API verification failed: {detail}")
+                raise ApiKeyNetworkError(f"OpenRouter API server error ({res.status_code}): {detail}")
             
             models_res = await client.get("https://openrouter.ai/api/v1/models")
             if models_res.status_code == 200:
@@ -165,9 +183,9 @@ async def verify_openrouter(api_key: str) -> List[str]:
                 models = [m["id"] for m in data.get("data", [])]
                 return models
             else:
-                raise Exception("Failed to fetch OpenRouter models list")
+                raise ApiKeyNetworkError("Failed to fetch OpenRouter models list")
     except httpx.RequestError as e:
-        raise Exception(f"Could not connect to OpenRouter API: {str(e)}")
+        raise ApiKeyNetworkError(f"Could not connect to OpenRouter API: {str(e)}")
 
 async def verify_glm(api_key: str) -> List[str]:
     url = "https://open.bigmodel.cn/api/paas/v4/models"
@@ -186,9 +204,11 @@ async def verify_glm(api_key: str) -> List[str]:
                     detail = err_json.get("error", {}).get("message", detail)
                 except:
                     pass
-                raise Exception(f"GLM API verification failed: {detail}")
+                if res.status_code in (400, 401, 403) or "invalid" in detail.lower():
+                    raise ApiKeyAuthError(f"GLM API verification failed: {detail}")
+                raise ApiKeyNetworkError(f"GLM API server error ({res.status_code}): {detail}")
     except httpx.RequestError as e:
-        raise Exception(f"Could not connect to GLM API: {str(e)}")
+        raise ApiKeyNetworkError(f"Could not connect to GLM API: {str(e)}")
 
 async def verify_alibaba(api_key: str) -> List[str]:
     url = "https://dashscope.aliyuncs.com/api/v1/models"
@@ -216,9 +236,11 @@ async def verify_alibaba(api_key: str) -> List[str]:
                     detail = err_json.get("error", {}).get("message", detail)
                 except:
                     pass
-                raise Exception(f"Alibaba API verification failed: {detail}")
+                if res.status_code in (400, 401, 403) or "invalid" in detail.lower():
+                    raise ApiKeyAuthError(f"Alibaba API verification failed: {detail}")
+                raise ApiKeyNetworkError(f"Alibaba API server error ({res.status_code}): {detail}")
     except httpx.RequestError as e:
-        raise Exception(f"Could not connect to Alibaba API: {str(e)}")
+        raise ApiKeyNetworkError(f"Could not connect to Alibaba API: {str(e)}")
 
 # ─── Search Provider Verification ─────────────────────────────────────────────
 
@@ -237,9 +259,11 @@ async def verify_tavily(api_key: str) -> List[str]:
                 detail = err_json.get("detail") or err_json.get("message") or err_json.get("error", {}).get("message", detail)
             except:
                 pass
-            raise Exception(f"Tavily verification failed ({res.status_code}): {detail}")
+            if res.status_code in (400, 401, 403) or "invalid" in detail.lower():
+                raise ApiKeyAuthError(f"Tavily verification failed ({res.status_code}): {detail}")
+            raise ApiKeyNetworkError(f"Tavily API server error ({res.status_code}): {detail}")
     except httpx.RequestError as e:
-        raise Exception(f"Could not connect to Tavily API: {str(e)}")
+        raise ApiKeyNetworkError(f"Could not connect to Tavily API: {str(e)}")
 
 async def verify_serpapi(api_key: str) -> List[str]:
     """Verify SerpAPI key via the account endpoint."""
@@ -257,9 +281,11 @@ async def verify_serpapi(api_key: str) -> List[str]:
                 detail = err_json.get("error") or err_json.get("message", detail)
             except:
                 pass
-            raise Exception(f"SerpAPI verification failed ({res.status_code}): {detail}")
+            if res.status_code in (400, 401, 403) or "invalid" in detail.lower():
+                raise ApiKeyAuthError(f"SerpAPI verification failed ({res.status_code}): {detail}")
+            raise ApiKeyNetworkError(f"SerpAPI server error ({res.status_code}): {detail}")
     except httpx.RequestError as e:
-        raise Exception(f"Could not connect to SerpAPI: {str(e)}")
+        raise ApiKeyNetworkError(f"Could not connect to SerpAPI: {str(e)}")
 
 async def verify_exa(api_key: str) -> List[str]:
     """Verify Exa AI key by running a minimal test search."""
@@ -277,9 +303,11 @@ async def verify_exa(api_key: str) -> List[str]:
                 detail = err_json.get("error") or err_json.get("message", detail)
             except:
                 pass
-            raise Exception(f"Exa AI verification failed ({res.status_code}): {detail}")
+            if res.status_code in (400, 401, 403) or "invalid" in detail.lower():
+                raise ApiKeyAuthError(f"Exa AI verification failed ({res.status_code}): {detail}")
+            raise ApiKeyNetworkError(f"Exa AI server error ({res.status_code}): {detail}")
     except httpx.RequestError as e:
-        raise Exception(f"Could not connect to Exa AI API: {str(e)}")
+        raise ApiKeyNetworkError(f"Could not connect to Exa AI API: {str(e)}")
 
 async def verify_provider_api_key_and_fetch_models(provider_name: str, api_key: str) -> List[str]:
     provider = provider_name.lower().strip()
@@ -525,6 +553,8 @@ async def refresh_providers(
     
     for k in db_keys:
         if k.encrypted_api_key:
+            prev_status = k.status
+            prev_models = k.available_models
             k.status = "VERIFYING"
             await db.commit()
             try:
@@ -536,11 +566,18 @@ async def refresh_providers(
                 k.last_checked = now
                 k.available_models = models if isinstance(models, list) else []
                 k.last_error = None
-            except Exception as e:
+            except ApiKeyAuthError as e:
                 now = datetime.now(timezone.utc)
                 k.status = "INVALID"
                 k.last_error = str(e)[:900]
                 k.available_models = []
+                k.last_checked = now
+            except Exception as e:
+                now = datetime.now(timezone.utc)
+                # Network or transient server error: preserve prior status & models
+                k.status = prev_status if prev_status in ("VERIFIED", "INVALID") else "VERIFIED"
+                k.available_models = prev_models or []
+                k.last_error = f"Transient check warning: {str(e)[:800]}"
                 k.last_checked = now
             db.add(k)
     await db.commit()

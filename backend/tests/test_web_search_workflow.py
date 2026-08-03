@@ -364,17 +364,17 @@ async def test_false_breaking_news_claim_not_in_web_results(monkeypatch):
 @pytest.mark.anyio
 async def test_ddg_fallback_returns_live_results_structure():
     """_ddg_search_fallback must return structured results (not empty, not error)
-    for a basic real-world news query using mocked DDG."""
-    fake_ddg_items = [
-        {"title": "India News Today", "href": "https://example.com/news", "body": "Top headlines from India."},
-        {"title": "Cabinet Update", "href": "https://example.com/cabinet", "body": "No resignations reported."},
+    for a basic real-world news query using mocked DDG (no live network calls)."""
+    from app.services.web_search import SearchResult
+
+    fake_results = [
+        SearchResult(title="India News Today", url="https://example.com/news", snippet="Top headlines from India.", source="duckduckgo"),
+        SearchResult(title="Cabinet Update", url="https://example.com/cabinet", snippet="No resignations reported.", source="duckduckgo"),
     ]
 
-    with patch("app.tools.local_tools.asyncio.get_running_loop") as mock_loop:
-        mock_executor = AsyncMock(return_value=fake_ddg_items)
-        mock_loop.return_value.run_in_executor = mock_executor
+    with patch("app.services.web_search.search_duckduckgo", new=AsyncMock(return_value=fake_results)):
         result = await _ddg_search_fallback("India news")
 
-    assert "[1]" in result or "Source [1]" in result
-    assert "India News Today" in result or "Live Web Search Results" in result
+    assert result  # non-empty
+    assert "India News Today" in result or "Cabinet Update" in result
     assert "Paris weather" not in result

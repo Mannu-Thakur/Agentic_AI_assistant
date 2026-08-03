@@ -172,6 +172,16 @@ class GroqProvider(BaseLLMProvider):
             continue
           else:
             raise Exception("Request payload size exceeded Groq context limit (HTTP 413). Please start a new chat session.")
+        elif response.status_code in (400, 404):
+          if payload["model"] != "llama-3.3-70b-versatile":
+            logger.warning(
+                f"[GroqProvider] Model '{payload['model']}' returned HTTP {response.status_code}. "
+                "Auto-routing to active model 'llama-3.3-70b-versatile'."
+            )
+            payload["model"] = "llama-3.3-70b-versatile"
+            continue
+          else:
+            raise Exception(f"Groq API returned error {response.status_code}: {response.text}")
         elif response.status_code in (429, 500, 502, 503, 504) and attempt < max_retries:
           delay = initial_delay * (2 ** attempt)
           await asyncio.sleep(delay)
@@ -282,6 +292,16 @@ class GroqProvider(BaseLLMProvider):
               continue
             else:
               raise Exception("Request payload size exceeded Groq context limit (HTTP 413). Please start a new chat session.")
+          elif response.status_code in (400, 404):
+            if payload["model"] != "llama-3.3-70b-versatile":
+              logger.warning(
+                  f"[GroqProvider] Model '{payload['model']}' returned HTTP {response.status_code}. "
+                  "Auto-routing to active model 'llama-3.3-70b-versatile'."
+              )
+              payload["model"] = "llama-3.3-70b-versatile"
+              continue
+            else:
+              raise Exception(f"Groq streaming API returned error {response.status_code}")
           elif response.status_code in (429, 500, 502, 503, 504):
             if attempt < max_retries:
               delay = initial_delay * (2 ** attempt)

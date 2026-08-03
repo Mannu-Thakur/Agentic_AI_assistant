@@ -1,4 +1,5 @@
 import bcrypt
+import uuid
 from datetime import datetime, timedelta
 from typing import Any, Union, Optional
 from jose import jwt, JWTError
@@ -41,7 +42,8 @@ def create_refresh_token(subject: Union[str, Any], expires_delta: Optional[timed
         "sub": str(subject),
         "type": "refresh",
         "iss": settings.JWT_ISSUER,
-        "aud": settings.JWT_AUDIENCE
+        "aud": settings.JWT_AUDIENCE,
+        "jti": str(uuid.uuid4()),  # Unique token ID — ensures rotation produces a distinct token
     }
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     return encoded_jwt

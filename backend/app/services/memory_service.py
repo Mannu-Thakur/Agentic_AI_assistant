@@ -24,6 +24,7 @@ from sqlalchemy import select, desc, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.memory import Memory, MEMORY_CATEGORIES
+from app.core.config import settings
 from app.core.redis_client import cache_get, cache_set, cache_delete_pattern
 
 logger = logging.getLogger("app.services.memory_service")
@@ -262,17 +263,14 @@ class MemoryService:
             logger.error(f"Failed to fetch user Gemini key: {exc}")
 
         memories_to_create: List[dict] = []
-
-        if not user_gemini_key:
-            logger.warning(
-                f"[MemoryService] No Gemini API key found for user {user_id} — "
-                "memory extraction skipped. Configure your Gemini key in Settings."
+        user_gemini_key = user_gemini_key or settings.GEMINI_API_KEY
+        if user_gemini_key:
+            memories_to_create = await _llm_based_extraction(
+                provider, user_gemini_key, user_content, assistant_content
             )
-            return
 
-        memories_to_create = await _llm_based_extraction(
-            provider, user_gemini_key, user_content, assistant_content
-        )
+        if not memories_to_create:
+            memories_to_create = _rule_based_extraction(user_content)
 
         if not memories_to_create:
             return

@@ -1,6 +1,6 @@
 import json
 from typing import List, Dict, Any, Optional
-from sqlalchemy import select, delete, desc
+from sqlalchemy import select, delete, desc, func
 import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.chat import Chat, Message, SharedLink
@@ -126,6 +126,10 @@ class ChatService:
         images=images,
     )
     db.add(message)
+    chat_res = await db.execute(select(Chat).where(Chat.id == chat_id))
+    chat = chat_res.scalar_one_or_none()
+    if chat:
+      chat.updated_at = func.now()
     await db.commit()
     await db.refresh(message)
     return message

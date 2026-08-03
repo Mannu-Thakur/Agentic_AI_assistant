@@ -50,13 +50,14 @@ async def test_mcp_client_and_calculator_server():
     client = McpStdioClient(command=python_exe, args=[calculator_script])
     await client.connect()
 
-    # 1. List tools — now 5 tools (calculate + expense + reminder + email)
+    # 1. List tools — 6 tools (calculate + add_expense + get_expenses + summarize_expenses + create_reminder + send_email)
     tools = await client.list_tools()
     tool_names = [t["name"] for t in tools]
-    assert len(tools) == 5
+    assert len(tools) == 6
     assert "calculate" in tool_names
     assert "add_expense" in tool_names
     assert "get_expenses" in tool_names
+    assert "summarize_expenses" in tool_names
     assert "create_reminder" in tool_names
     assert "send_email" in tool_names
 
@@ -70,19 +71,22 @@ async def test_mcp_client_and_calculator_server():
 
     # 4. Test add_expense
     result_exp = await client.call_tool("add_expense", {"amount": 500, "description": "lunch", "category": "food"})
-    assert "Successfully added" in result_exp
+    assert "Added expense" in result_exp or "Successfully added" in result_exp
 
-    # 5. Test get_expenses
+    # 5. Test get_expenses & summarize_expenses
     result_get = await client.call_tool("get_expenses", {"category": "food"})
     assert "lunch" in result_get or "food" in result_get.lower()
 
+    result_sum = await client.call_tool("summarize_expenses", {})
+    assert "Expense Summary" in result_sum
+
     # 6. Test create_reminder
     result_rem = await client.call_tool("create_reminder", {"time": "tomorrow 10 AM", "text": "Meeting"})
-    assert "Successfully created" in result_rem
+    assert "Successfully created" in result_rem or "Reminder set" in result_rem
 
     # 7. Test send_email
     result_email = await client.call_tool("send_email", {"to": "test@example.com", "subject": "Test", "body": "Test body"})
-    assert "Successfully sent" in result_email
+    assert "Successfully sent" in result_email or "Email sent" in result_email
 
     # 8. Clean up subprocess
     await client.close()

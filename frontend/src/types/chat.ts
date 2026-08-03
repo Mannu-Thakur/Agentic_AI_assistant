@@ -13,7 +13,10 @@ export interface SourceDocument {
   confidence?: number;
   chunk_id?: number;
   document_id?: string;
-  used: boolean;  // true = CRAG-validated and injected into LLM prompt
+  used: boolean;         // true = CRAG-validated and injected into LLM prompt
+  url?: string;          // actual webpage URL for web search results (clickable link)
+  source?: string;       // provider: 'tavily' | 'serpapi' | 'exa' | 'duckduckgo'
+  sub_question?: string; // which sub-question this source answered (compound queries)
 }
 
 export interface DeveloperMetrics {

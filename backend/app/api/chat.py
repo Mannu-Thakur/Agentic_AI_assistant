@@ -27,10 +27,12 @@ def resolve_provider_from_model(model: str) -> str:
     m = (model or "").lower().strip()
     if m.startswith("openrouter/"):
         return "openrouter"
-    if "gemini" in m or "google" in m:
+    if "gemini" in m:
         return "google"
-    if "llama" in m or "mixtral" in m:
+    if "llama" in m or "mixtral" in m or "gemma" in m or "groq" in m:
         return "groq"
+    if "google" in m:
+        return "google"
     if "gpt" in m or "o1-" in m:
         return "openai"
     if "claude" in m:
@@ -115,10 +117,16 @@ async def get_chat_history(
     current_user: UserOut = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-  chat = await ChatService.get_chat_by_id(db, chat_id, current_user.id)
-  if not chat:
-    raise HTTPException(status_code=404, detail="Conversation session not found")
-  return await ChatService.get_chat_messages(db, chat_id)
+  try:
+    chat = await ChatService.get_chat_by_id(db, chat_id, current_user.id)
+    if not chat:
+      raise HTTPException(status_code=404, detail="Conversation session not found")
+    return await ChatService.get_chat_messages(db, chat_id)
+  except HTTPException:
+    raise
+  except Exception as exc:
+    logger.error(f"Error fetching chat history for chat_id={chat_id}: {exc}\n{traceback.format_exc()}")
+    raise HTTPException(status_code=500, detail="Failed to retrieve conversation history. Please try again.")
 
 
 @router.patch("/{chat_id}", response_model=ChatOut)
@@ -452,29 +460,50 @@ async def stream_agent_message(
       logger.info("STARTING GRAPH TASK...")
       task = asyncio.create_task(agent_graph.ainvoke(initial_state, config))
 
+      # ── MASTER TIMEOUT GUARD ─────────────────────────────────────────────────
+      # If the LLM or any pipeline node hangs silently (no error, no chunks),
+      # we must cancel the task so the frontend doesn't show "Thinking" forever.
+      # 120 s is generous enough for multi-step MCP + RAG + reflection chains.
+      GRAPH_TIMEOUT_SECONDS = 120
+
       # GAP-1 FIX: Check for client disconnect inside the queue loop.
       # When the browser tab closes mid-stream, cancel the graph task to avoid
       # wasting LLM tokens and compute.
+      graph_deadline = asyncio.get_event_loop().time() + GRAPH_TIMEOUT_SECONDS
       while not task.done() or not queue.empty():
         try:
+          # ── Hard-deadline check ───────────────────────────────────────────
+          remaining = graph_deadline - asyncio.get_event_loop().time()
+          if remaining <= 0:
+            logger.error(
+                f"Graph task exceeded {GRAPH_TIMEOUT_SECONDS}s hard timeout "
+                f"for chat_id={chat_id} — cancelling."
+            )
+            task.cancel()
+            yield f"data: {json.dumps({'event': 'error', 'detail': 'Request timed out. The model took too long to respond. Please try again.'})}\n\n"
+            return
+
           # Check if client disconnected mid-stream
           if await request.is_disconnected():
             logger.info(f"Client disconnected for chat_id={chat_id} — cancelling graph task")
             task.cancel()
             return
 
-          # Event-driven queue fetch: zero polling delay between tokens
+          # Event-driven queue fetch with deadline-aware timeout
           get_task = asyncio.create_task(queue.get())
           done_set, _ = await asyncio.wait(
               [get_task, task],
-              return_when=asyncio.FIRST_COMPLETED
+              return_when=asyncio.FIRST_COMPLETED,
+              timeout=min(remaining, 30.0),   # wake up at least every 30s to check deadline
           )
 
           if get_task in done_set:
             chunk = get_task.result()
             yield f"data: {json.dumps(chunk)}\n\n"
             queue.task_done()
-          else:
+            # Each yielded chunk refreshes the deadline (model IS responding)
+            graph_deadline = asyncio.get_event_loop().time() + GRAPH_TIMEOUT_SECONDS
+          elif task in done_set:
             # Graph task completed — cancel pending queue get if not finished
             if not get_task.done():
               get_task.cancel()
@@ -485,6 +514,11 @@ async def stream_agent_message(
               yield f"data: {json.dumps(chunk)}\n\n"
               queue.task_done()
             break
+          else:
+            # asyncio.wait timed out (neither queue nor task finished in 30s window)
+            # Loop will re-check hard deadline at top of next iteration.
+            if not get_task.done():
+              get_task.cancel()
         except Exception as err:
           logger.error(f"ERROR IN QUEUE LOOP: {err}")
           yield f"data: {json.dumps({'event': 'error', 'detail': str(err)})}\n\n"

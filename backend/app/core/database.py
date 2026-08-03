@@ -152,13 +152,20 @@ def run_schema_migrations() -> None:
                     conn.execute(text(ddl))
                     logger.info("[schema] Added column chats.is_live_share")
 
-        # 1.2 Update messages table (add images JSON column)
+        # 1.2 Update messages table (add images JSON column + fast index)
         if inspector.has_table("messages"):
             existing_msg_cols = {col["name"] for col in inspector.get_columns("messages")}
             if "images" not in existing_msg_cols:
                 with engine.begin() as conn:
                     conn.execute(text("ALTER TABLE messages ADD COLUMN images TEXT"))
                     logger.info("[schema] Added column messages.images")
+            # Ensure fast per-chat lookup index (idempotent via IF NOT EXISTS)
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "CREATE INDEX IF NOT EXISTS idx_messages_chat_id_created "
+                    "ON messages(chat_id, created_at)"
+                ))
+                logger.info("[schema] Ensured index idx_messages_chat_id_created")
 
         # 1.3 Update documents table (add error_message and chat_id columns)
         if inspector.has_table("documents"):

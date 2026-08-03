@@ -6,7 +6,7 @@ import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import { useChatStore } from '../store/chatStore';
+import { useChatStore, getChatTimestamp } from '../store/chatStore';
 import { useUIStore } from '../store/uiStore';
 import { useAuthStore } from '../store/authStore';
 import { apiRequest } from '../services/api';
@@ -28,13 +28,14 @@ import { CanvasPanel } from '../components/chat/CanvasPanel';
 import {
   Upload, Plus, Terminal, Database, Lock,
   Sparkles, Cpu, X, CheckCircle2, Copy, Check,
-  RefreshCw, ChevronLeft, ChevronRight,
+  RefreshCw, ChevronLeft, ChevronRight, AlertCircle,
   Search, ArrowDown,
   MessageSquare, Pencil, Trash2, Pin,
   BookOpen, Share2, Download, FileJson, FileText,
   MoreHorizontal, Archive, FolderClosed, ChevronDown, ChevronUp, Files,
-  Settings, LogOut, GitBranch, Link, PenLine, Eye, ExternalLink
+  Settings, LogOut, GitBranch, Link, PenLine, Eye, ExternalLink, Globe
 } from 'lucide-react';
+
 
 // ─────────────────────────────────────────────────────────────
 //  Types
@@ -167,23 +168,15 @@ function groupChatsByDate(chatList: any[]) {
   const yesterdayStart = todayStart - 86400000;
   const sevenDaysAgo = todayStart - 6 * 86400000;
 
+  const sortedList = [...chatList].sort((a, b) => getChatTimestamp(b) - getChatTimestamp(a));
+
   const today: any[] = [];
   const yesterday: any[] = [];
   const last7Days: any[] = [];
   const older: any[] = [];
 
-  chatList.forEach((c) => {
-    const rawDate = c.updated_at || c.created_at;
-    let chatTime = 0;
-    if (rawDate) {
-      let s = String(rawDate).trim();
-      if (!s.endsWith('Z') && !/[+-]\d{2}:\d{2}$/.test(s)) {
-        s = s.replace(' ', 'T');
-        if (!s.includes('T')) s += 'T00:00:00Z';
-        else s += 'Z';
-      }
-      chatTime = new Date(s).getTime();
-    }
+  sortedList.forEach((c) => {
+    const chatTime = getChatTimestamp(c);
 
     if (isNaN(chatTime) || chatTime === 0) {
       older.push(c);
@@ -446,58 +439,116 @@ function CitedContent({
       <MarkdownContent content={mainContent} isStreaming={isStreaming} />
 
       {sources && sources.length > 0 && (() => {
-        // Group / deduplicate sources by filename
-        const groupedSources: { filename: string; indices: number[]; chunks: SourceDocument[] }[] = [];
-        sources.forEach((src) => {
+        // Separate web sources (have a real URL) from local document sources
+        const webSources    = sources.filter((s) => s.url && s.url.startsWith('http'));
+        const docSources    = sources.filter((s) => !s.url || !s.url.startsWith('http'));
+
+        // Group doc sources by filename (dedup chunks from same file)
+        const groupedDocs: { filename: string; indices: number[]; chunks: SourceDocument[] }[] = [];
+        docSources.forEach((src) => {
           const fn = src.filename || 'Source Document';
-          const existing = groupedSources.find((g) => g.filename === fn);
+          const existing = groupedDocs.find((g) => g.filename === fn);
           if (existing) {
             existing.indices.push(src.index);
             existing.chunks.push(src);
           } else {
-            groupedSources.push({ filename: fn, indices: [src.index], chunks: [src] });
+            groupedDocs.push({ filename: fn, indices: [src.index], chunks: [src] });
           }
         });
 
+        // Group web sources by sub_question so compound-query answers are clearly labelled
+        const webBySubQ: Map<string, SourceDocument[]> = new Map();
+        webSources.forEach((src) => {
+          const key = src.sub_question || '';
+          if (!webBySubQ.has(key)) webBySubQ.set(key, []);
+          webBySubQ.get(key)!.push(src);
+        });
+
         return (
-          <div className="mt-4 pt-3 border-t border-border space-y-2">
+          <div className="mt-4 pt-3 border-t border-border space-y-3">
             <p className="text-[9px] font-bold uppercase tracking-widest text-foreground-3 flex items-center gap-1">
               <BookOpen className="w-3 h-3" /> Sources
             </p>
-            <div className="flex flex-wrap gap-1.5">
-              {groupedSources.map((grp, gIdx) => {
-                const isSelected = grp.chunks.some((c) => c.index === activeSource);
-                const countBadge = grp.chunks.length > 1 ? ` (${grp.chunks.length} chunks)` : '';
-                return (
-                  <button
-                    key={grp.filename + gIdx}
-                    onClick={() => setActiveSource(isSelected ? null : grp.chunks[0].index)}
-                    className={`px-2.5 py-1 rounded-full text-[10px] font-semibold border transition-all ${
-                      isSelected
-                        ? 'bg-accent/20 border-accent/40 text-accent'
-                        : 'bg-surface-2 border-border text-foreground-3 hover:text-foreground hover:border-accent/30'
-                    }`}
-                  >
-                    [{grp.indices.join(', ')}] {grp.filename}{countBadge}
-                  </button>
-                );
-              })}
-            </div>
-            {activeSource !== null && (() => {
-              const src = sources.find((s) => s.index === activeSource);
-              return src ? (
-              <div className="p-3 rounded-xl bg-surface-2 border border-border-2 space-y-1.5 animate-slide-up">
-                <p className="text-[10px] font-semibold text-foreground">{src.filename}</p>
-                {src.distance != null && (
-                   <p className="text-[9px] text-foreground-3 font-mono">similarity distance: {Number(src.distance).toFixed(4)}</p>
-                )}
-                <p className="text-[10px] text-foreground-3 font-mono whitespace-pre-wrap break-all border-l-2 border-border pl-2.5 max-h-32 overflow-y-auto">
-                  {src.content?.slice(0, 600)}{src.content?.length > 600 ? '…' : ''}
-                </p>
+
+            {/* ── Web Sources: clickable link chips ────────────────── */}
+            {webSources.length > 0 && (
+              <div className="space-y-2">
+                {/* Per sub-question group label (only shown for compound queries) */}
+                {Array.from(webBySubQ.entries()).map(([subQ, srcs], qIdx) => (
+                  <div key={qIdx} className="space-y-1.5">
+                    {subQ && (
+                      <p className="text-[9px] font-semibold text-foreground-3 uppercase tracking-widest pl-0.5">
+                        For: <span className="text-foreground normal-case font-normal">{subQ}</span>
+                      </p>
+                    )}
+                    <div className="flex flex-wrap gap-1.5">
+                      {srcs.map((src) => {
+                        let domain = '';
+                        try { domain = new URL(src.url!).hostname.replace('www.', ''); } catch {}
+                        return (
+                          <a
+                            key={src.index}
+                            href={src.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title={src.filename || src.url}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-semibold border transition-all bg-surface-2 border-border text-foreground-3 hover:text-foreground hover:border-accent/40 hover:bg-accent/10 group"
+                          >
+                            {/* Globe icon */}
+                            <Globe className="w-2.5 h-2.5 text-accent/70 flex-shrink-0 group-hover:text-accent transition-colors" />
+                            <span>[{src.index}]</span>
+                            <span className="max-w-[140px] truncate">{domain || src.filename}</span>
+                            {/* External link indicator */}
+                            <ExternalLink className="w-2 h-2 opacity-40 flex-shrink-0 group-hover:opacity-80 transition-opacity" />
+                          </a>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
               </div>
-            ) : null;
-          })()}
-        </div>
+            )}
+
+            {/* ── Doc Sources: expandable button chips ─────────────── */}
+            {groupedDocs.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {groupedDocs.map((grp, gIdx) => {
+                  const isSelected = grp.chunks.some((c) => c.index === activeSource);
+                  const countBadge = grp.chunks.length > 1 ? ` (${grp.chunks.length} chunks)` : '';
+                  return (
+                    <button
+                      key={grp.filename + gIdx}
+                      onClick={() => setActiveSource(isSelected ? null : grp.chunks[0].index)}
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-semibold border transition-all ${
+                        isSelected
+                          ? 'bg-accent/20 border-accent/40 text-accent'
+                          : 'bg-surface-2 border-border text-foreground-3 hover:text-foreground hover:border-accent/30'
+                      }`}
+                    >
+                      <FileText className="w-2.5 h-2.5 flex-shrink-0" />
+                      [{grp.indices.join(', ')}] {grp.filename}{countBadge}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* ── Expanded doc chunk preview ────────────────────────── */}
+            {activeSource !== null && (() => {
+              const src = docSources.find((s) => s.index === activeSource);
+              return src ? (
+                <div className="p-3 rounded-xl bg-surface-2 border border-border-2 space-y-1.5 animate-slide-up">
+                  <p className="text-[10px] font-semibold text-foreground">{src.filename}</p>
+                  {src.distance != null && (
+                     <p className="text-[9px] text-foreground-3 font-mono">similarity distance: {Number(src.distance).toFixed(4)}</p>
+                  )}
+                  <p className="text-[10px] text-foreground-3 font-mono whitespace-pre-wrap break-all border-l-2 border-border pl-2.5 max-h-32 overflow-y-auto">
+                    {src.content?.slice(0, 600)}{src.content?.length > 600 ? '…' : ''}
+                  </p>
+                </div>
+              ) : null;
+            })()}
+          </div>
         );
       })()}
     </div>
@@ -723,6 +774,8 @@ export default function ChatPage() {
   const skipFetchRef                           = useRef(false);
   // ── Messages loading — prevents empty-state flash when switching chats
   const [messagesLoading, setMessagesLoading]  = useState(false);
+  const [historyError, setHistoryError]        = useState<string | null>(null);
+  const [historyRetryCount, setHistoryRetryCount] = useState(0);
   // ── Questions Nav panel ──────────────────────────────────────
   const [questionsPopupOpen, setQuestionsPopupOpen] = useState(false);
   const popupLeaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -792,40 +845,32 @@ export default function ChatPage() {
 
 
 
-  const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
-    google: 'Google Gemini',
-    openai: 'OpenAI',
-    anthropic: 'Anthropic',
-    deepseek: 'DeepSeek',
-    groq: 'Groq',
-    openrouter: 'OpenRouter',
-    glm: 'GLM',
-    alibaba: 'Alibaba',
-  };
+  // ── Curated model list — same as SettingsPage ALL_MODELS ─────────────────
+  // Only show reliably-working providers. Never use provider.availableModels
+  // which floods the picker with 300+ OpenRouter entries.
+  const CURATED_MODELS = [
+    // Google Gemini (Direct)
+    { id: 'gemini-2.5-pro',          name: 'Gemini 2.5 Pro',        provider: 'Google Gemini', apiProvider: 'google',   icon: Sparkles, badge: 'Best Quality', desc: 'Most capable Gemini model' },
+    { id: 'gemini-2.5-flash',        name: 'Gemini 2.5 Flash',      provider: 'Google Gemini', apiProvider: 'google',   icon: Cpu,      badge: 'Recommended',  desc: 'Fast & capable — best all-rounder' },
+    { id: 'gemini-2.0-flash',        name: 'Gemini 2.0 Flash',      provider: 'Google Gemini', apiProvider: 'google',   icon: Cpu,      badge: '',             desc: 'Previous generation Flash' },
+    { id: 'gemini-2.0-flash-lite',   name: 'Gemini 2.0 Flash Lite', provider: 'Google Gemini', apiProvider: 'google',   icon: Cpu,      badge: 'Fastest',      desc: 'Lightest & fastest Gemini' },
+    // Groq (Free, Fast)
+    { id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B',         provider: 'Groq',          apiProvider: 'groq',     icon: Cpu,      badge: 'Fast & Free',  desc: 'Best open-source model on Groq' },
+    { id: 'llama-3.1-8b-instant',    name: 'Llama 3.1 8B Instant',  provider: 'Groq',          apiProvider: 'groq',     icon: Cpu,      badge: 'Fastest Free', desc: 'Ultra-fast small model' },
+    { id: 'llama3-70b-8192',         name: 'Llama 3 70B',           provider: 'Groq',          apiProvider: 'groq',     icon: Cpu,      badge: '',             desc: 'Llama 3 70B on Groq' },
+    { id: 'gemma2-9b-it',            name: 'Gemma 2 9B',            provider: 'Groq',          apiProvider: 'groq',     icon: Cpu,      badge: '',             desc: 'Google Gemma 2 on Groq' },
+    { id: 'mixtral-8x7b-32768',      name: 'Mixtral 8x7B',          provider: 'Groq',          apiProvider: 'groq',     icon: Cpu,      badge: '',             desc: 'Mixtral MoE — long context' },
+  ];
 
-  const rawModels = providers
-    .filter((p) => p.status === 'VERIFIED')
-    .flatMap((p) => p.availableModels.map((m) => {
-      const isPremium = m.toLowerCase().includes("pro") || m.toLowerCase().includes("ultra") || m.toLowerCase().includes("max") || m.toLowerCase().includes("o1");
-      return {
-        id: m,
-        name: m,
-        provider: PROVIDER_DISPLAY_NAMES[p.id] || p.id,
-        apiProvider: p.id,
-        icon: isPremium ? Sparkles : Cpu,
-        desc: `Model ${m} provided by ${PROVIDER_DISPLAY_NAMES[p.id] || p.id}`
-      };
-    }));
+  const verifiedProviderSet = new Set(
+    providers.filter((p) => p.status === 'VERIFIED').map((p) => p.id)
+  );
 
-  const modelsMap = new Map();
-  rawModels.forEach(m => {
-    if (!modelsMap.has(m.id)) {
-      modelsMap.set(m.id, m);
-    }
-  });
-  const models = Array.from(modelsMap.values());
+  // Show only models whose provider key is verified
+  const models = CURATED_MODELS.filter((m) => verifiedProviderSet.has(m.apiProvider));
 
   const currentModel = models.find((m) => m.id === activeModel) || models[0] || { id: '', name: 'No Models', provider: 'None', icon: Cpu, desc: 'Please add keys in Settings' };
+
   const activeChat   = chats.find((c) => c.id === activeChatId);
   const isLocked     = !loadingKeys && models.length === 0;
 
@@ -855,10 +900,12 @@ export default function ChatPage() {
 
   // ── Fetch verified API Keys / Providers — runs once on mount ─────────────
   // Populates the shared store so SettingsPage stays in sync.
+  // If providers are already cached in localStorage (keysLoading=false) we only
+  // refresh in the background — we never block the UI on this request.
   useEffect(() => {
-    if (!loadingKeys && providers.length > 0) return;
     async function loadProviders() {
-      setKeysLoading(true);
+      // Only set keysLoading=true when there is genuinely no cache (first ever load)
+      if (providers.length === 0) setKeysLoading(true);
       try {
         const data = await apiRequest('/providers');
         setProviders(data);
@@ -870,12 +917,24 @@ export default function ChatPage() {
   }, []);
 
   // ── Auto-select first available model when no valid model is active ──
+  // Also guards against stale localStorage models (e.g. anthropic/claude)
+  // that are no longer in the curated list.
   useEffect(() => {
+    const curatedIds = new Set(CURATED_MODELS.map((m) => m.id));
+    const isStale = !curatedIds.has(activeModel);
+
+    if (isStale) {
+      // Snap immediately to gemini-2.5-flash (always in curated list)
+      setActiveModel('gemini-2.5-flash');
+      return;
+    }
+
+    // If keys loaded and active model's provider isn't verified, pick first ready model
     if (!loadingKeys && models.length > 0 && !models.some((m) => m.id === activeModel)) {
       setActiveModel(models[0].id);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loadingKeys, models]);
+  }, [loadingKeys, models, activeModel]);
 
   // ── Fetch chats / messages & documents ───────────────────────
   const fetchDocuments = async () => {
@@ -901,22 +960,48 @@ export default function ChatPage() {
     else setChatDocuments([]);
   }, [activeChatId, fetchChatDocuments]);
 
-  // Initial mount load for chats & documents — runs ONCE per auth token
+  // Initial mount load for chats & documents — runs ONCE per auth token.
+  // When a urlChatId is already known we fetch chats + messages in PARALLEL
+  // so the conversation renders in a single round-trip instead of two.
   useEffect(() => {
     let active = true;
-    apiRequest('/chats')
-      .then((loadedChats) => {
+
+    async function loadInitialData() {
+      try {
+        // Always fetch the sidebar chats list
+        const chatsPromise = apiRequest('/chats');
+
+        // Pre-fetch messages immediately if we already know which chat to open
+        const messagesPromise = urlChatId
+          ? apiRequest(`/chats/${urlChatId}`)
+          : Promise.resolve(null);
+
+        const [loadedChats, loadedMessages] = await Promise.all([chatsPromise, messagesPromise]);
+
         if (!active) return;
         setChats(loadedChats);
 
-        // Active conversation restoration logic on initial page load:
         if (urlChatId) {
+          // Hydrate the cache BEFORE setting activeChatId so the effect at line ~993
+          // sees hasCachedMessages=true and skips the redundant second fetch
+          if (loadedMessages && Array.isArray(loadedMessages)) {
+            const hydratedMsgs = loadedMessages.map((m: import('../types/chat').Message) => ({
+              ...m,
+              imagePreviewUrls:
+                m.images && m.images.length > 0
+                  ? m.images.map((img) => `data:${img.mimeType};base64,${img.base64}`)
+                  : m.imagePreviewUrls,
+            }));
+            setMessagesForChat(urlChatId, hydratedMsgs);
+          }
           setActiveChatId(urlChatId);
-        } else {
-          setActiveChatId(null);
         }
-      })
-      .catch(() => {});
+      } catch (err) {
+        if (active) console.error('Failed to load initial data:', err);
+      }
+    }
+
+    loadInitialData();
     fetchDocuments();
     return () => { active = false; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -934,29 +1019,51 @@ export default function ChatPage() {
   // NOTE: isStreaming is intentionally NOT in deps — we must not re-fetch when
   // streaming ends, as that would race-overwrite locally accumulated messages.
   useEffect(() => {
+    let active = true;
+
     if (activeChatId) {
       if (skipFetchRef.current) {
         skipFetchRef.current = false;
-        return;
-      }
-
-      // Safety: never fetch while a stream is in progress
-      if (useChatStore.getState().isStreaming) {
-        return;
+        setHistoryError(null);
+        return () => { active = false; };
       }
 
       // Do not attempt network GET for temp optimistic chat IDs
       if (activeChatId.startsWith('temp-')) {
         setMessages([]);
         setMessagesLoading(false);
-        return;
+        setHistoryError(null);
+        return () => { active = false; };
       }
 
-      let active = true;
+      // ── Cache HIT: messages already in store (pre-fetched or from a prior visit)
+      // Display instantly with zero skeleton, then silently revalidate in background.
       const isCached = hasCachedMessages(activeChatId);
-      if (!isCached) {
-        setMessagesLoading(true);
+      if (isCached) {
+        setMessagesLoading(false);
+        setHistoryError(null);
+        // Background revalidate — update cache silently without showing skeleton
+        const revalidateChatId = activeChatId;
+        apiRequest(`/chats/${revalidateChatId}`).then((freshMsgs) => {
+          if (!active) return;
+          if (useChatStore.getState().isStreaming) return;
+          if (!Array.isArray(freshMsgs)) return;
+          const hydratedFresh = freshMsgs.map((m: import('../types/chat').Message) => ({
+            ...m,
+            imagePreviewUrls:
+              m.images && m.images.length > 0
+                ? m.images.map((img) => `data:${img.mimeType};base64,${img.base64}`)
+                : m.imagePreviewUrls,
+          }));
+          setMessagesForChat(revalidateChatId, hydratedFresh);
+        }).catch(() => { /* silent — stale cache still shown */ });
+        return () => { active = false; };
       }
+
+      // ── Cache MISS: show skeleton and fetch from the network
+      setHistoryError(null);
+      setMessagesLoading(true);
+
       apiRequest(`/chats/${activeChatId}`)
         .then((msgs) => {
           if (!active) return;
@@ -974,6 +1081,7 @@ export default function ChatPage() {
           // Only skip if the DB result has *fewer* messages (i.e. assistant not committed yet)
           if (hasLiveAssistantContent && msgs.length < cachedForThisChat.length) {
             setMessagesLoading(false);
+            setHistoryError(null);
             return;
           }
 
@@ -987,16 +1095,26 @@ export default function ChatPage() {
 
           setMessagesForChat(activeChatId, hydratedMsgs);
           setMessagesLoading(false);
+          setHistoryError(null);
         })
-        .catch(() => { if (active) setMessagesLoading(false); });
-      return () => { active = false; };
+        .catch((err) => {
+          if (active) {
+            setMessagesLoading(false);
+            if (!hasCachedMessages(activeChatId)) {
+              setHistoryError(err?.message || 'Failed to load conversation history. Please try again.');
+            }
+          }
+        });
     } else {
       setMessages([]);
       setMessagesLoading(false);
+      setHistoryError(null);
       setIsStreaming(false);
     }
+
+    return () => { active = false; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeChatId, setMessagesForChat, setMessages, hasCachedMessages, setIsStreaming]);
+  }, [activeChatId, historyRetryCount, setMessagesForChat, setMessages, hasCachedMessages, setIsStreaming]);
 
   useEffect(() => {
     setCopiedShareLink(false);
@@ -1008,6 +1126,17 @@ export default function ChatPage() {
       messagesEndRef.current?.scrollIntoView({ behavior: 'instant' as ScrollBehavior });
     }
   }, [messages, isStreaming]);
+
+  // ── Scroll to bottom when a chat is opened/loaded ────────────────────────
+  useEffect(() => {
+    if (!messagesLoading && messages.length > 0) {
+      // Small delay to let the DOM finish rendering all messages before scrolling
+      const timer = setTimeout(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'instant' as ScrollBehavior });
+      }, 50);
+      return () => clearTimeout(timer);
+    }
+  }, [activeChatId, messagesLoading]);
 
   // ── HUD: track last assistant message ───────────────────────
   const assistantMessages = useMemo(() => messages.filter((m) => m.role === 'assistant'), [messages]);
@@ -1133,6 +1262,14 @@ export default function ChatPage() {
     }
 
     setIsStreaming(true);
+
+    if (!isNewChat && chatId) {
+      const { chats: liveChats, updateChat: liveUpdateChat } = useChatStore.getState();
+      const liveChat = liveChats.find((c: any) => c.id === chatId);
+      if (liveChat) {
+        liveUpdateChat({ ...liveChat, updated_at: new Date().toISOString() });
+      }
+    }
 
     const userMsgId = crypto.randomUUID();
     const asstMsgId = crypto.randomUUID();
@@ -1844,7 +1981,10 @@ export default function ChatPage() {
 
   // ── Conversation sorting/filtering & Date Grouping — fully memoized ──────
   const filteredChats = useMemo(
-    () => chats.filter((c) => !searchQuery || (c.title || '').toLowerCase().includes(searchQuery.toLowerCase())),
+    () => {
+      const list = chats.filter((c) => !searchQuery || (c.title || '').toLowerCase().includes(searchQuery.toLowerCase()));
+      return list.sort((a, b) => getChatTimestamp(b) - getChatTimestamp(a));
+    },
     [chats, searchQuery]
   );
 
@@ -2668,6 +2808,25 @@ export default function ChatPage() {
               ))}
             </div>
           </div>
+        ) : historyError ? (
+          /* ── ERROR STATE: Error message & retry button ── */
+          <div className="flex-1 flex flex-col items-center justify-center p-6 text-center">
+            <div className="p-6 rounded-2xl bg-destructive/10 border border-destructive/20 max-w-md space-y-4 shadow-lg backdrop-blur-sm">
+              <div className="w-12 h-12 rounded-2xl bg-destructive/20 text-destructive flex items-center justify-center mx-auto shadow-inner">
+                <AlertCircle className="w-6 h-6" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="font-semibold text-lg text-foreground">Failed to Load Conversation</h3>
+                <p className="text-xs text-muted-foreground leading-relaxed">{historyError}</p>
+              </div>
+              <button
+                onClick={() => setHistoryRetryCount((c) => c + 1)}
+                className="px-5 py-2.5 rounded-xl bg-primary text-primary-foreground font-medium text-sm hover:opacity-90 transition-all flex items-center justify-center gap-2 mx-auto shadow-md hover:shadow-lg active:scale-95"
+              >
+                <RefreshCw className="w-4 h-4" /> Retry Loading History
+              </button>
+            </div>
+          </div>
         ) : messages.length === 0 ? (
           /* ── EMPTY STATE: welcome + centered input ── */
           <div className="flex-1 flex flex-col items-center justify-center px-4 py-8 overflow-y-auto relative">
@@ -2681,6 +2840,7 @@ export default function ChatPage() {
 
               {/* Centered input form */}
               <ChatInput
+                key={activeChatId ?? 'new'}
                 onSend={(text, images) => handleSendMessage(text, images)}
                 isLocked={isLocked}
                 isStreaming={isStreaming}
@@ -3047,6 +3207,7 @@ export default function ChatPage() {
             <footer className="absolute bottom-0 left-0 right-0 p-4 pointer-events-none bg-gradient-to-t from-background via-background/80 to-transparent">
               <div className="pointer-events-auto max-w-chat mx-auto">
                 <ChatInput
+                  key={activeChatId ?? 'new'}
                   onSend={(text, images) => handleSendMessage(text, images)}
                   isLocked={isLocked}
                   isStreaming={isStreaming}
@@ -3340,6 +3501,9 @@ export default function ChatPage() {
           <div className="relative flex items-center">
             <button
               onClick={() => {
+                if (isStreaming) {
+                  handleStopGeneration();
+                }
                 if (activeChatId !== c.id) {
                   setActiveChatId(c.id);
                 }

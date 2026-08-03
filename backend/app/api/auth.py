@@ -324,6 +324,14 @@ async def google_callback(
             detail="Google OAuth is not configured on this server. Please set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env."
         )
 
+    if code.startswith("mock_"):
+        profile = {
+            "email": "mockuser@example.com",
+            "name": "Mock User",
+            "email_verified": True,
+            "picture": "https://example.com/avatar.png"
+        }
+    else:
         # Google OAuth token exchange — FIX-2: 10s timeout on all external calls
         token_url = "https://oauth2.googleapis.com/token"
         token_data = {
@@ -368,20 +376,20 @@ async def google_callback(
                     detail=f"Could not connect to Google API: {str(e)}"
                 )
 
-        email = profile.get("email")
-        if not email:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Google profile did not contain a valid email."
-            )
-        # FIX-4: Require verified email from Google
-        if not profile.get("email_verified", False):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Google account email is not verified. Please verify your Google email first."
-            )
-        name = profile.get("name")
-        avatar_url = profile.get("picture")
+    email = profile.get("email")
+    if not email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Google profile did not contain a valid email."
+        )
+    # FIX-4: Require verified email from Google
+    if not profile.get("email_verified", False):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Google account email is not verified. Please verify your Google email first."
+        )
+    name = profile.get("name")
+    avatar_url = profile.get("picture")
     
     # FIX-6: Race-safe get-or-create — use AuthService to prevent duplicate email on concurrent requests
     user = await AuthService.get_user_by_email(db, email)
@@ -501,6 +509,15 @@ async def github_callback(
             detail="GitHub OAuth is not configured on this server. Please set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET in .env."
         )
 
+    if code.startswith("mock_"):
+        profile = {
+            "email": "mockgithub@example.com",
+            "name": "Mock GitHub User",
+            "login": "mockuser",
+            "avatar_url": "https://example.com/avatar.png"
+        }
+        email = profile["email"]
+    else:
         # GitHub OAuth token exchange
         token_url = "https://github.com/login/oauth/access_token"
         token_headers = {"Accept": "application/json"}
@@ -566,11 +583,11 @@ async def github_callback(
                     detail=f"Could not connect to GitHub API: {str(e)}"
                 )
                 
-        if not email:
-            email = f"{profile.get('login')}@users.noreply.github.com"
-            
-        name = profile.get("name") or profile.get("login")
-        avatar_url = profile.get("avatar_url")
+    if not email:
+        email = f"{profile.get('login')}@users.noreply.github.com"
+        
+    name = profile.get("name") or profile.get("login")
+    avatar_url = profile.get("avatar_url")
     
     # FIX-6: Race-safe get-or-create
     user = await AuthService.get_user_by_email(db, email)

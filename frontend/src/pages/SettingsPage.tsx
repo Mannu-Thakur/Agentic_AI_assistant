@@ -106,31 +106,25 @@ const INGESTION_STEPS: IngestionStep[] = [
   { id: 'indexing',  icon: Database,    label: 'Indexing complete',    detail: 'Document is ready for semantic retrieval' },
 ];
 
+// ── Curated model list — only reliably-working providers ────────────────────
+// Gemini (direct via Google API key) and Groq (free, fast, reliable).
+// Do NOT add OpenRouter/OpenAI/Anthropic/DeepSeek here — they require paid keys
+// and their availability varies. Users with those keys can use the API key settings.
 const ALL_MODELS = [
-  { id: 'gemini-2.5-pro',   label: 'Gemini 2.5 Pro',   provider: 'Google Gemini', apiProvider: 'google' },
-  { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', provider: 'Google Gemini', apiProvider: 'google' },
-  { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash', provider: 'Google Gemini', apiProvider: 'google' },
-  { id: 'gemini-1.5-pro',   label: 'Gemini 1.5 Pro',   provider: 'Google Gemini', apiProvider: 'google' },
-  { id: 'gpt-4o',           label: 'GPT-4o',           provider: 'OpenAI',        apiProvider: 'openai' },
-  { id: 'gpt-4o-mini',      label: 'GPT-4o Mini',      provider: 'OpenAI',        apiProvider: 'openai' },
-  { id: 'o1-preview',       label: 'o1 Preview',        provider: 'OpenAI',        apiProvider: 'openai' },
-  { id: 'o1-mini',          label: 'o1 Mini',           provider: 'OpenAI',        apiProvider: 'openai' },
-  { id: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet', provider: 'Anthropic', apiProvider: 'anthropic' },
-  { id: 'claude-3-5-haiku-20241022',  label: 'Claude 3.5 Haiku',  provider: 'Anthropic', apiProvider: 'anthropic' },
-  { id: 'claude-3-opus-20240229',     label: 'Claude 3 Opus',      provider: 'Anthropic', apiProvider: 'anthropic' },
-  { id: 'deepseek-chat',     label: 'DeepSeek Chat',     provider: 'DeepSeek',  apiProvider: 'deepseek' },
-  { id: 'deepseek-reasoner', label: 'DeepSeek Reasoner', provider: 'DeepSeek',  apiProvider: 'deepseek' },
-  { id: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B',  provider: 'Groq', apiProvider: 'groq' },
-  { id: 'llama-3.1-8b-instant',    label: 'Llama 3.1 8B',   provider: 'Groq', apiProvider: 'groq' },
-  { id: 'mixtral-8x7b-32768',      label: 'Mixtral 8x7B',   provider: 'Groq', apiProvider: 'groq' },
-  { id: 'openrouter/google/gemini-2.0-flash-exp:free', label: 'Gemini 2.0 Flash (OR)', provider: 'OpenRouter', apiProvider: 'openrouter' },
-  { id: 'openrouter/meta-llama/llama-3.3-70b-instruct', label: 'Llama 3.3 70B (OR)',  provider: 'OpenRouter', apiProvider: 'openrouter' },
-  { id: 'glm-4-plus', label: 'GLM-4 Plus', provider: 'GLM',     apiProvider: 'glm' },
-  { id: 'glm-4-air',  label: 'GLM-4 Air',  provider: 'GLM',     apiProvider: 'glm' },
-  { id: 'qwen-max',   label: 'Qwen Max',   provider: 'Alibaba', apiProvider: 'alibaba' },
-  { id: 'qwen-plus',  label: 'Qwen Plus',  provider: 'Alibaba', apiProvider: 'alibaba' },
-  { id: 'qwen-turbo', label: 'Qwen Turbo', provider: 'Alibaba', apiProvider: 'alibaba' },
+  // ── Google Gemini (Direct) ─────────────────────────────────────────────────
+  { id: 'gemini-2.5-pro',              label: 'Gemini 2.5 Pro',        provider: 'Google Gemini', apiProvider: 'google', badge: 'Best Quality' },
+  { id: 'gemini-2.5-flash',            label: 'Gemini 2.5 Flash',      provider: 'Google Gemini', apiProvider: 'google', badge: 'Recommended' },
+  { id: 'gemini-2.0-flash',            label: 'Gemini 2.0 Flash',      provider: 'Google Gemini', apiProvider: 'google', badge: '' },
+  { id: 'gemini-2.0-flash-lite',       label: 'Gemini 2.0 Flash Lite', provider: 'Google Gemini', apiProvider: 'google', badge: 'Fastest' },
+
+  // ── Groq (Free, Fast) ─────────────────────────────────────────────────────
+  { id: 'llama-3.3-70b-versatile',     label: 'Llama 3.3 70B',         provider: 'Groq',          apiProvider: 'groq',   badge: 'Fast & Free' },
+  { id: 'llama-3.1-8b-instant',        label: 'Llama 3.1 8B Instant',  provider: 'Groq',          apiProvider: 'groq',   badge: 'Fastest Free' },
+  { id: 'llama3-70b-8192',             label: 'Llama 3 70B',           provider: 'Groq',          apiProvider: 'groq',   badge: '' },
+  { id: 'gemma2-9b-it',                label: 'Gemma 2 9B',            provider: 'Groq',          apiProvider: 'groq',   badge: '' },
+  { id: 'mixtral-8x7b-32768',          label: 'Mixtral 8x7B',          provider: 'Groq',          apiProvider: 'groq',   badge: '' },
 ];
+
 
 import { detectUserLocation } from '../services/locationService';
 export { detectUserLocation };
@@ -948,27 +942,12 @@ export default function SettingsPage() {
     providers.filter((p) => p.status === 'VERIFIED').map((p) => p.id),
   );
 
-  const apiModels = providers
-    .filter((p) => p.status === 'VERIFIED')
-    .flatMap((p) =>
-      p.availableModels.map((m) => ({
-        id: m, label: m,
-        provider: PROVIDER_METADATA[p.id]?.name || p.id,
-        apiProvider: p.id,
-      })),
-    );
+  // ── Model list: use ONLY the curated ALL_MODELS list filtered by verified providers.
+  // Never merge raw provider.availableModels — those return 300+ OpenRouter entries
+  // and most of them require paid keys / are unreliable.
+  const readyModels = ALL_MODELS.filter((m) => verifiedProviderIds.has(m.apiProvider));
+  const availableModelsList = ALL_MODELS; // full curated list (shown even if key not yet set)
 
-  const staticIds = new Set(ALL_MODELS.map((m) => m.id));
-  const extraApiModels = apiModels.filter((m) => !staticIds.has(m.id));
-  const combinedModels = [...ALL_MODELS, ...extraApiModels];
-  const uniqueModelsMap = new Map();
-  combinedModels.forEach((m) => {
-    if (!uniqueModelsMap.has(m.id)) {
-      uniqueModelsMap.set(m.id, m);
-    }
-  });
-  const availableModelsList = Array.from(uniqueModelsMap.values());
-  const readyModels = availableModelsList.filter((m) => verifiedProviderIds.has(m.apiProvider));
 
   useEffect(() => {
     if (!keysLoading && readyModels.length > 0) {

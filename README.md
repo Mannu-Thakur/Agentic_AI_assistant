@@ -6,7 +6,7 @@ A full-stack, enterprise-grade, stateful agentic AI platform built with **FastAP
 
 ## 🌟 Overview & Highlights
 
-Omni is an advanced AI Assistant workspace designed for production environments. It features a stateful **LangGraph** execution graph, multi-provider LLM orchestration with live streaming, a dual-layer **OCR document ingestion pipeline**, a 4-tier **multi-engine web search waterfall**, **semantic memory extraction**, **MCP tool integration**, **Monaco code canvas**, and developer-focused telemetry (**DevHUD**).
+Omni is an advanced AI Assistant workspace designed for production environments. It features a stateful **LangGraph** execution graph, multi-provider LLM orchestration with live streaming, a dual-layer **OCR document ingestion pipeline**, a 4-tier **multi-engine web search waterfall**, **compound query decomposition**, **semantic memory extraction**, **MCP Workspace tool integration**, **Monaco code canvas**, and developer-focused telemetry (**DevHUD**).
 
 ---
 
@@ -21,13 +21,13 @@ AI Assistant Chatbot/
 │   │   ├── core/             # Hardened config, database, security, Redis, metrics, telemetry
 │   │   ├── embeddings/       # Embedding service (ChromaDB & sentence-transformers)
 │   │   ├── memory/           # Semantic memory extraction and vector indexing
-│   │   ├── middleware/       # Security headers, payload limits, XSS sanitization
+│   │   ├── middleware/        # Security headers, payload limits, XSS sanitization
 │   │   ├── models/           # SQLAlchemy ORM database models
 │   │   ├── providers/        # LLM provider adapters (Gemini, Groq, OpenRouter, OpenAI-compatible)
 │   │   ├── retrieval/        # Vector store retriever & document chunking
 │   │   ├── schemas/          # Pydantic request & response validation models
 │   │   ├── services/         # Business logic (chat, document parser, web search, memory, audit)
-│   │   ├── tools/            # Local tools, MCP client manager, scheduler, tool registry
+│   │   ├── tools/            # MCP Workspace server, local tools, scheduler, tool registry
 │   │   └── workers/          # Background tasks (provider health checker, memory extractor)
 │   ├── alembic/              # Database schema migrations
 │   └── tests/                # Comprehensive pytest suite
@@ -51,13 +51,16 @@ AI Assistant Chatbot/
 
 ### 🧠 1. Stateful LangGraph Agentic Engine
 * **State Graph Execution**: Autonomous multi-step cycle (`intent_route` → `retrieve_context` → `execute_tools` → `generate_response`).
-* **Source Attribution**: Accurate tracking and citation of web links and ingested document passages.
+* **Compound Query Decomposition**: Detects multi-part user queries (e.g. *"who won tennis 2026 AND how does food tracking work?"*) and decomposes them into independent sub-questions. Each sub-question is searched and answered separately, then merged into a single cohesive response — ensuring no part of a complex query gets dropped.
+* **Source Attribution**: Accurate tracking and citation of web links and ingested document passages. Web search sources now carry clickable URLs and provider names to the frontend.
 * **Context-Aware Prompts**: Dynamically injects long-term semantic memory, workspace documents, and systemic rules into model context.
 
 ### 🤖 2. Multi-Provider LLM Orchestration
-* **Supported Providers**: Google Gemini (1.5 / 2.0), Groq (Llama 3, Mixtral), OpenRouter (Claude 3.5 Sonnet, DeepSeek R1/V3, GPT-4o), and custom OpenAI-compatible endpoints.
+* **Supported Providers**: Google Gemini (2.0 / 2.5), Groq (Llama 3.1 / 3.3, Gemma 2, Mixtral), OpenRouter (Claude 3.5 Sonnet, DeepSeek R1/V3, GPT-4o), and custom OpenAI-compatible endpoints.
+* **Curated Model Picker**: Frontend exposes a hand-curated list of tested, reliable models filtered by which provider keys are currently verified — eliminating the 300+ entry OpenRouter model flood. Includes automatic snap-back to `gemini-2.5-flash` if a stale/unknown model is detected in localStorage.
 * **Dynamic Provider Fallback**: Automatic fallback on rate limits or API errors.
 * **BYOK (Bring Your Own Key)**: Secure user-level API key storage and runtime validation via `x-api-keys` header.
+* **Improved Provider Routing**: `gemma` and `groq` prefixed model IDs now correctly resolve to the Groq provider.
 
 ### 🌐 3. Multi-Engine Web Search Waterfall
 * **4-Tier Fallback Hierarchy**:
@@ -65,6 +68,7 @@ AI Assistant Chatbot/
   2. **SerpAPI**: Real-time Google Search engine results.
   3. **Exa AI**: Neural semantic search.
   4. **DuckDuckGo**: Free, keyless fallback provider.
+* **Per-Engine 8s Timeouts**: Every search SDK call is wrapped in an `asyncio.wait_for` timeout so a hung provider never stalls the entire pipeline.
 * **Deep Web Content Extraction**: Automated HTML scraping, domain filtering, and relevance ranking.
 
 ### 📄 4. Advanced RAG & Dual-Layer OCR Document Pipeline
@@ -87,13 +91,21 @@ The RAG (Retrieval-Augmented Generation) engine combines **Dense Vector Search**
 
 **Overall Benchmark Score:** `7 / 7 Passed (100% Accuracy)`
 
-### 🔌 5. Model Context Protocol (MCP) Integration
+### 🔌 5. Model Context Protocol (MCP) — Workspace Server
 * **Protocol Support**: Native stdio and SSE transport support for connecting external MCP servers.
-* **Built-in Server**: Includes a high-performance MCP Calculator server out-of-the-box.
+* **Built-in Workspace Server** (`mcp_calculator_server.py`): A fully-featured MCP server with the following tools:
+  * **`calculate`** — Safe sandboxed mathematical expression evaluator (`sin`, `cos`, `sqrt`, `log`, `pi`, `e`).
+  * **`add_expense`** — Log expenses with amount, description, category, and optional ISO date. Accepts natural-language category aliases (`fooding`, `bf`, `fast food`, `coupon`, `cab`, etc.) which are normalised to canonical categories automatically.
+  * **`get_expenses`** — Retrieve and filter logged expenses by category and/or date.
+  * **`summarize_expenses`** — Full breakdown of all expenses grouped by category with per-category subtotals and a grand total.
+  * **`create_reminder`** — Schedule calendar reminders.
+  * **`send_email`** — Draft and queue email messages.
+* **Persistent JSON Store**: All expenses, reminders, and emails are persisted to a local `mcp_store.json` file on the server.
 * **Management UI/API**: Add, edit, test, and manage MCP server connections in real time (`/api/v1/mcp-servers`).
 
 ### 💡 6. Semantic Long-Term Memory
 * **Background Fact Extraction**: Automatically analyzes user messages to identify facts, preferences, and details.
+* **Dual-Mode Extraction**: Attempts LLM-based extraction (Gemini) first — uses the user's personal key or falls back to the server's `GEMINI_API_KEY`. When neither is available, automatically falls back to **rule-based pattern extraction** so memories are always captured regardless of key status.
 * **Vector Indexing & Deduplication**: Index stored memories in ChromaDB to prevent duplicate entries.
 * **Memory Management**: View, filter, edit, or delete stored memories directly from the Settings interface.
 
@@ -103,13 +115,20 @@ The RAG (Retrieval-Augmented Generation) engine combines **Dense Vector Search**
 * **Math & Markdown Rendering**: LaTeX math formatting via KaTeX (`remark-math`, `rehype-katex`) and GitHub Flavored Markdown.
 
 ### 🛡️ 8. Enterprise Hardening & Security
-* **Authentication**: JWT access tokens (24h) + refresh tokens (30 days), bcrypt password hashing, and OAuth 2.0 (Google & GitHub).
+* **Authentication**: JWT access tokens (24h) + refresh tokens (30 days). Each refresh token now carries a unique `jti` (JWT ID) to ensure token rotation always produces a distinct, non-reusable token. Bcrypt password hashing and OAuth 2.0 (Google & GitHub).
+* **Mock OAuth Support**: Test-mode mock codes (`mock_` prefix) for both Google and GitHub OAuth flows — allows integration testing without live external OAuth.
 * **Open Redirect Defense**: Strict URI whitelisting (`ALLOWED_REDIRECT_URIS`).
 * **Security Middlewares**: `SecureHeadersMiddleware` (CSP, HSTS, X-Frame-Options), `PayloadLimitMiddleware` (upload size restriction), and `InputSanitizationMiddleware` (XSS sanitization).
 * **Rate Limiting & Observability**: Redis-backed soft rate limiting (100 req/min per IP, fails open), W3C Trace Context propagation (`traceparent`, `X-Trace-ID`, `X-Span-ID`), structured single-line JSON logging, and Prometheus metrics endpoint (`/api/v1/metrics`).
 
 ### 📊 9. Developer Telemetry (DevHUD)
 * **Execution Telemetry**: Live step breakdown showing node transitions, latency, execution state, prompt token consumption, and raw tool output payloads.
+
+### ⏱️ 10. Streaming Reliability & Timeout Guard
+* **120-Second Hard Deadline**: The SSE streaming endpoint (`/api/v1/chat/stream`) enforces a 120-second master deadline on the LangGraph task. If any node hangs silently, the task is cancelled and a user-friendly timeout error is emitted — preventing the frontend from showing *"Thinking…"* indefinitely.
+* **Rolling Deadline Refresh**: Every received token resets the deadline, so long but actively-generating responses are never cut short.
+* **30-Second Checkpoint**: The queue loop re-checks the deadline every 30 seconds even when idle.
+* **Client Disconnect Cancellation**: When the browser tab closes mid-stream, the graph task is cancelled immediately to avoid wasting LLM tokens and compute.
 
 ---
 
@@ -219,7 +238,7 @@ Access points:
 | `DATABASE_URL` | Primary database connection URL | `sqlite:///./sql_app.db` |
 | `REDIS_HOST` | Redis cache hostname | `localhost` (Local) / `redis` (Docker) |
 | `REDIS_PORT` | Redis port | `6379` |
-| `GEMINI_API_KEY` | Google Gemini API Key | `your_gemini_key` |
+| `GEMINI_API_KEY` | Google Gemini API Key (also used as memory-extraction fallback when no user key) | `your_gemini_key` |
 | `GROQ_API_KEY` | Groq API Key | `your_groq_key` |
 | `OPENROUTER_API_KEY` | OpenRouter API Key | `your_openrouter_key` |
 | `TAVILY_API_KEY` | Tavily Web Search Key | `your_tavily_key` |

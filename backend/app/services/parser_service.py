@@ -43,6 +43,22 @@ class OcrResult:
 #  Parser Service
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _find_poppler() -> Optional[str]:
+    """Auto-detect Poppler install directory on Windows."""
+    import glob
+    search_paths = [
+        r"C:\Program Files\poppler\bin",
+        r"C:\Program Files (x86)\poppler\bin",
+        r"C:\tools\poppler\bin",
+    ]
+    winget_pattern = os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Packages\*Poppler*\poppler-*\Library\bin")
+    search_paths.extend(glob.glob(winget_pattern))
+    for p in search_paths:
+        if os.path.isfile(os.path.join(p, "pdftoppm.exe")):
+            return p
+    return None
+
+
 class ParserService:
 
     # ── PDF ──────────────────────────────────────────────────────────────────
@@ -435,8 +451,46 @@ class ParserService:
                 layout_type="text",
             )
 
+        pages_images = []
         try:
-            pages_images = convert_from_path(file_path, dpi=300)
+            from pdf2image import convert_from_path
+            p_path = _find_poppler()
+            kwargs = {"dpi": 300}
+            if p_path:
+                kwargs["poppler_path"] = p_path
+            pages_images = convert_from_path(file_path, **kwargs)
+        except Exception as p2i_err:
+
+            logger.info(f"[OCR] pdf2image conversion unavailable or failed ({p2i_err}); trying pypdf image extraction fallback")
+            try:
+                import pypdf
+                reader = pypdf.PdfReader(file_path)
+                ocr_texts = []
+                ocr_confs = []
+                for p_idx, page in enumerate(reader.pages, start=1):
+                    ocr_texts.append(f"\n[Page {p_idx}]\n")
+                    if hasattr(page, "images") and page.images:
+                        for img_obj in page.images:
+                            res = cls.extract_text_image_bytes(img_obj.data)
+                            if res.text:
+                                ocr_texts.append(res.text)
+                                ocr_confs.append(res.confidence)
+                if ocr_confs:
+                    full_txt = "".join(ocr_texts)
+                    conf_avg = round(sum(ocr_confs) / len(ocr_confs), 3)
+                    return OcrResult(text=full_txt, confidence=conf_avg, has_tables=False, layout_type="text")
+            except Exception as pypdf_err:
+                logger.warning(f"[OCR] pypdf fallback failed: {pypdf_err}")
+
+        if not pages_images:
+            return OcrResult(
+                text=f"[Scanned PDF OCR failed for '{os.path.basename(file_path)}': Poppler/pdf2image conversion unavailable]",
+                confidence=0.0,
+                has_tables=False,
+                layout_type="text",
+            )
+
+        try:
             all_texts: List[str] = []
             all_confs: List[float] = []
 
@@ -481,6 +535,7 @@ class ParserService:
                 has_tables=False,
                 layout_type="text",
             )
+
 
     # ── Main dispatcher ───────────────────────────────────────────────────────
 

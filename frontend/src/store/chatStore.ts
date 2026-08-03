@@ -47,6 +47,28 @@ interface ChatState {
   updateMessage: (msgId: string, updates: Partial<Message>) => void;
 }
 
+export function getChatTimestamp(c: ChatSession | any): number {
+  if (!c) return 0;
+  const rawDate = c.updated_at || c.created_at;
+  if (!rawDate) return 0;
+  let s = String(rawDate).trim();
+  if (!s.endsWith('Z') && !/[+-]\d{2}:\d{2}$/.test(s)) {
+    s = s.replace(' ', 'T');
+    if (!s.includes('T')) s += 'T00:00:00Z';
+    else s += 'Z';
+  }
+  const time = new Date(s).getTime();
+  return isNaN(time) ? 0 : time;
+}
+
+function _loadCachedProviders(): Provider[] {
+  try {
+    const raw = localStorage.getItem('omni_providers_cache');
+    if (raw) return JSON.parse(raw) as Provider[];
+  } catch { /* ignore */ }
+  return [];
+}
+
 export const useChatStore = create<ChatState>((set, get) => ({
   chats: [],
   activeChatId: localStorage.getItem('omni_active_chat_id') || null,
@@ -54,28 +76,39 @@ export const useChatStore = create<ChatState>((set, get) => ({
   messageCache: {},
   activeModel: localStorage.getItem('active_model') || '',
   isStreaming: false,
-  providers: [],
-  verifiedProviders: [],
-  keysLoading: true,
+  // Hydrate from localStorage cache — keysLoading is only true when there's no cache yet
+  providers: _loadCachedProviders(),
+  verifiedProviders: _loadCachedProviders()
+    .filter(p => p.verified || p.status === 'VERIFIED')
+    .map(p => p.id),
+  keysLoading: _loadCachedProviders().length === 0,
 
-  setChats: (chats) => set({ chats }),
+  setChats: (chats) => set({
+    chats: [...chats].sort((a, b) => getChatTimestamp(b) - getChatTimestamp(a))
+  }),
 
   setActiveChatId: (id) => {
     if (id) {
       localStorage.setItem('omni_active_chat_id', id);
       const state = get();
       const cachedMsgs = state.messageCache[id];
-      const msgsToKeep = (cachedMsgs && cachedMsgs.length > 0) ? cachedMsgs : (state.activeChatId === id || state.activeChatId === null ? state.messages : []);
+      const msgsToKeep = (cachedMsgs && cachedMsgs.length > 0)
+        ? cachedMsgs
+        : (state.activeChatId === id ? state.messages : []);
       set({
         activeChatId: id,
         messages: msgsToKeep,
-        messageCache: msgsToKeep.length > 0 ? { ...state.messageCache, [id]: msgsToKeep } : state.messageCache,
+        isStreaming: false,
+        messageCache: (cachedMsgs && cachedMsgs.length > 0)
+          ? state.messageCache
+          : (msgsToKeep.length > 0 ? { ...state.messageCache, [id]: msgsToKeep } : state.messageCache),
       });
     } else {
       localStorage.removeItem('omni_active_chat_id');
       set({
         activeChatId: null,
         messages: [],
+        isStreaming: false,
       });
     }
   },
@@ -109,10 +142,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   setIsStreaming: (streaming) => set({ isStreaming: streaming }),
 
-  setProviders: (providers) => set({
-    providers,
-    verifiedProviders: providers.filter(p => p.verified || p.status === 'VERIFIED').map(p => p.id),
-  }),
+  setProviders: (providers) => {
+    try { localStorage.setItem('omni_providers_cache', JSON.stringify(providers)); } catch { /* storage full */ }
+    set({
+      providers,
+      verifiedProviders: providers.filter(p => p.verified || p.status === 'VERIFIED').map(p => p.id),
+    });
+  },
 
   setVerifiedProviders: (providers) => set({ verifiedProviders: providers }),
 
@@ -130,7 +166,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   setKeysLoading: (loading) => set({ keysLoading: loading }),
 
-  addChat: (chat) => set((state) => ({ chats: [chat, ...state.chats] })),
+  addChat: (chat) => set((state) => {
+    const otherChats = state.chats.filter((c) => c.id !== chat.id);
+    const nextChats = [chat, ...otherChats].sort((a, b) => getChatTimestamp(b) - getChatTimestamp(a));
+    return { chats: nextChats };
+  }),
 
   removeChat: (chatId) => set((state) => {
     const newCache = { ...state.messageCache };
@@ -143,9 +183,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
     };
   }),
 
-  updateChat: (chat) => set((state) => ({
-    chats: state.chats.map((c) => c.id === chat.id ? chat : c)
-  })),
+  updateChat: (chat) => set((state) => {
+    const otherChats = state.chats.filter((c) => c.id !== chat.id);
+    const nextChats = [chat, ...otherChats].sort((a, b) => getChatTimestamp(b) - getChatTimestamp(a));
+    return { chats: nextChats };
+  }),
 
   addMessage: (msg) => set((state) => {
     const nextMsgs = [...state.messages, msg];

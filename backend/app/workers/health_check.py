@@ -4,7 +4,7 @@ from sqlalchemy import select
 from app.core.database import AsyncSessionLocal
 from app.models.user import ApiKey
 from app.core.security import decrypt_api_key
-from app.api.api_keys import verify_provider_api_key_and_fetch_models
+from app.api.api_keys import verify_provider_api_key_and_fetch_models, ApiKeyAuthError
 from sqlalchemy.sql import func
 
 logger = logging.getLogger("app.workers.health_check")
@@ -31,12 +31,19 @@ async def provider_health_check_loop():
                         k.last_checked = func.now()
                         k.available_models = models
                         k.last_error = None
-                    except Exception as e:
-                        logger.warning(f"Health check failed for provider {k.provider_name} (key ID {k.id}): {e}")
+                    except ApiKeyAuthError as e:
+                        logger.warning(f"Health check found invalid key for provider {k.provider_name} (key ID {k.id}): {e}")
                         k.status = "INVALID"
-                        k.last_error = str(e)
+                        k.last_error = str(e)[:900]
                         k.available_models = []
                         k.last_checked = func.now()
+                    except Exception as e:
+                        logger.warning(f"Transient health check issue for provider {k.provider_name} (key ID {k.id}): {e}")
+                        k.last_error = f"Transient warning: {str(e)[:800]}"
+                        k.last_checked = func.now()
+                        # Crucial: DO NOT change status to INVALID and DO NOT clear available_models if key was previously valid
+                        if k.status != "INVALID" and not k.status:
+                            k.status = "VERIFIED"
                     db.add(k)
                 await db.commit()
             logger.info("Provider health checks completed.")

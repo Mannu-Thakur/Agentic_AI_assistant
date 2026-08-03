@@ -128,3 +128,16 @@ async def test_memory_auto_extraction(db_session: AsyncSession):
       await db.commit()
 
 
+def test_gemma_provider_routing():
+    """Verify that Gemma models (like gemma2-9b-it) resolve to the Groq provider."""
+    from app.api.chat import resolve_provider_from_model
+    from app.agent.nodes import get_provider, groq_provider
+
+    assert resolve_provider_from_model("gemma2-9b-it") == "groq"
+    assert resolve_provider_from_model("google/gemma-2-9b-it") == "groq"
+    assert resolve_provider_from_model("llama-3.3-70b-versatile") == "groq"
+
+    assert get_provider("gemma2-9b-it") == groq_provider
+
+
+

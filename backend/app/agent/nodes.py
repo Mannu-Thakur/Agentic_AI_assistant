@@ -71,6 +71,7 @@ from app.agent.prompts import (
     CLARIFICATION_QUESTION_PROMPT,
     QUERY_RECONSTRUCTOR_PROMPT,
     QUERY_DECOMPOSITION_PROMPT,
+    COMPOUND_QUERY_DETECTOR_PROMPT,
     RETRIEVAL_EVALUATOR_PROMPT,
     # Phase 3
     TOOL_PLANNER_PROMPT,
@@ -113,7 +114,11 @@ openai_provider     = OpenAIProvider()
 def get_provider(model: str):
     if model.startswith("openrouter/"):
         return openrouter_provider
-    elif "gemini" in model or "google" in model:
+    elif "gemini" in model:
+        return gemini_provider
+    elif "llama" in model or "mixtral" in model or "gemma" in model or "groq" in model:
+        return groq_provider
+    elif "google" in model:
         return gemini_provider
     elif "gpt" in model or "o1-" in model or "o3-" in model or "o4-" in model:
         # If OpenAI key is set, use direct OpenAIProvider; otherwise OpenRouter
@@ -127,8 +132,6 @@ def get_provider(model: str):
     elif "deepseek" in model:
         # DeepSeek models — routed through openrouter
         return openrouter_provider
-    elif "llama" in model or "mixtral" in model or "groq" in model:
-        return groq_provider
     elif "qwen" in model or "glm" in model:
         # Alibaba/GLM — routed through openrouter
         return openrouter_provider
@@ -242,7 +245,7 @@ def _best_api_key(keys: dict, model: str) -> Optional[str]:
         return keys.get("alibaba")
     if "glm" in model:
         return keys.get("glm")
-    if "llama" in model or "mixtral" in model:
+    if "llama" in model or "mixtral" in model or "gemma" in model or "groq" in model:
         return keys.get("groq")
     # Unknown model name — fall back to any available key in priority order
     # (Google first since it supports the most model variants)
@@ -830,7 +833,8 @@ async def classify_intent_node(
         "category summary", "top merchants", "add expense", "add an expense",
         "list expense", "list expenses", "list all expenses", "search expense",
         "search expenses", "update expense", "delete expense", "groceries",
-        "calculate", "reminder", "remind me", "send email"
+        "calculate", "reminder", "remind me", "send email", "spent on",
+        "amount spent", "total spent", "spent", "fast food", "fooding"
     )
     if last_query_clean and intent in (INTENT_NORMAL_CHAT, INTENT_WEB_SEARCH, INTENT_DOCUMENT_QA) and not is_private_doc_query:
         q_low_mcp = last_query_clean.lower()
@@ -844,6 +848,25 @@ async def classify_intent_node(
     if images_present and intent == INTENT_NORMAL_CHAT and not last_query.strip():
         intent = INTENT_VISION
         logger.info("classify_intent_node: empty query with images → forcing VISION")
+
+    # ── Compound Query Detection ──────────────────────────────────────────────
+    # Detect if the user asked MULTIPLE DISTINCT questions so each can be
+    # answered independently. This prevents question 2 from being silently
+    # dropped when question 1 triggers a different intent path.
+    sub_questions: List[str] = []
+    _cq_word_count = len(last_query_clean.split())
+    # Only run for queries long enough to possibly be compound (≥ 6 words)
+    if _cq_word_count >= 6:
+        try:
+            _cq_prompt = COMPOUND_QUERY_DETECTOR_PROMPT.format(query=last_query_clean)
+            _cq_parsed = await _call_llm_judge(_cq_prompt, config)
+            if _cq_parsed and isinstance(_cq_parsed, dict) and _cq_parsed.get("is_compound"):
+                _cq_subs = _cq_parsed.get("sub_questions", [])
+                if isinstance(_cq_subs, list) and len(_cq_subs) >= 2:
+                    sub_questions = [str(q).strip() for q in _cq_subs if str(q).strip()]
+                    logger.info(f"[CompoundQuery] Detected {len(sub_questions)} sub-questions: {sub_questions}")
+        except Exception as _cq_err:
+            logger.debug(f"[CompoundQuery] detection failed (non-fatal): {_cq_err}")
 
     # ── Determine allowed tools from whitelist & ToolRegistry ─────────────────
     from app.tools.registry import ToolRegistry
@@ -865,6 +888,7 @@ async def classify_intent_node(
         f"allowed_tools={allowed_tools} | "
         f"language={detected_language} | "
         f"language_mode={language_mode} | "
+        f"sub_questions={sub_questions} | "
         f"query='{last_query[:60]}'"
     )
 
@@ -898,6 +922,7 @@ async def classify_intent_node(
         "retrieval_confidence":  retrieval_confidence,
         "detected_language":     detected_language,
         "language_mode":         language_mode,
+        "sub_questions":         sub_questions,
     }
 
 
@@ -1405,6 +1430,33 @@ async def retrieve_context_node(
             logger.warning(f"[retrieve_context] Semantic memory search failed: {exc}")
 
     if user_id and last_query:
+        # ── PRODUCTION FIX: For pure web-search intents, skip local ChromaDB
+        # retrieval entirely. Local documents like 'bugX_documentation_part1.md'
+        # have ZERO relevance to public web queries ('who won tennis 2026?') but
+        # can still pass the BM25/cosine similarity threshold and appear as noise
+        # sources. Web search results are the authoritative source for these intents.
+        _is_web_intent = state.get("intent") in (
+            INTENT_WEB_SEARCH, INTENT_NEWS, INTENT_CURRENT_EVENTS, INTENT_FINANCE
+        )
+        if _is_web_intent:
+            logger.info(
+                f"[retrieve_context] Skipping local ChromaDB retrieval for web-search intent "
+                f"(intent={state.get('intent')}) — web search will be primary source."
+            )
+            steps = list(state.get("steps") or []) + ["retrieve_context"]
+            return {
+                "retrieved_documents":  memories,
+                "source_documents":     [],
+                # Use "irrelevant" so grade_documents_node triggers web search fallback.
+                # Do NOT use "no_docs" — that can confuse the no-doc-answer path.
+                "document_relevance":   "irrelevant",
+                # Set confidence=1.0 so route_after_grading does NOT loop back here.
+                "retrieval_confidence": 1.0,
+                # Do NOT increment retry count — this is not a failed retrieval.
+                "retrieval_retry_count": retry_count,
+                "steps":                steps,
+            }
+
         # 2. Reformulate query on low-confidence retry
         if retry_count > 0:
             reformulate_prompt = (
@@ -1652,28 +1704,53 @@ async def grade_documents_node(
                 )
                 try:
                     import re as _re2
-                    _search_query = _re2.sub(r"\[System Context:[^\]]*\]", "", last_query)
-                    _search_query = _re2.sub(r"\[User Location Context:[^\]]*\]", "", _search_query)
-                    _search_query = _re2.sub(r"\[Connected Reference Context[^\[]*\[End of Referenced Context\]", "", _search_query, flags=_re2.DOTALL).strip() or last_query
-                    search_results = await unified_web_search(_search_query, req_api_keys)
-                    web_result     = format_for_llm(search_results)
-                    web_src_docs   = format_as_source_documents(search_results)
-                    web_chunk = {
-                        "type":     "chunk",
-                        "content":  web_result,
-                        "filename": "Web Search Results",
-                        "distance": 0.0,
-                    }
-                    steps.append("grade_documents")
-                    return {
-                        "document_relevance":   "web_fallback",
-                        "no_doc_answer":        False,
-                        "retrieved_documents":  retrieved_docs + [web_chunk],
-                        "source_documents":     web_src_docs,
-                        "retrieval_confidence": 0.9,
-                        "generation_mode":      "web_search",
-                        "steps":                steps,
-                    }
+                    # ── COMPOUND QUERY FIX: run a separate web search for each sub-question
+                    # so that multi-part queries ('tennis 2026? AND food tracking?') get all
+                    # their questions answered, not just the first one.
+                    sub_questions: List[str] = state.get("sub_questions") or []
+                    _search_targets = sub_questions if len(sub_questions) >= 2 else [last_query]
+
+                    all_web_chunks: List[dict] = []
+                    all_web_src_docs: List[Dict[str, Any]] = []
+                    combined_web_text_parts: List[str] = []
+                    src_index_offset = 0
+
+                    for _sq in _search_targets:
+                        _sq_clean = _re2.sub(r"\[System Context:[^\]]*\]", "", _sq)
+                        _sq_clean = _re2.sub(r"\[User Location Context:[^\]]*\]", "", _sq_clean)
+                        _sq_clean = _re2.sub(r"\[Connected Reference Context[^\[]*\[End of Referenced Context\]", "", _sq_clean, flags=_re2.DOTALL).strip() or _sq
+
+                        _sq_results = await unified_web_search(_sq_clean, req_api_keys)
+                        if _sq_results:
+                            _sq_text = format_for_llm(_sq_results)
+                            _sq_src_docs = format_as_source_documents(_sq_results)
+                            # Prefix the web text with the sub-question so the LLM knows which answer belongs where
+                            combined_web_text_parts.append(f"### Search results for: {_sq_clean}\n{_sq_text}")
+                            # Re-index source docs to avoid collisions
+                            for _sd in _sq_src_docs:
+                                _sd["index"] = src_index_offset + _sd["index"]
+                                _sd["sub_question"] = _sq_clean
+                                all_web_src_docs.append(_sd)
+                            src_index_offset += len(_sq_src_docs)
+
+                    if combined_web_text_parts:
+                        combined_web_result = "\n\n".join(combined_web_text_parts)
+                        web_chunk = {
+                            "type":     "chunk",
+                            "content":  combined_web_result,
+                            "filename": "Web Search Results",
+                            "distance": 0.0,
+                        }
+                        steps.append("grade_documents")
+                        return {
+                            "document_relevance":   "web_fallback",
+                            "no_doc_answer":        False,
+                            "retrieved_documents":  retrieved_docs + [web_chunk],
+                            "source_documents":     all_web_src_docs,
+                            "retrieval_confidence": 0.9,
+                            "generation_mode":      "web_search",
+                            "steps":                steps,
+                        }
                 except Exception as e:
                     logger.error(f"CRAG web search on empty docs failed: {e}")
 
@@ -1763,27 +1840,39 @@ async def grade_documents_node(
         logger.info(f"CRAG: Freshness required & issues found → Executing web search fallback.")
         try:
             import re as _re3
-            _search_query = _re3.sub(r"\[System Context:[^\]]*\]", "", last_query)
-            _search_query = _re3.sub(r"\[User Location Context:[^\]]*\]", "", _search_query)
-            _search_query = _re3.sub(r"\[Connected Reference Context[^\[]*\[End of Referenced Context\]", "", _search_query, flags=_re3.DOTALL).strip() or last_query
-            # Use unified_web_search so all providers + ranking apply
-            search_results = await unified_web_search(_search_query, req_api_keys)
-            web_result     = format_for_llm(search_results)
-            web_src_docs   = format_as_source_documents(search_results)
-            web_chunk = {
-                "type":     "chunk",
-                "content":  web_result,
-                "filename": "Web Search Results",
-                "distance": 0.0,
-            }
-            # Add web results to relevant chunks
-            relevant_chunks.append(web_chunk)
-            # Replace source_documents with per-result ranked entries
-            # Re-index so they don't collide with any existing doc sources
-            offset = len(source_documents)
-            for s in web_src_docs:
-                s["index"] = offset + s["index"]
-            source_documents.extend(web_src_docs)
+            # ── COMPOUND QUERY FIX: run per-sub-question web searches so all parts
+            # of a multi-part query get answered (e.g. 'tennis 2026 AND food tracking').
+            sub_questions: List[str] = state.get("sub_questions") or []
+            _search_targets = sub_questions if len(sub_questions) >= 2 else [last_query]
+
+            all_combined_text_parts: List[str] = []
+            src_index_offset = len(source_documents)
+
+            for _sq in _search_targets:
+                _sq_clean = _re3.sub(r"\[System Context:[^\]]*\]", "", _sq)
+                _sq_clean = _re3.sub(r"\[User Location Context:[^\]]*\]", "", _sq_clean)
+                _sq_clean = _re3.sub(r"\[Connected Reference Context[^\[]*\[End of Referenced Context\]", "", _sq_clean, flags=_re3.DOTALL).strip() or _sq
+
+                _sq_results = await unified_web_search(_sq_clean, req_api_keys)
+                if _sq_results:
+                    _sq_text = format_for_llm(_sq_results)
+                    _sq_src_docs = format_as_source_documents(_sq_results)
+                    all_combined_text_parts.append(f"### Search results for: {_sq_clean}\n{_sq_text}")
+                    for _sd in _sq_src_docs:
+                        _sd["index"] = src_index_offset + _sd["index"]
+                        _sd["sub_question"] = _sq_clean
+                        source_documents.append(_sd)
+                    src_index_offset += len(_sq_src_docs)
+
+            if all_combined_text_parts:
+                combined_web_result = "\n\n".join(all_combined_text_parts)
+                web_chunk = {
+                    "type":     "chunk",
+                    "content":  combined_web_result,
+                    "filename": "Web Search Results",
+                    "distance": 0.0,
+                }
+                relevant_chunks.append(web_chunk)
             document_relevance = "web_fallback"
         except Exception as e:
             logger.error(f"CRAG web fallback failed: {e}")
@@ -1829,19 +1918,24 @@ async def grade_documents_node(
         }
 
     # ── Build final validated source_documents (only used=True chunks) ────────
-    # Mark each chunk that passed CRAG as used=True for frontend attribution
+    # Mark each chunk that passed CRAG as used=True for frontend attribution.
+    # CLICKABLE LINKS FIX: also propagate the `url` field so web search sources
+    # get their actual URLs passed to the frontend for rendering as clickable links.
     relevant_content_set = {ch.get("content", "")[:80] for ch in relevant_chunks}
     final_source_documents: List[Dict[str, Any]] = []
     for i, ch in enumerate(relevant_chunks):
         final_source_documents.append({
-            "index":       i + 1,
-            "filename":    ch.get("filename", "Unknown"),
-            "content":     ch.get("content", ""),
-            "distance":    ch.get("distance"),
-            "confidence":  ch.get("confidence"),
-            "chunk_id":    ch.get("chunk_id"),
-            "document_id": ch.get("document_id"),
-            "used":        True,   # ← only CRAG-validated chunks are marked used
+            "index":        i + 1,
+            "filename":     ch.get("filename", "Unknown"),
+            "content":      ch.get("content", ""),
+            "distance":     ch.get("distance"),
+            "confidence":   ch.get("confidence"),
+            "chunk_id":     ch.get("chunk_id"),
+            "document_id":  ch.get("document_id"),
+            "url":          ch.get("url", ""),          # ← CLICKABLE LINKS FIX
+            "source":       ch.get("source", ""),       # provider name (tavily/serpapi/etc)
+            "sub_question": ch.get("sub_question", ""), # which sub-question this answered
+            "used":         True,   # ← only CRAG-validated chunks are marked used
         })
 
     rejected_chunks = [ch for ch in doc_chunks if ch.get("content", "")[:80] not in relevant_content_set]
@@ -2256,10 +2350,12 @@ async def generate_response_node(
         "gemini-1.5-pro":                      ("openrouter", "google/gemini-2.5-pro"),
         "llama-3.1-8b-instant":                ("openrouter", "meta-llama/llama-3.1-8b-instruct"),
         "llama-3.3-70b-versatile":             ("openrouter", "meta-llama/llama-3.3-70b-instruct"),
+        "gemma2-9b-it":                        ("openrouter", "google/gemma-2-9b-it"),
         "google/gemini-2.5-flash":             ("gemini", "gemini-2.5-flash"),
         "google/gemini-2.5-pro":               ("gemini", "gemini-2.5-pro"),
         "google/gemini-flash-1.5":             ("gemini", "gemini-2.5-flash"),
         "google/gemini-pro-1.5":               ("gemini", "gemini-2.5-pro"),
+        "google/gemma-2-9b-it":                ("groq", "gemma2-9b-it"),
         "meta-llama/llama-3.1-8b-instruct":    ("groq", "llama-3.1-8b-instant"),
         "meta-llama/llama-3.3-70b-instruct":   ("groq", "llama-3.3-70b-versatile"),
     }
@@ -2305,10 +2401,8 @@ async def generate_response_node(
             ("openrouter", openrouter_provider, f"deepseek/{actual_model_id}"),
             ("gemini",     gemini_provider,     "gemini-2.5-flash"),
         ]
-    elif "llama" in model_lower or "groq" in model_lower or "mixtral" in model_lower:
-        # Groq primary → OpenRouter Llama → Gemini cross-provider rescue
-        # Note: llama-3.1-8b-instant is also Groq so skip if Groq is rate-limited.
-        # OpenRouter and Gemini are the true cross-provider rescues here.
+    elif "llama" in model_lower or "groq" in model_lower or "mixtral" in model_lower or "gemma" in model_lower:
+        # Groq primary → OpenRouter Llama/Gemma → Gemini cross-provider rescue
         generic_fallbacks = [
             ("openrouter", openrouter_provider, "meta-llama/llama-3.3-70b-instruct"),
             ("gemini",     gemini_provider,     "gemini-2.5-flash"),
@@ -2385,6 +2479,11 @@ async def generate_response_node(
         ]
         logger.info(f"[Vision] {len(attempts)} vision attempt(s) queued: {[m for _, m, _ in attempts]}")
 
+    # Remove any attempt that lacks a valid API key to avoid instant/silent timeouts
+    valid_attempts = [(p, m, k) for (p, m, k) in attempts if k]
+    if valid_attempts:
+        attempts = valid_attempts
+
     full_response = ""
     tool_calls: List[dict] = []
     success    = False
@@ -2430,7 +2529,36 @@ async def generate_response_node(
             "tools_offered": [t["name"] for t in tool_schemas]
         }))
 
-        async for chunk in prov.generate_stream(**stream_kwargs):
+
+        # ── Per-chunk idle timeout ──────────────────────────────────────────────
+        # If the LLM stops sending chunks silently (network stall, API hang),
+        # we must abort this attempt so the fallback chain can kick in.
+        # 25 s of silence = hung provider → raise TimeoutError → next fallback.
+        CHUNK_IDLE_TIMEOUT = 25.0
+
+        async def _next_chunk(ait):
+            """Await the next item from an async iterator with a timeout."""
+            return await asyncio.wait_for(ait.__anext__(), timeout=CHUNK_IDLE_TIMEOUT)
+
+        stream_iter = prov.generate_stream(**stream_kwargs).__aiter__()
+        while True:
+            try:
+                chunk = await _next_chunk(stream_iter)
+            except StopAsyncIteration:
+                break
+            except asyncio.TimeoutError:
+                logger.error(json.dumps({
+                    "event": "stream_chunk_timeout",
+                    "provider": prov.__class__.__name__,
+                    "model": mod,
+                    "idle_seconds": CHUNK_IDLE_TIMEOUT,
+                    "partial_response_len": len(full_response),
+                }))
+                raise TimeoutError(
+                    f"LLM stream idle for {CHUNK_IDLE_TIMEOUT}s "
+                    f"({prov.__class__.__name__}/{mod}) — no chunks received."
+                )
+
             if chunk["event"] == "chunk":
                 text = chunk["text"]
                 full_response += text
@@ -2482,7 +2610,7 @@ async def generate_response_node(
                 mx["source_documents"] = final_sources
                 if on_metrics:
                     await on_metrics(mx)
-        
+
         # Flush the sanitizer buffer after streaming completes
         if on_token:
             remaining = sanitizer.flush()
@@ -2490,6 +2618,7 @@ async def generate_response_node(
                 await on_token(remaining)
 
         return t_calls
+
 
     primary_error = None
     primary_provider_class = type(attempts[0][0]).__name__ if attempts else ""
