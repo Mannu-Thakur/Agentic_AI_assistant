@@ -25,6 +25,7 @@ cryptography>=41.0.0
 redis>=4.6.0
 httpx>=0.24.0
 tenacity>=8.2.0
+aiosmtplib>=2.0.0
 
 # ── AI / LLM / Vector ────────────────────────────────────────────────────────
 langchain>=0.1.0

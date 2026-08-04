@@ -209,13 +209,23 @@ function getResponseMeta(content: string) {
 
 function decodeHtmlEntities(str: string): string {
   if (!str) return '';
-  return str
-    .replace(/&quot;/g, '"')
-    .replace(/&#x27;/g, "'")
-    .replace(/&#039;/g, "'")
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>');
+  let current = str;
+  let prev = '';
+  // Iteratively decode to handle nested/compound escaping (e.g. &amp;amp;amp;#x27; -> ')
+  let passes = 0;
+  while (current !== prev && current.includes('&') && passes < 10) {
+    prev = current;
+    current = current
+      .replace(/&quot;/gi, '"')
+      .replace(/&#x27;/gi, "'")
+      .replace(/&#039;/gi, "'")
+      .replace(/&#39;/gi, "'")
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+      .replace(/&amp;/gi, '&');
+    passes++;
+  }
+  return current;
 }
 
 function sanitizeAssistantContent(str: string): string {
@@ -1539,7 +1549,8 @@ export default function ChatPage() {
 
   const handleStartEdit = (msg: import('../types/chat').Message) => {
     setEditingMsgId(msg.id);
-    setEditValue(msg.content);
+    const { prompt: userPrompt } = parseUserMessageFiles(msg.content);
+    setEditValue(decodeHtmlEntities(userPrompt || msg.content));
 
     let initialImages: { id: string; base64: string; mimeType: string; previewUrl: string }[] = [];
     if (msg.images && msg.images.length > 0) {

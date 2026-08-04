@@ -34,6 +34,7 @@ P0 Production Fixes Applied
 """
 
 import os
+import time
 import json
 import logging
 import asyncio
@@ -105,6 +106,20 @@ gemini_provider     = GeminiProvider()
 groq_provider       = GroqProvider()
 openrouter_provider = OpenRouterProvider()
 openai_provider     = OpenAIProvider()
+
+# ── Personal-data & project document possession signals ────────────────────────
+_PERSONAL_DOC_SIGNALS = (
+    "my projects", "my project", "project i made", "project i built", "project i created",
+    "project i developed", "project i designed", "iot based project", "iot project",
+    "my coding platform", "coding platform", "my chatbot", "my bot", "my app", "my code",
+    "my cgpa", "my gpa", "my xgpa", "my resume", "my cv", "my skills", "my education",
+    "my degree", "my achievements", "my experience", "my internship", "my internships",
+    "my grades", "my marks", "my result", "my results", "my score", "my background",
+    "my profile", "my qualification", "my college", "my university", "my institute",
+    "my document", "my file", "my notes", "in the file", "uploaded", "from the file",
+    "according to my", "in my project", "in my app", "in my platform", "my platform",
+    "visualiser feature", "visualizer feature", "food tracking", "bugx", "zerixa"
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -340,6 +355,36 @@ def validate_citations(text: str, valid_sources: List[Dict[str, Any]]) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Per-provider rate-limit cooldown tracking  (P0 Fix: 429 storm prevention)
+# ─────────────────────────────────────────────────────────────────────────────
+# Maps provider key_name → monotonic timestamp of last 429 failure.
+# If a provider received a 429 within _PROVIDER_RL_COOLDOWN seconds it is
+# temporarily skipped in judge / text / fallback calls so cascading retries
+# do not waste network cycles and latency.
+_PROVIDER_RL_COOLDOWN: float = 15.0  # seconds to skip a rate-limited provider
+_provider_rate_limited_at: dict = {}  # key_name → time.monotonic()
+
+
+def _is_provider_rate_limited(key_name: str) -> bool:
+    last_rl = _provider_rate_limited_at.get(key_name)
+    if last_rl is None:
+        return False
+    if time.monotonic() - last_rl < _PROVIDER_RL_COOLDOWN:
+        return True
+    # Cooldown expired — clear it
+    _provider_rate_limited_at.pop(key_name, None)
+    return False
+
+
+def _mark_provider_rate_limited(key_name: str) -> None:
+    _provider_rate_limited_at[key_name] = time.monotonic()
+    logger.warning(
+        f"[RateLimit] Provider '{key_name}' marked rate-limited for "
+        f"{_PROVIDER_RL_COOLDOWN}s — will be skipped in fallback calls."
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Lightweight "judge" LLM call  (non-streaming, returns parsed JSON dict)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -347,18 +392,31 @@ async def _call_llm_judge(prompt: str, config: dict) -> Optional[dict]:
     """
     Makes a quick non-streaming call to the best available provider and
     returns the parsed JSON body.  Falls back through providers in order:
-    Gemini → Groq → OpenRouter.  Returns None on total failure.
+    Groq → Gemini → OpenAI → OpenRouter.  Returns None on total failure.
+
+    Production hardening:
+    • Per-provider 429 cooldown: providers that recently returned HTTP 429
+      are temporarily skipped for _PROVIDER_RL_COOLDOWN seconds.
+    • OpenAI added as third fallback so cascading failures across Groq/Gemini
+      can still succeed via a different provider ecosystem.
     """
     keys = _extract_api_keys(config)
     messages = [{"role": "user", "content": prompt}]
 
-    for provider, key_name, model in [
+    candidates = [
         (groq_provider,       "groq",       "llama-3.3-70b-versatile"),
         (gemini_provider,     "gemini",     "gemini-2.0-flash"),
+        (openai_provider,     "openai",     "gpt-4o-mini"),
         (openrouter_provider, "openrouter", "google/gemini-2.0-flash"),
-    ]:
+    ]
+
+    for provider, key_name, model in candidates:
         api_key = keys.get(key_name)
         if not api_key:
+            continue
+        # Skip temporarily rate-limited providers
+        if _is_provider_rate_limited(key_name):
+            logger.debug(f"[Judge] Skipping rate-limited provider '{key_name}'")
             continue
         try:
             result = await asyncio.wait_for(
@@ -386,6 +444,9 @@ async def _call_llm_judge(prompt: str, config: dict) -> Optional[dict]:
                     return json.loads(json_match.group(1))
                 raise
         except Exception as e:
+            err_str = str(e).lower()
+            if "429" in err_str or "rate limit" in err_str or "rate_limit" in err_str:
+                _mark_provider_rate_limited(key_name)
             logger.warning(f"Judge call failed on {key_name}: {e}")
             continue
 
@@ -400,17 +461,28 @@ async def _call_llm_text(prompt: str, config: dict, max_tokens: int = 256) -> Op
     """
     Makes a quick non-streaming call to the best available provider and
     returns the raw text response.
+
+    Production hardening:
+    • Per-provider 429 cooldown: rate-limited providers are skipped.
+    • Fallback chain: Groq → Gemini → OpenAI → OpenRouter.
     """
     keys = _extract_api_keys(config)
     messages = [{"role": "user", "content": prompt}]
 
-    for provider, key_name, model in [
+    candidates = [
         (groq_provider,       "groq",       "llama-3.3-70b-versatile"),
         (gemini_provider,     "gemini",     "gemini-2.0-flash"),
+        (openai_provider,     "openai",     "gpt-4o-mini"),
         (openrouter_provider, "openrouter", "google/gemini-2.0-flash"),
-    ]:
+    ]
+
+    for provider, key_name, model in candidates:
         api_key = keys.get(key_name)
         if not api_key:
+            continue
+        # Skip temporarily rate-limited providers
+        if _is_provider_rate_limited(key_name):
+            logger.debug(f"[TextCall] Skipping rate-limited provider '{key_name}'")
             continue
         try:
             result = await asyncio.wait_for(
@@ -427,6 +499,9 @@ async def _call_llm_text(prompt: str, config: dict, max_tokens: int = 256) -> Op
             raw = result.get("text", "").strip()
             return raw
         except Exception as e:
+            err_str = str(e).lower()
+            if "429" in err_str or "rate limit" in err_str or "rate_limit" in err_str:
+                _mark_provider_rate_limited(key_name)
             logger.warning(f"Text call failed on {key_name}: {e}")
             continue
 
@@ -691,168 +766,90 @@ async def classify_intent_node(
                 f"content='{memory_write_content}' | category={memory_write_category}"
             )
 
-    # ── BUG-7 FIX: Full LLM-based intent classification ──────────────────────
-    # Previously the LLM was only called when explicit web-search keywords were
-    # present. This meant PROGRAMMING, MATH, CODE_EXECUTION, COMPLEX, REASONING,
-    # TRANSLATION, SUMMARIZATION etc. were unreachable for most queries.
-    # Now: only trivially short greetings / single-word queries skip the LLM.
-    # Everything else always goes to the LLM judge for proper classification.
+    # ── LLM-First Intent Classification ──────────────────────────────────────
+    # The LLM is the PRIMARY classifier for all non-trivial queries.
+    # We avoid hardcoded keyword-to-intent mappings that misroute edge cases.
+    # Only two cheap zero-cost fast-paths are kept:
+    #   1. Trivial greetings (≤4 words, no content signals) → NORMAL_CHAT
+    #   2. Unambiguous memory-write openers → MEMORY_WRITE
+    # Everything else goes to the LLM judge which performs real-time semantic
+    # analysis of the full query + conversation context.
     if last_query_clean and intent not in (INTENT_MEMORY_WRITE, INTENT_VISION):
         q_lower = last_query_clean.lower()
+        _word_count = len(last_query_clean.split())
 
-        memory_signals = (
-            "remember that", "remember this", "note that", "save that",
-            "keep in mind", "store this", "don't forget", "make a note",
-            "make a note that", "my favourite is", "my favorite is",
-            "save this:", "save this ", "note this:",
+        # Fast-path 1: Unambiguous memory-write signals (saves LLM round-trip)
+        _memory_openers = (
+            "remember that", "remember this", "note that my", "note that i",
+            "save that i", "save that my", "keep in mind that", "keep in mind i",
+            "store this", "save this", "don't forget that", "don't forget i",
+            "make a note that", "make a note:", "note this",
         )
-        doc_signals = (
-            "my document", "my file", "my notes", "my cheat", "in the file",
-            "uploaded", "the pdf", "the doc", "my code", "in my", "from the file",
-            "according to my", "from my",
-            "my projects", "my project", "my cgpa", "my gpa", "my xgpa",
-            "my resume", "my cv", "my skills", "my education", "my degree",
-            "my achievements", "my experience", "my internship", "my internships",
-            "my grades", "my marks", "my result", "my results", "my score",
-            "my background", "my profile", "my qualification",
-            "my college", "my university", "my institute",
-        )
-        web_signals = (
-            "today's", "today", "latest", "current", "right now", "recent",
-            "this week", "news", "update", "live", "breaking", "now",
-            "2024", "2025", "2026",
-            "weather", "temperature", "forecast", "stock", "price", "bitcoin",
-            "crypto", "exchange rate", "market", "ipo", "sensex", "nifty",
-            "population", "capital of", "president", "prime minister", "pm of",
-            "ceo", "governor", "minister", "resignation", "resigned", "cabinet",
-            "government", "parliament", "politics", "protest", "headline",
-            "champion", "winner", "who won", "election", "results", "score",
-            "ranking", "richest", "gdp",
-            "search for", "look up", "find me", "what's happening",
-            "who is the current", "latest version of", "fetch that", "fetch",
-            "leetcode", "lc ", "codeforces", "atcoder", "advent of code",
-            "problem statement", "problem details", "problem number",
-            "search", "google", "latest news", "live score", "current price",
-        )
-        code_signals = (
-            "execute", "run this", "generate and run", "plot and show",
-            "run the code", "execute the script",
-            "write code", "write a function", "write python", "write javascript",
-            "debug this", "fix this code", "code review", "implement",
-        )
-        math_signals = (
-            "calculate", "solve", "equation", "integral", "derivative",
-            "matrix", "statistics", "probability", "algebra", "geometry",
-        )
-
-        # ── Fast-path zero-latency heuristic resolution ───────────────────────
-        if any(s in q_lower for s in memory_signals):
+        _question_starters = ("what", "who", "where", "when", "why", "how", "do you", "can you", "is my", "what's")
+        if any(sig in q_lower for sig in _memory_openers) and not any(q_lower.startswith(qs) for qs in _question_starters):
             intent = INTENT_MEMORY_WRITE
-        elif any(s in q_lower for s in doc_signals):
-            intent = INTENT_DOCUMENT_QA
-            is_private_doc_query = True
-        elif any(s in q_lower for s in web_signals):
-            intent = INTENT_WEB_SEARCH
-        elif any(s in q_lower for s in code_signals):
-            intent = INTENT_CODE_EXECUTION
-        elif any(s in q_lower for s in math_signals):
-            intent = INTENT_MATH
+            logger.info(f"classify_intent_node: Memory-write fast-path for: '{last_query_clean[:60]}'")
+
+        # Fast-path 2: Pure greetings / filler (≤ 4 words, no meaningful content)
+        elif _word_count <= 4 and q_lower.strip() in {
+            "hi", "hello", "hey", "thanks", "thank you", "ok", "okay", "sure",
+            "yes", "no", "bye", "goodbye", "good morning", "good evening",
+            "good night", "lol", "haha", "hmm", "cool", "nice", "great",
+        }:
+            intent = INTENT_NORMAL_CHAT
+            logger.info(f"classify_intent_node: Greeting fast-path for: '{last_query_clean[:60]}'")
+
         else:
-            # Check for standard conversational / chat / question queries that do not require an LLM judge
-            _word_count = len(last_query_clean.split())
-            _is_standard_chat = (
-                _word_count <= 25 and
-                any(last_query_clean.lower().startswith(g) for g in (
-                    "hi", "hey", "hello", "thanks", "thank", "ok", "okay",
-                    "sure", "yes", "no", "bye", "good morning", "good evening",
-                    "good night", "lol", "haha", "hmm", "what is", "what are",
-                    "who is", "who are", "how do", "how does", "how to", "why is",
-                    "why do", "explain", "tell me", "write a", "can you", "could you",
-                    "give me", "show me", "describe", "summarize", "define", "list"
-                ))
+            # ── LLM judge: real-time semantic classification ──────────────────
+            # No keyword lists here — the LLM reads the full query + context and
+            # decides the intent, is_private_doc_query, and detected language.
+            prompt = INTENT_CLASSIFIER_PROMPT.format(
+                query=last_query_clean,
+                has_images=images_present,
+                conversation_context=conversation_context,
             )
+            parsed = await _call_llm_judge(prompt, config)
+            logger.info(f"classify_intent_node: LLM judge returned: {parsed}")
 
-            if _is_standard_chat:
-                intent = INTENT_NORMAL_CHAT
-                logger.info(f"classify_intent_node: Fast-path matched INTENT_NORMAL_CHAT in <1ms for: '{last_query_clean[:60]}'")
+            if parsed and isinstance(parsed, dict):
+                intent                = parsed.get("intent", INTENT_NORMAL_CHAT)
+                is_private_doc_query  = bool(parsed.get("is_private_doc_query", False))
+                memory_write_content  = parsed.get("memory_content") or None
+                memory_write_category = parsed.get("memory_category") or None
+                lang_from_llm = parsed.get("detected_language")
+                if lang_from_llm and lang_from_llm.lower() not in ("unknown", "none", ""):
+                    detected_language = lang_from_llm
             else:
-                # Fallback to LLM judge for complex, multi-step, or ambiguous prompts
-                prompt = INTENT_CLASSIFIER_PROMPT.format(
-                    query=last_query_clean,
-                    has_images=images_present,
-                    conversation_context=conversation_context,
-                )
-                parsed = await _call_llm_judge(prompt, config)
-
-                if parsed and isinstance(parsed, dict):
-                    intent                = parsed.get("intent", INTENT_NORMAL_CHAT)
-                    is_private_doc_query  = bool(parsed.get("is_private_doc_query", False))
-                    memory_write_content  = parsed.get("memory_content") or None
-                    memory_write_category = parsed.get("memory_category") or None
-                    lang_from_llm = parsed.get("detected_language")
-                    if lang_from_llm and lang_from_llm.lower() not in ("unknown", "none", ""):
-                        detected_language = lang_from_llm
-                else:
-                    intent = INTENT_NORMAL_CHAT
+                intent = INTENT_NORMAL_CHAT
 
 
-    # ── Personal-data possession override ────────────────────────────────────
-    # If the LLM classified as NORMAL_CHAT but the query is clearly asking
-    # about personal information stored in uploaded documents (resume, CGPA,
-    # projects, etc.), re-route to DOCUMENT_QA so RAG is triggered.
-    _PERSONAL_DOC_SIGNALS = (
-        "my projects", "my project", "my cgpa", "my gpa", "my xgpa",
-        "my resume", "my cv", "my skills", "my education", "my degree",
-        "my achievements", "my experience", "my internship", "my internships",
-        "my grades", "my marks", "my result", "my results", "my score",
-        "my background", "my profile", "my qualification",
-        "my college", "my university", "my institute",
-        "my document", "my file", "my notes", "in the file",
-        "uploaded", "from the file", "according to my",
-    )
-    if last_query_clean and intent == INTENT_NORMAL_CHAT:
+    # ── Personal-data & project document possession override ───────────────────
+    if last_query_clean:
         q_low_personal = last_query_clean.lower()
         if any(sig in q_low_personal for sig in _PERSONAL_DOC_SIGNALS):
-            intent = INTENT_DOCUMENT_QA
             is_private_doc_query = True
-            logger.info(
-                f"classify_intent_node: personal-data override → DOCUMENT_QA "
-                f"for query='{last_query_clean[:60]}'"
-            )
+            if intent in (INTENT_WEB_SEARCH, INTENT_NEWS, INTENT_CURRENT_EVENTS) or any(w in q_low_personal for w in ("2024", "2025", "2026", "news", "today", "latest")):
+                intent = INTENT_COMPLEX
+                logger.info(
+                    f"classify_intent_node: hybrid doc + web query detected → INTENT_COMPLEX "
+                    f"(is_private_doc_query=True) for query='{last_query_clean[:60]}'"
+                )
+            else:
+                intent = INTENT_DOCUMENT_QA
+                logger.info(
+                    f"classify_intent_node: personal-data signal detected → DOCUMENT_QA "
+                    f"(is_private_doc_query=True) for query='{last_query_clean[:60]}'"
+                )
 
-    # High-confidence explicit news & search keyword override
-    # Use last_query_clean to avoid context-prefix pollution
-    if last_query_clean and intent in (INTENT_NORMAL_CHAT, INTENT_DOCUMENT_QA) and not is_private_doc_query:
-        q_low = last_query_clean.lower()
-        if any(k in q_low for k in ("news", "resignation", "resigned", "minister", "breaking", "latest update", "current news", "leetcode", "fetch", "search")):
-            intent = INTENT_WEB_SEARCH
-
-    # High-confidence explicit MCP tool signal override
-    _MCP_TOOL_SIGNALS = (
-        "expense", "expenses", "merchant", "merchants", "monthly summary",
-        "category summary", "top merchants", "add expense", "add an expense",
-        "list expense", "list expenses", "list all expenses", "search expense",
-        "search expenses", "update expense", "delete expense", "groceries",
-        "calculate", "reminder", "remind me", "send email", "spent on",
-        "amount spent", "total spent", "spent", "fast food", "fooding"
-    )
-    if last_query_clean and intent in (INTENT_NORMAL_CHAT, INTENT_WEB_SEARCH, INTENT_DOCUMENT_QA) and not is_private_doc_query:
-        q_low_mcp = last_query_clean.lower()
-        if any(sig in q_low_mcp for sig in _MCP_TOOL_SIGNALS):
-            intent = INTENT_MCP_TOOL
-            logger.info(f"classify_intent_node: MCP signal override → MCP_TOOL for query='{last_query_clean[:60]}'")
-
-    # ── Re-apply image override if LLM incorrectly overrode it ───────────────
-    # If images were present but LLM returned a non-VISION intent for an
-    # empty or vague query, force VISION.
+    # ── Guard: empty query with images → force VISION ─────────────────────────
     if images_present and intent == INTENT_NORMAL_CHAT and not last_query.strip():
         intent = INTENT_VISION
         logger.info("classify_intent_node: empty query with images → forcing VISION")
 
     # ── Compound Query Detection ──────────────────────────────────────────────
     # Detect if the user asked MULTIPLE DISTINCT questions so each can be
-    # answered independently. This prevents question 2 from being silently
-    # dropped when question 1 triggers a different intent path.
+    # answered independently. Also extracts memory-write facts embedded in
+    # compound queries (e.g. "...and remember that my chess player is Magnus").
     sub_questions: List[str] = []
     _cq_word_count = len(last_query_clean.split())
     # Only run for queries long enough to possibly be compound (≥ 6 words)
@@ -860,11 +857,20 @@ async def classify_intent_node(
         try:
             _cq_prompt = COMPOUND_QUERY_DETECTOR_PROMPT.format(query=last_query_clean)
             _cq_parsed = await _call_llm_judge(_cq_prompt, config)
-            if _cq_parsed and isinstance(_cq_parsed, dict) and _cq_parsed.get("is_compound"):
-                _cq_subs = _cq_parsed.get("sub_questions", [])
-                if isinstance(_cq_subs, list) and len(_cq_subs) >= 2:
-                    sub_questions = [str(q).strip() for q in _cq_subs if str(q).strip()]
-                    logger.info(f"[CompoundQuery] Detected {len(sub_questions)} sub-questions: {sub_questions}")
+            if _cq_parsed and isinstance(_cq_parsed, dict):
+                if _cq_parsed.get("is_compound"):
+                    _cq_subs = _cq_parsed.get("sub_questions", [])
+                    if isinstance(_cq_subs, list) and len(_cq_subs) >= 2:
+                        sub_questions = [str(q).strip() for q in _cq_subs if str(q).strip()]
+                        logger.info(f"[CompoundQuery] Detected {len(sub_questions)} sub-questions: {sub_questions}")
+                # Extract memory-write facts embedded in compound queries
+                _mem_parts = _cq_parsed.get("memory_write_parts", [])
+                if isinstance(_mem_parts, list) and _mem_parts:
+                    combined_mem = "; ".join(str(m).strip() for m in _mem_parts if str(m).strip())
+                    if combined_mem and not memory_write_content:
+                        memory_write_content  = combined_mem
+                        memory_write_category = "compound_memory"
+                        logger.info(f"[CompoundQuery] Extracted memory facts: {combined_mem}")
         except Exception as _cq_err:
             logger.debug(f"[CompoundQuery] detection failed (non-fatal): {_cq_err}")
 
@@ -881,6 +887,13 @@ async def classify_intent_node(
     if intent in (INTENT_MCP_TOOL, INTENT_COMPLEX, INTENT_FINANCE, INTENT_MATH):
         all_registered = set(registry.local_tools.keys()).union(set(registry.mcp_tools_schemas.keys()))
         allowed_tools = list(set(allowed_tools).union(all_registered))
+        # Disambiguate: if query asks about expenses/money and does NOT explicitly request code execution,
+        # omit python_sandbox so LLMs don't write python scripts instead of calling MCP expense tools.
+        _q_low_tools = last_query_clean.lower()
+        if "python_sandbox" in allowed_tools and any(w in _q_low_tools for w in ("expense", "spent", "lunch", "food", "dinner", "budget", "amount")):
+            if not any(cw in _q_low_tools for cw in ("python", "script", "execute code", "run code", "plot", "code execution")):
+                allowed_tools.remove("python_sandbox")
+                logger.info("classify_intent_node: Omitted python_sandbox to favor MCP expense tools.")
 
     logger.info(
         f"Intent Classifier: intent={intent} | "
@@ -1270,11 +1283,18 @@ async def check_retrieval_node(
         config.get("configurable", {}).get("uploaded_file_paths") or
         []
     )
+    is_private_doc = state.get("is_private_doc_query", False)
 
-    # Intent-based shortcuts (avoids an extra LLM judge call)
-    if intent == INTENT_DOCUMENT_QA or uploaded_paths:
+    # Non-retrieval intents skip RAG regardless of uploaded files unless is_private_doc_query is True
+    if intent in (INTENT_WEB_SEARCH, INTENT_MCP_TOOL, INTENT_MEMORY_WRITE, INTENT_VISION, INTENT_CODE_EXECUTION, INTENT_MATH) and not is_private_doc:
+        logger.info(f"Self-RAG: intent {intent} does not require RAG vector retrieval → needs_retrieval=False")
+        steps.append("check_retrieval")
+        return {"needs_retrieval": False, "steps": steps}
+
+    # Intent-based shortcuts for Document QA & Hybrid/Private doc queries
+    if intent in (INTENT_DOCUMENT_QA, INTENT_COMPLEX) or is_private_doc or (uploaded_paths and is_private_doc):
         logger.info(
-            f"Self-RAG: forcing needs_retrieval=True (intent={intent}, uploaded_paths_count={len(uploaded_paths)})"
+            f"Self-RAG: forcing needs_retrieval=True (intent={intent}, is_private_doc={is_private_doc}, uploaded_paths_count={len(uploaded_paths)})"
         )
         steps.append("check_retrieval")
         return {"needs_retrieval": True, "steps": steps}
@@ -1435,8 +1455,9 @@ async def retrieve_context_node(
         # have ZERO relevance to public web queries ('who won tennis 2026?') but
         # can still pass the BM25/cosine similarity threshold and appear as noise
         # sources. Web search results are the authoritative source for these intents.
-        _is_web_intent = state.get("intent") in (
-            INTENT_WEB_SEARCH, INTENT_NEWS, INTENT_CURRENT_EVENTS, INTENT_FINANCE
+        _is_web_intent = (
+            state.get("intent") in (INTENT_WEB_SEARCH, INTENT_NEWS, INTENT_CURRENT_EVENTS, INTENT_FINANCE)
+            and not state.get("is_private_doc_query", False)
         )
         if _is_web_intent:
             logger.info(
@@ -1484,6 +1505,12 @@ async def retrieve_context_node(
                 logger.info(f"Multi-query decomposed query into: {queries}")
         else:
             logger.info(f"[QueryDecompose] Skipping decomposition for short query ({_decomp_word_count} words): '{last_query[:60]}'")
+
+        # Append compound sub-questions to queries so each sub-question is queried against ChromaDB
+        sub_qs = state.get("sub_questions") or []
+        for sq in sub_qs:
+            if sq and str(sq).strip() and str(sq).strip() not in queries:
+                queries.append(str(sq).strip())
 
         # Deterministic query expansion for GPA/CGPA queries
         l_q_low = last_query.lower()
@@ -1569,16 +1596,20 @@ async def retrieve_context_node(
             candidate_chunks = merged_chunks[:max(dynamic_k * 2, 10)]
 
             # ── Cross-encoder re-ranking ──────────────────────────────────────────
-            # Skip reranking for short queries (≤ 8 words) — RRF fusion already gives
-            # excellent ordering and reranking adds LLM latency with minimal gain.
-            _rerank_word_count = len(last_query.split())
-            if candidate_chunks and _rerank_word_count > 8:
-                logger.info(f"[VectorStore] Invoking Cross-Encoder reranker on {len(candidate_chunks)} candidates for query '{last_query[:40]}'")
+            # For compound queries, rerank against private-doc sub-questions specifically,
+            # so bugX chunks aren't discarded due to unrelated query text (chess/expenses).
+            sub_qs = state.get("sub_questions") or []
+            private_sub_qs = [sq for sq in sub_qs if any(sig in sq.lower() for sig in _PERSONAL_DOC_SIGNALS)]
+            rerank_query = " | ".join(private_sub_qs) if private_sub_qs else last_query
+
+            _rerank_word_count = len(rerank_query.split())
+            if candidate_chunks and _rerank_word_count > 2:
+                logger.info(f"[VectorStore] Invoking Cross-Encoder reranker on {len(candidate_chunks)} candidates for query '{rerank_query[:40]}'")
                 reranked_chunks = await vector_store.rerank_chunks(
-                    query=last_query,
+                    query=rerank_query,
                     chunks=candidate_chunks,
                     config=config,
-                    threshold=0.3,
+                    threshold=0.2,
                 )
                 doc_chunks = reranked_chunks[:dynamic_k]
             elif candidate_chunks:
@@ -1768,32 +1799,68 @@ async def grade_documents_node(
     query_lower = last_query.lower()
     freshness_required = any(k in query_lower for k in freshness_keywords)
 
-    # Stopwords filtered from heuristic fallback to avoid false positives
+    # 2b. For COMPLEX queries: build a doc-specific grading query from private-doc sub-questions only.
+    # This prevents bugX document chunks from being graded as irrelevant just because the
+    # full compound query also contains "chess 2026" or "total expenses".
+    grading_query = last_query
+    if intent == INTENT_COMPLEX and is_private:
+        sub_qs = state.get("sub_questions") or []
+        private_sub_qs = [sq for sq in sub_qs if any(sig in sq.lower() for sig in _PERSONAL_DOC_SIGNALS)]
+        if private_sub_qs:
+            grading_query = " | ".join(private_sub_qs)
+            # Private doc grading is never freshness-required
+            freshness_required = False
+            logger.info(f"CRAG: Using private-doc sub-questions for grading: {private_sub_qs}")
+
+    # Stopwords filtered from heuristic fallback to avoid false positives.
+    # Extended with domain-specific action words that appear in many unrelated
+    # documents and cause false-positive overlap matches.
     _STOPWORDS = frozenset({
+        # Common English stopwords
         "the", "a", "an", "is", "in", "of", "to", "and", "or", "for",
         "on", "at", "by", "it", "be", "as", "my", "this", "that", "i",
         "with", "from", "are", "was", "were", "has", "have", "had",
         "do", "does", "did", "not", "can", "will", "would", "you",
+        # Action/question words that appear broadly and inflate overlap scores
+        "fetch", "get", "show", "tell", "add", "also", "total", "month",
+        "today", "give", "what", "who", "how", "when", "where", "which",
+        "current", "latest", "recent", "please", "find", "list", "all",
+        "about", "using", "then", "plus", "more", "less", "much", "many",
+        "some", "any", "its", "their", "them", "they", "we", "our", "us",
     })
 
     async def grade_one(chunk: dict) -> str:
-        # Fast-path vector confidence check for standard non-freshness queries
+        """
+        Grade a single document chunk for relevance against grading_query.
+
+        CRAG scoring logic:
+        1. Hard reject: conf < 0.25 (very low similarity score from vector DB)
+        2. LLM judge: ask the LLM to score the chunk as relevant/partial/irrelevant/outdated
+        3. Heuristic fallback: keyword overlap when LLM is unavailable
+
+        The old conf >= 0.85 auto-pass shortcut has been REMOVED because it
+        caused unrelated documents (resumes, tech docs) to pass as 'relevant'
+        for general-knowledge or expense queries whenever their cosine similarity
+        happened to be above 0.85.  Every chunk now requires actual content
+        validation via the LLM judge or the strict keyword heuristic.
+        """
         conf = chunk.get("confidence", 0.0)
-        if not freshness_required and conf >= 0.85:
-            return "relevant"
+        # Hard reject: similarity below minimum threshold
         if conf < 0.25:
             return "irrelevant"
 
         prompt = DOCUMENT_GRADER_PROMPT.format(
-            query=last_query,
+            query=grading_query,  # Use focused query (private-doc sub-questions for COMPLEX)
             chunk=chunk.get("content", "")[:800],
         )
         parsed = await _call_llm_judge(prompt, config)
         if parsed:
-            return parsed.get("score", "relevant")
-        # Fallback heuristic — require >= 3 UNIQUE meaningful (non-stopword) words overlap
-        query_words = {w for w in last_query.lower().split() if w not in _STOPWORDS and len(w) > 2}
-        chunk_words = {w for w in chunk.get("content", "").lower().split() if w not in _STOPWORDS and len(w) > 2}
+            return parsed.get("score", "partial")
+        # Heuristic fallback when ALL providers are rate-limited or unavailable.
+        # Require >= 4 UNIQUE meaningful (non-stopword, non-trivial) words overlap.
+        # Higher threshold (4 vs previous 3) reduces false positives.
+        query_words = {w for w in grading_query.lower().split() if w not in _STOPWORDS and len(w) > 3}
+        chunk_words = {w for w in chunk.get("content", "").lower().split() if w not in _STOPWORDS and len(w) > 3}
         overlap = len(query_words & chunk_words)
         if overlap >= 3:
             return "relevant"
@@ -1823,16 +1890,35 @@ async def grade_documents_node(
     )
 
     should_search_web = False
-    # Allow web search if not a private document query, OR if it's a COMPLEX/WEB_SEARCH intent.
-    if (not is_private) or (intent in (INTENT_COMPLEX, INTENT_WEB_SEARCH)):
-        if intent in (INTENT_WEB_SEARCH, INTENT_NEWS, INTENT_CURRENT_EVENTS, INTENT_FINANCE):
-            # WEB_SEARCH / NEWS / CURRENT_EVENTS / FINANCE intent: ALWAYS perform live web search
+    # Determine whether we need a web search.
+    # HYBRID QUERY FIX: Even when is_private_doc_query=True for the FULL request,
+    # we must still perform web search for PUBLIC sub-questions (e.g. 'Who is PM of
+    # India?' in a compound query like 'Who is PM of India? Also fetch my expenses').
+    # We separate sub_questions into public and private lists and handle each correctly.
+    sub_questions_all: List[str] = state.get("sub_questions") or []
+    # Classify sub-questions as public (need web) vs private (need docs)
+    public_sub_questions  = [sq for sq in sub_questions_all if not any(sig in sq.lower() for sig in _PERSONAL_DOC_SIGNALS)]
+    private_sub_questions = [sq for sq in sub_questions_all if any(sig in sq.lower() for sig in _PERSONAL_DOC_SIGNALS)]
+
+    # Always search web for public sub-questions regardless of is_private flag
+    has_public_sub_questions = len(public_sub_questions) > 0
+
+    if not is_private or intent in (INTENT_COMPLEX, INTENT_WEB_SEARCH):
+        if intent in (INTENT_WEB_SEARCH, INTENT_NEWS, INTENT_CURRENT_EVENTS, INTENT_FINANCE, INTENT_COMPLEX):
             should_search_web = True
         elif freshness_required and (has_outdated or not relevant_chunks):
             should_search_web = True
-        elif not relevant_chunks and not is_private and intent in (INTENT_WEB_SEARCH, INTENT_NEWS, INTENT_CURRENT_EVENTS, INTENT_FINANCE):
-            # Public search query with 0 relevant document chunks -> web search fallback
+        elif not relevant_chunks and not is_private:
             should_search_web = True
+
+    # HYBRID QUERY FIX: also trigger web search if there are public sub-questions,
+    # even when the overall query is private (is_private_doc_query=True)
+    if has_public_sub_questions and not should_search_web:
+        should_search_web = True
+        logger.info(
+            f"CRAG: Hybrid query detected — triggering web search for "
+            f"{len(public_sub_questions)} public sub-question(s): {public_sub_questions}"
+        )
 
     # 5. Handle web fallback
     document_relevance = "relevant" if relevant_chunks else "irrelevant"
@@ -1840,15 +1926,26 @@ async def grade_documents_node(
         logger.info(f"CRAG: Freshness required & issues found → Executing web search fallback.")
         try:
             import re as _re3
-            # ── COMPOUND QUERY FIX: run per-sub-question web searches so all parts
-            # of a multi-part query get answered (e.g. 'tennis 2026 AND food tracking').
-            sub_questions: List[str] = state.get("sub_questions") or []
-            _search_targets = sub_questions if len(sub_questions) >= 2 else [last_query]
+            # HYBRID QUERY FIX: For compound queries, use the public_sub_questions list
+            # for web search targets. Private sub-questions that match personal doc signals
+            # are explicitly skipped (they are handled by vector store retrieval above).
+            # If no sub-questions are available, fall back to the full last_query.
+            if public_sub_questions:
+                # Only search for public (non-personal) parts of the query
+                _search_targets = public_sub_questions
+            elif sub_questions_all:
+                # No classified sub-questions — filter personal signals the old way
+                _search_targets = sub_questions_all
+            else:
+                _search_targets = [last_query]
 
             all_combined_text_parts: List[str] = []
             src_index_offset = len(source_documents)
 
             for _sq in _search_targets:
+                # _search_targets is already pre-filtered (public_sub_questions or last_query).
+                # No secondary personal-signal filter needed here.
+
                 _sq_clean = _re3.sub(r"\[System Context:[^\]]*\]", "", _sq)
                 _sq_clean = _re3.sub(r"\[User Location Context:[^\]]*\]", "", _sq_clean)
                 _sq_clean = _re3.sub(r"\[Connected Reference Context[^\[]*\[End of Referenced Context\]", "", _sq_clean, flags=_re3.DOTALL).strip() or _sq
@@ -2090,16 +2187,22 @@ async def generate_response_node(
             await config["configurable"]["on_token"]("*[Error: No model selected. Please select a model from the model picker.]*")
         return {**state, "response_text": "*[Error: No model selected. Please select a model from the model picker.]*"}
     model_aliases = {
-        # Upgrade old model names to current equivalents
-        "gemini-1.5-flash":                     "gemini-2.5-flash",
-        "gemini-1.5-pro":                       "gemini-2.5-pro",
-        "gemini-3.5-flash":                     "gemini-2.5-flash",
-        "openrouter/google/gemini-flash-1.5":   "openrouter/google/gemini-2.5-flash",
-        "openrouter/google/gemini-pro-1.5":     "openrouter/google/gemini-2.5-pro",
-        "openrouter/google/gemini-3.5-flash":   "openrouter/google/gemini-2.5-flash",
-        "google/gemini-flash-1.5":              "google/gemini-2.5-flash",
-        "google/gemini-pro-1.5":                "google/gemini-2.5-pro",
-        "google/gemini-3.5-flash":              "google/gemini-2.5-flash",
+        # Map all deprecated/renamed models to current stable equivalents
+        "gemini-1.5-flash":                     "gemini-2.0-flash",
+        "gemini-1.5-pro":                       "gemini-2.0-flash",
+        "gemini-2.5-flash":                     "gemini-2.0-flash",
+        "gemini-2.5-pro":                       "gemini-2.0-flash",
+        "gemini-3.5-flash":                     "gemini-2.0-flash",
+        "openrouter/google/gemini-flash-1.5":   "openrouter/google/gemini-2.0-flash",
+        "openrouter/google/gemini-pro-1.5":     "openrouter/google/gemini-2.0-flash",
+        "openrouter/google/gemini-2.5-flash":   "openrouter/google/gemini-2.0-flash",
+        "openrouter/google/gemini-3.5-flash":   "openrouter/google/gemini-2.0-flash",
+        "google/gemini-flash-1.5":              "google/gemini-2.0-flash",
+        "google/gemini-pro-1.5":                "google/gemini-2.0-flash",
+        "google/gemini-2.5-flash":              "google/gemini-2.0-flash",
+        "google/gemini-3.5-flash":              "google/gemini-2.0-flash",
+        # Deprecated Groq models
+        "mixtral-8x7b-32768":                   "llama-3.3-70b-versatile",
     }
     model           = model_aliases.get(model, model)
     retrieved_items   = state.get("retrieved_documents", [])
@@ -2163,7 +2266,7 @@ async def generate_response_node(
             # Switch silently to Gemini Flash for vision — fastest and most capable
             keys["gemini"] = gemini_key
             keys["google"] = gemini_key
-            vision_model   = "gemini-2.5-flash"
+            vision_model   = "gemini-2.0-flash"
             vision_prov    = gemini_provider
             vision_key     = gemini_key
             vision_note    = f"*(Analyzing your image with Gemini Flash — your current model **{model}** does not support vision)*\n\n"
@@ -2181,7 +2284,7 @@ async def generate_response_node(
                     pass
         elif openrouter_key:
             # Fallback: OpenRouter Gemini Flash
-            vision_model   = "openrouter/google/gemini-2.5-flash"
+            vision_model   = "openrouter/google/gemini-2.0-flash"
             vision_prov    = openrouter_provider
             vision_key     = openrouter_key
             vision_note    = f"*(Analyzing your image via OpenRouter Gemini — your current model **{model}** does not support vision)*\n\n"
@@ -2344,17 +2447,19 @@ async def generate_response_node(
         }))
 
     counterparts = {
-        "gemini-2.5-flash":                    ("openrouter", "google/gemini-2.5-flash"),
-        "gemini-2.5-pro":                      ("openrouter", "google/gemini-2.5-pro"),
-        "gemini-1.5-flash":                    ("openrouter", "google/gemini-2.5-flash"),
-        "gemini-1.5-pro":                      ("openrouter", "google/gemini-2.5-pro"),
+        "gemini-2.0-flash":                    ("openrouter", "google/gemini-2.0-flash"),
+        "gemini-2.5-flash":                    ("openrouter", "google/gemini-2.0-flash"),
+        "gemini-2.5-pro":                      ("openrouter", "google/gemini-2.0-flash"),
+        "gemini-1.5-flash":                    ("openrouter", "google/gemini-2.0-flash"),
+        "gemini-1.5-pro":                      ("openrouter", "google/gemini-2.0-flash"),
         "llama-3.1-8b-instant":                ("openrouter", "meta-llama/llama-3.1-8b-instruct"),
         "llama-3.3-70b-versatile":             ("openrouter", "meta-llama/llama-3.3-70b-instruct"),
         "gemma2-9b-it":                        ("openrouter", "google/gemma-2-9b-it"),
-        "google/gemini-2.5-flash":             ("gemini", "gemini-2.5-flash"),
-        "google/gemini-2.5-pro":               ("gemini", "gemini-2.5-pro"),
-        "google/gemini-flash-1.5":             ("gemini", "gemini-2.5-flash"),
-        "google/gemini-pro-1.5":               ("gemini", "gemini-2.5-pro"),
+        "google/gemini-2.0-flash":             ("gemini", "gemini-2.0-flash"),
+        "google/gemini-2.5-flash":             ("gemini", "gemini-2.0-flash"),
+        "google/gemini-2.5-pro":               ("gemini", "gemini-2.0-flash"),
+        "google/gemini-flash-1.5":             ("gemini", "gemini-2.0-flash"),
+        "google/gemini-pro-1.5":               ("gemini", "gemini-2.0-flash"),
         "google/gemma-2-9b-it":                ("groq", "gemma2-9b-it"),
         "meta-llama/llama-3.1-8b-instruct":    ("groq", "llama-3.1-8b-instant"),
         "meta-llama/llama-3.3-70b-instruct":   ("groq", "llama-3.3-70b-versatile"),
@@ -2376,8 +2481,8 @@ async def generate_response_node(
     if "gemini" in model_lower or "google" in model_lower:
         # Gemini primary → try OpenRouter Gemini → then Groq as rescue
         generic_fallbacks = [
-            ("gemini",     gemini_provider,     "gemini-2.5-flash"),
-            ("openrouter", openrouter_provider, "google/gemini-2.5-flash"),
+            ("gemini",     gemini_provider,     "gemini-2.0-flash"),
+            ("openrouter", openrouter_provider, "google/gemini-2.0-flash"),
             ("groq",       groq_provider,       "llama-3.3-70b-versatile"),
         ]
     elif "gpt" in model_lower or "o1-" in model_lower or "o3-" in model_lower or "o4-" in model_lower:
@@ -2385,49 +2490,46 @@ async def generate_response_node(
         generic_fallbacks = [
             ("openai",     openai_provider,     actual_model_id),
             ("openrouter", openrouter_provider, f"openai/{actual_model_id}"),
-            ("gemini",     gemini_provider,     "gemini-2.5-flash"),
+            ("gemini",     gemini_provider,     "gemini-2.0-flash"),
         ]
     elif "claude" in model_lower:
         # Anthropic primary → OpenRouter Anthropic → Gemini rescue
         generic_fallbacks = [
             ("anthropic",  openrouter_provider, f"anthropic/{actual_model_id}"),
             ("openrouter", openrouter_provider, f"anthropic/{actual_model_id}"),
-            ("gemini",     gemini_provider,     "gemini-2.5-flash"),
+            ("gemini",     gemini_provider,     "gemini-2.0-flash"),
         ]
     elif "deepseek" in model_lower:
         # DeepSeek primary → OpenRouter DeepSeek → Gemini rescue
         generic_fallbacks = [
             ("deepseek",   openrouter_provider, f"deepseek/{actual_model_id}"),
             ("openrouter", openrouter_provider, f"deepseek/{actual_model_id}"),
-            ("gemini",     gemini_provider,     "gemini-2.5-flash"),
+            ("gemini",     gemini_provider,     "gemini-2.0-flash"),
         ]
     elif "llama" in model_lower or "groq" in model_lower or "mixtral" in model_lower or "gemma" in model_lower:
         # Groq primary → OpenRouter Llama/Gemma → Gemini cross-provider rescue
         generic_fallbacks = [
             ("openrouter", openrouter_provider, "meta-llama/llama-3.3-70b-instruct"),
-            ("gemini",     gemini_provider,     "gemini-2.5-flash"),
-            ("openrouter", openrouter_provider, "google/gemini-2.5-flash"),
+            ("gemini",     gemini_provider,     "gemini-2.0-flash"),
+            ("openrouter", openrouter_provider, "google/gemini-2.0-flash"),
         ]
     elif "qwen" in model_lower or "glm" in model_lower:
         # Alibaba/Zhipu → OpenRouter → Gemini rescue
         generic_fallbacks = [
             ("openrouter", openrouter_provider, actual_model_id),
-            ("gemini",     gemini_provider,     "gemini-2.5-flash"),
+            ("gemini",     gemini_provider,     "gemini-2.0-flash"),
         ]
     else:
         # Unknown model — dynamically choose fallback based on what keys are available.
-        # Priority: google (most likely for unknown non-keyword models like deep-research),
-        # then openrouter as a universal router.
         generic_fallbacks = []
         if keys.get("gemini") or keys.get("google"):
             generic_fallbacks.append(("gemini", gemini_provider, actual_model_id))
         if keys.get("openrouter"):
             generic_fallbacks.append(("openrouter", openrouter_provider, actual_model_id))
-        # Last resort fallback to gemini-2.5-flash if the model itself isn't available
         if not generic_fallbacks:
             generic_fallbacks = [
-                ("gemini",     gemini_provider,     "gemini-2.5-flash"),
-                ("openrouter", openrouter_provider, "google/gemini-2.5-flash"),
+                ("gemini",     gemini_provider,     "gemini-2.0-flash"),
+                ("openrouter", openrouter_provider, "google/gemini-2.0-flash"),
             ]
     for prov_name, prov_inst, model_id in generic_fallbacks:
         key = keys.get(prov_name) or getattr(prov_inst, "api_key", None)
@@ -2460,8 +2562,8 @@ async def generate_response_node(
             os.environ.get("OPENROUTER_API_KEY")
         )
         # Guarantee: Gemini Flash via system key (best for handwriting/vision)
-        if _sys_gemini_key and not any(m in ("gemini-2.5-flash", "gemini-2.0-flash") for _, m, _ in attempts):
-            attempts.append((gemini_provider, "gemini-2.5-flash", _sys_gemini_key))
+        if _sys_gemini_key and not any(m in ("gemini-2.0-flash",) for _, m, _ in attempts):
+            attempts.append((gemini_provider, "gemini-2.0-flash", _sys_gemini_key))
         # Guarantee: OpenAI GPT-4o via system key through OpenRouter
         if _sys_or_key and not any("gpt-4o" in m for _, m, _ in attempts):
             attempts.append((openrouter_provider, "openai/gpt-4o", _sys_or_key))
@@ -2672,7 +2774,7 @@ async def generate_response_node(
             if keys.get("openrouter"):
                 rescue_attempts.append((openrouter_provider, "meta-llama/llama-3.3-70b-instruct", keys["openrouter"]))
             if keys.get("gemini") or keys.get("google"):
-                rescue_attempts.append((gemini_provider, "gemini-2.5-flash", keys.get("gemini") or keys.get("google")))
+                rescue_attempts.append((gemini_provider, "gemini-2.0-flash", keys.get("gemini") or keys.get("google")))
 
             for r_prov, r_mod, r_key in rescue_attempts:
                 try:
@@ -2805,7 +2907,8 @@ async def execute_tools_node(
     """
     Iterates over active tool calls, runs them via ToolRegistry, appends
     results as HumanMessages, and clears tool_calls for the next iteration.
-    Tool output labels are neutral (no internal tool names exposed).
+    Includes reconnect-on-failure: if MCP subprocess died mid-query, re-initializes
+    the registry and retries once before giving up.
     """
     config     = config or {}
     tool_calls = state.get("tool_calls", []) or []
@@ -2815,11 +2918,36 @@ async def execute_tools_node(
     from app.tools.registry import ToolRegistry
     registry = ToolRegistry()
 
+    # Always ensure registry is initialized before executing tools
+    if not registry.is_initialized:
+        try:
+            await registry.initialize()
+        except Exception as _reinit_err:
+            logger.warning(f"execute_tools_node: registry re-init failed: {_reinit_err}")
+
     new_messages = []
     for tc in tool_calls:
         name      = tc["name"]
         arguments = tc.get("arguments") if "arguments" in tc else tc.get("args", {})
-        result    = await registry.call_tool(name, arguments, api_keys=req_api_keys)
+
+        # First attempt
+        result = await registry.call_tool(name, arguments, api_keys=req_api_keys)
+
+        # If MCP process died mid-query (tool not registered), force re-init and retry once
+        if "is not registered" in str(result) or "not registered" in str(result).lower():
+            logger.warning(
+                f"execute_tools_node: tool '{name}' not found — MCP process may have died. "
+                f"Forcing registry re-initialization and retrying..."
+            )
+            try:
+                registry.is_initialized = False
+                await registry.initialize()
+                result = await registry.call_tool(name, arguments, api_keys=req_api_keys)
+                logger.info(f"execute_tools_node: retry for '{name}' succeeded after re-init.")
+            except Exception as _retry_err:
+                logger.error(f"execute_tools_node: retry for '{name}' failed: {_retry_err}")
+                result = f"Tool '{name}' is temporarily unavailable. Please try again."
+
         # Use neutral label — never expose internal tool name to the conversation
         new_messages.append(
             HumanMessage(content=f"[Tool Result] {result}")

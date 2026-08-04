@@ -247,12 +247,20 @@ async def test_classify_intent_news_query_routes_to_web_search(monkeypatch):
 
 @pytest.mark.anyio
 async def test_classify_intent_resignation_query_routes_to_web_search(monkeypatch):
-    """'Any news related to the resignation of serving ministers?' → WEB_SEARCH."""
+    """'Any news related to the resignation of serving ministers?' → WEB_SEARCH.
+    
+    The LLM judge is the primary classifier in the new LLM-first design.
+    This test mocks the LLM to return WEB_SEARCH (as it would in production)
+    and verifies the pipeline correctly routes to WEB_SEARCH.
+    """
     from app.agent.nodes import classify_intent_node
 
-    # Force LLM judge to fail so heuristic fallback is used
-    with patch("app.agent.nodes._call_llm_judge", new=AsyncMock(return_value=None)), \
-         patch("app.agent.nodes._call_llm_text", new=AsyncMock(return_value=None)):
+    with patch("app.agent.nodes._call_llm_judge", new=AsyncMock(return_value={
+        "intent": "WEB_SEARCH",
+        "is_private_doc_query": False,
+        "memory_content": None,
+        "memory_category": None,
+    })), patch("app.agent.nodes._call_llm_text", new=AsyncMock(return_value=None)):
         state = _make_state(
             messages=[HumanMessage(
                 content="Any news related to the resignation of any current serving ministers?"
@@ -261,17 +269,21 @@ async def test_classify_intent_resignation_query_routes_to_web_search(monkeypatc
         result = await classify_intent_node(state, config={})
 
     assert result["intent"] == INTENT_WEB_SEARCH, (
-        f"Heuristic should detect 'resignation'+'news' → WEB_SEARCH, got '{result['intent']}'"
+        f"LLM-first classification should route 'resignation'+'news' → WEB_SEARCH, got '{result['intent']}'"
     )
 
 
 @pytest.mark.anyio
 async def test_classify_intent_minister_keyword_routes_to_web_search(monkeypatch):
-    """Queries with 'minister' keyword route to WEB_SEARCH even without LLM."""
+    """Queries about current officials route to WEB_SEARCH via LLM-first classification."""
     from app.agent.nodes import classify_intent_node
 
-    with patch("app.agent.nodes._call_llm_judge", new=AsyncMock(return_value=None)), \
-         patch("app.agent.nodes._call_llm_text", new=AsyncMock(return_value=None)):
+    with patch("app.agent.nodes._call_llm_judge", new=AsyncMock(return_value={
+        "intent": "WEB_SEARCH",
+        "is_private_doc_query": False,
+        "memory_content": None,
+        "memory_category": None,
+    })), patch("app.agent.nodes._call_llm_text", new=AsyncMock(return_value=None)):
         state = _make_state(
             messages=[HumanMessage(content="Who is the education minister of India?")],
         )

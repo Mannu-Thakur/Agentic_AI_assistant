@@ -2,6 +2,8 @@ import { Navigate, createBrowserRouter } from 'react-router-dom';
 import AppLayout from '../layouts/AppLayout';
 import AuthLayout from '../layouts/AuthLayout';
 import LoginPage from '../pages/LoginPage';
+import ForgotPasswordPage from '../pages/ForgotPasswordPage';
+import ResetPasswordPage from '../pages/ResetPasswordPage';
 import ChatPage from '../pages/ChatPage';
 import WorkspacePage from '../pages/WorkspacePage';
 import SettingsPage from '../pages/SettingsPage';
@@ -33,6 +35,30 @@ export const router = createBrowserRouter([
       {
         path: '',
         element: <LoginPage />,
+      },
+    ],
+  },
+  {
+    path: '/forgot-password',
+    element: (
+      <PublicRoute>
+        <AuthLayout />
+      </PublicRoute>
+    ),
+    children: [
+      {
+        path: '',
+        element: <ForgotPasswordPage />,
+      },
+    ],
+  },
+  {
+    path: '/reset-password',
+    element: <AuthLayout />,
+    children: [
+      {
+        path: '',
+        element: <ResetPasswordPage />,
       },
     ],
   },

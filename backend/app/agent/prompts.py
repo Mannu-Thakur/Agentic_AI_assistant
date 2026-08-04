@@ -55,7 +55,7 @@ INTENT_TOOL_WHITELIST: Dict[str, List[str]] = {
         "calculate", "add_expense", "get_expenses", "list_expenses",
         "update_expense", "delete_expense", "search_expenses",
         "monthly_summary", "category_summary", "top_merchants",
-        "create_reminder", "send_email"
+        "summarize_expenses", "create_reminder", "send_email"
     ],
     INTENT_DOCUMENT_QA:    [],                           # RAG-only, no tools
     INTENT_VISION:         [],                           # Vision LLM, no tools
@@ -63,11 +63,11 @@ INTENT_TOOL_WHITELIST: Dict[str, List[str]] = {
         "tavily_search", "python_sandbox", "calculate", "add_expense",
         "get_expenses", "list_expenses", "update_expense", "delete_expense",
         "search_expenses", "monthly_summary", "category_summary",
-        "top_merchants", "create_reminder", "send_email"
+        "top_merchants", "summarize_expenses", "create_reminder", "send_email"
     ],
     INTENT_PROGRAMMING:    ["python_sandbox"],
     INTENT_MATH:           ["calculate", "python_sandbox"],
-    INTENT_FINANCE:        ["tavily_search", "calculate", "add_expense", "list_expenses", "get_expenses", "monthly_summary", "category_summary", "top_merchants"],
+    INTENT_FINANCE:        ["tavily_search", "calculate", "add_expense", "list_expenses", "get_expenses", "monthly_summary", "category_summary", "top_merchants", "summarize_expenses"],
     INTENT_NEWS:           ["tavily_search"],
     INTENT_CURRENT_EVENTS: ["tavily_search"],
     INTENT_PDF_QA:         [],
@@ -220,8 +220,14 @@ def compile_system_prompt(
         "- NEVER mention the names of internal tools or systems in your response.\n"
         "- NEVER mention internal tool function names (like 'tavily_search', 'python_sandbox', 'add_expense') directly in conversation.\n"
         "- When executing an MCP tool (adding/listing/updating/deleting expenses, summary, math, reminders, email), invoke the tool directly.\n"
-        "- NEVER fabricate, invent, or fake tool execution results or data (such as 'I manually added it', "
-        "'Expense ID E001', 'Receipt R001').\n"
+        "- When asked to retrieve, add, update, calculate, or summarize expenses, transactions, math calculations, reminders, or emails, YOU MUST INVOKE THE RELEVANT MCP TOOL(S).\n"
+        "- FOR COMPOUND QUERIES WITH MULTIPLE QUESTIONS: If any sub-question requests an action or data lookup supported by a tool (e.g. adding an expense, checking total spending, math), YOU MUST ISSUE THE TOOL CALL(S) FIRST before finalizing your complete response.\n"
+        "- NEVER write Python code snippets or script blocks (`import os`, `pandas`, `csv`) to calculate expenses or read files when expense tools are available — execute the tool(s) instead.\n"
+        "- NEVER ask the user to provide their own expense records when expense/calculator tools are available — execute the tool(s) instead.\n"
+        "- LIVE SEARCH RESULTS DIRECTIVE: If 'Search results for:' context is provided in your prompt, YOU DO HAVE REAL-TIME INFORMATION. Use the search results directly to answer the question — NEVER claim you cannot access real-time information or predict future events when search results are present.\n"
+        "- DOCUMENT DEDUCTION DIRECTIVE: When retrieved documentation lists supported technologies (e.g., Python, JS, C++, Java) and the user asks about an unlisted item (e.g. Rust), state clearly based on the document that it is NOT listed as a supported language.\n"
+        "- MISSING DOCUMENTATION DIRECTIVE: If no document in context describes a specific project/topic (e.g. IoT food tracking), state clearly: 'I don't have documentation for [topic] in my knowledge base' rather than generating generic textbook filler.\n"
+        "- NEVER fabricate, invent, estimate, or fake expense subtotals or tool execution results.\n"
         "- If a tool call fails or returns an error, state the real error clearly to the user: 'Tool execution failed. Server returned: <actual error>'.\n"
         "- Present real tool output clearly and naturally to the user.\n"
         "- NEVER describe your internal reasoning pipeline, graph steps, or node names.\n"
@@ -351,7 +357,7 @@ def compile_system_prompt(
 INTENT_CLASSIFIER_PROMPT = """\
 You are an intent classification module for a production AI chatbot.
 
-Given the user's CURRENT query and CONVERSATION CONTEXT, classify into EXACTLY ONE intent.
+Given the user's CURRENT query and CONVERSATION CONTEXT, perform dynamic real-time semantic analysis to classify into EXACTLY ONE intent.
 
 CONVERSATION CONTEXT (last few exchanges):
 {conversation_context}
@@ -364,75 +370,39 @@ HAS ATTACHED IMAGES: {has_images}
 1. MEMORY_WRITE — User EXPLICITLY asks to save/remember a fact.
    Triggers: "Remember that…", "Note that my favourite…", "Save that I prefer…",
              "Keep in mind that…", "Store this:", "don't forget that"
-   Do NOT use for questions, even if they mention facts.
 
-2. NORMAL_CHAT — General knowledge, explanations, greetings, math, coding help,
-   conversational chat, translation (no tools needed).
+2. NORMAL_CHAT — General knowledge, explanations, greetings, coding help,
+   conversational chat, translation (no external tools or personal documents needed).
    Examples: "Explain TCP vs UDP", "What is recursion?", "Hello!", "Translate this",
-             "What is 25 * 48?", "Summarize this text", "Write a poem", "Who is Einstein",
-             "What is bubble sort", "mu khaeli" (Roman Odia), any language learning question
+             "Write a poem", "Who is Einstein", "What is bubble sort"
 
-3. WEB_SEARCH — Requires REAL-TIME or CURRENT information from the internet, or specific problem lookups.
-   Triggers (any of these indicate web search needed):
-   - Time-sensitive: "today", "latest", "current", "right now", "recent", "this week",
-     "news", "update", "live", "breaking", "now", "2024", "2025", "2026"
-   - Dynamic data: "weather", "temperature", "forecast", "stock", "price", "bitcoin",
-     "crypto", "exchange rate", "market", "IPO", "sensex", "nifty"
-   - Current facts: "population", "capital", "president", "prime minister", "PM",
-     "CEO", "governor", "minister", "champion", "winner", "who won", "election",
-     "results", "score", "ranking", "number one", "richest", "GDP", "currency rate"
-   - Search-intent & Problem lookups: "search for", "look up", "find me", "fetch that",
-     "LeetCode", "problem statement", "problem details", "what is leetcode X", "fetch",
-     "who is the current", "what is the latest version of"
-   Examples: "India population 2025", "current PM of India", "Bitcoin price today",
-             "Latest AI news", "leetcode 2849", "fetch leetcode problem statements"
+3. WEB_SEARCH — Requires REAL-TIME or CURRENT public information from the internet (e.g., news, live prices, sports, weather, current officials).
 
-4. CODE_EXECUTION — User wants code to be GENERATED AND EXECUTED/RUN.
-   Triggers: "execute", "run this code", "run this script", "plot and show",
-             "generate and run", "show the output", "simulate"
-   Do NOT use for just explaining code or writing code without running.
+4. CODE_EXECUTION — User explicitly wants code to be GENERATED AND EXECUTED in a sandbox.
 
-5. MCP_TOOL — Action targeting external tool/service or data management via tools (expenses, math, reminders, emails, etc.).
-   Examples: "Add an expense of ₹500 for Groceries at D-Mart today", "List all expenses", "Search groceries", "Monthly summary", "Top merchants", "Update expense ID 1", "Delete expense ID 1", "Calculate sin(pi/2)", "Create reminder for tomorrow", "Send email"
+5. MCP_TOOL — User wants to compute, track, manage, or summarize expenses, transactions, math expressions, reminders, or emails via system tools.
+   Examples: "Fetch total spent on food and add expense", "List expenses", "Summarize expenses", "Calculate 12 * 12", "Remind me at 10 AM", "Send email"
 
-6. DOCUMENT_QA — Question about user's UPLOADED documents OR personal profile/resume data.
-   Triggers: "my document", "my file", "my notes", "uploaded", "the PDF", "the doc",
-             "according to my", "from the file", "in the file", "my cheat sheet"
-   Also triggers for personal data queries (resume/profile):
-     "my projects", "my project", "my cgpa", "my gpa", "my xgpa",
-     "my resume", "my cv", "my skills", "my education", "my degree",
-     "my achievements", "my experience", "my internship", "my grades",
-     "my marks", "my result", "my score", "my background", "my profile",
-     "my qualification", "my college", "my university", "my institute"
-   When a user asks about their own academic or professional information,
-   that data is almost certainly in an uploaded resume/CV/transcript.
+6. DOCUMENT_QA — Question about user's UPLOADED documents, personal projects, custom platforms/systems ("project I made", "my coding platform", "IoT project", "visualizer feature", "my chatbot", "my app"), resume, or profile data.
 
 7. VISION — Analyze/describe/extract from an ATTACHED IMAGE.
-   AUTO-CLASSIFY as VISION if has_images=True AND the query is not clearly about
-   something unrelated to the image.
-   Examples: "what's in this image", "describe this", "extract text", "OCR this",
-             "what does this show", "analyze this photo", "print this" (with image)
-   NOTE: If has_images=True and query is empty or vague → ALWAYS classify as VISION.
 
-8. COMPLEX — Multi-step query spanning multiple intents (RAG + web, vision + search, etc.)
+8. COMPLEX — Multi-part or hybrid query spanning multiple distinct domains (e.g. public web news + personal project documentation).
 
-====== CLASSIFICATION RULES ======
-- Any query mentioning a LeetCode problem number (e.g. "LeetCode 2849"), problem statement lookup, or "fetch that" → classify as WEB_SEARCH
-- If has_images=True and there is no strong reason to override → classify as VISION
-- "Translate this" / "Translate that" / "Translate into X" → NORMAL_CHAT (no search needed)
-- "Who is X" for a historical/well-known figure → NORMAL_CHAT
-- "Who is the current X" or "latest X" → WEB_SEARCH
-- Math, coding explanation, summarization → NORMAL_CHAT
-- Roman Odia/Hindi/Bengali messages → NORMAL_CHAT (conversational)
-- Greetings, casual chat → NORMAL_CHAT
+====== CRITICAL RULES FOR IS_PRIVATE_DOC_QUERY ======
+Set "is_private_doc_query": true if the user query asks ANY question about:
+- Their uploaded files, PDFs, notes, or code
+- Their personal projects ("project I made", "IoT project", "food tracking project")
+- Their custom platforms or software ("my coding platform", "visualizer feature", "my chatbot", "my app")
+- Their resume, CV, CGPA, grades, or work experience
 
 Reply with ONLY this JSON object (no markdown, no extra text):
 {{
-  "intent": "<one of the 8 intents above>",
-  "is_private_doc_query": <true if DOCUMENT_QA or COMPLEX with docs, else false>,
+  "intent": "<one of MEMORY_WRITE | NORMAL_CHAT | WEB_SEARCH | CODE_EXECUTION | MCP_TOOL | DOCUMENT_QA | VISION | COMPLEX>",
+  "is_private_doc_query": <true if DOCUMENT_QA or COMPLEX/query asking about user files/projects/profile, else false>,
   "memory_content": "<extracted fact if MEMORY_WRITE, else null>",
   "memory_category": "<fact|preference|goal|topic if MEMORY_WRITE, else null>",
-  "detected_language": "<detected language name, e.g. English, Hindi, Roman Odia, Hinglish, Odia>"
+  "detected_language": "<detected language name>"
 }}
 """
 
@@ -685,26 +655,21 @@ You are a query analysis assistant. Determine whether the user's message contain
 A compound query has two or more clearly different topics that EACH need their own answer.
 A single query is one topic even if it has multiple words.
 
-Examples of compound queries:
-- "who won tennis 2026? and also how does food tracking work?" → two different topics
-- "what is python and how do I install flask?" → two separate sub-questions
-- "tell me about the weather and also explain machine learning" → two different topics
-
-Examples of single queries:
-- "who won the 2026 Wimbledon tennis championship?" → one topic
-- "explain how RAG works" → one topic
-- "what is the capital of France and its population?" → same topic (France)
+Also detect any MEMORY_WRITE parts — phrases where the user explicitly asks to save/remember a fact
+(e.g. "remember that X", "note that X", "save that X", "don't forget X").
 
 User message: {query}
 
 Reply with ONLY a JSON object:
 {{
   "is_compound": <true|false>,
-  "sub_questions": ["<question 1>", "<question 2>", ...]
+  "sub_questions": ["<question 1>", "<question 2>", ...],
+  "memory_write_parts": ["<memory fact 1>", ...]
 }}
 - If is_compound is false, sub_questions should contain only the original query.
-- If is_compound is true, sub_questions should contain each distinct question as a clean, standalone query.
-- Maximum 4 sub_questions.
+- If is_compound is true, sub_questions should contain each distinct NON-memory-write question as a standalone query.
+- memory_write_parts: list any facts the user wants saved (empty list if none).
+- Maximum 4 sub_questions, maximum 3 memory_write_parts.
 No extra text.
 """
 

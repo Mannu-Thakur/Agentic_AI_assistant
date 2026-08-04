@@ -50,3 +50,14 @@ class AuthService:
         if not verify_password(plain_password, user.hashed_password):
             return None
         return user
+
+    @staticmethod
+    async def update_user_password(db: AsyncSession, user_id: str, new_password: str) -> bool:
+        user = await AuthService.get_user_by_id(db, user_id)
+        if not user:
+            return False
+        user.hashed_password = get_password_hash(new_password)
+        await db.commit()
+        await db.refresh(user)
+        return True
+

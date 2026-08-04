@@ -135,6 +135,21 @@ class Settings(BaseSettings):
     CLAMAV_HOST: Optional[str] = None
     CLAMAV_PORT: int = 3310
 
+    # Email / SMTP (leave blank to use console-mode dev fallback)
+    # NOTE: For Gmail SMTP, SMTP_FROM_EMAIL must match SMTP_USER (your Gmail address).
+    SMTP_HOST: str = "smtp.gmail.com"
+    SMTP_PORT: int = 587
+    SMTP_USER: Optional[str] = None
+    SMTP_PASSWORD: Optional[str] = None
+    SMTP_FROM_EMAIL: Optional[str] = None  # Defaults to SMTP_USER if blank
+    SMTP_FROM_NAME: str = "openChat Workspace"
+
+    # Frontend URL — used to build password reset links sent in emails
+    FRONTEND_URL: str = "http://localhost:5173"
+
+    # Password reset token lifetime (minutes)
+    PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: int = 15
+
     model_config = SettingsConfigDict(
         env_file=(".env", "backend/.env"),
         env_file_encoding="utf-8",

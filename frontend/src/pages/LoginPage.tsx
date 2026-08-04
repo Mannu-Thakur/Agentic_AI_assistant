@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { apiRequest } from '../services/api';
 import { useAuthStore } from '../store/authStore';
 import { KeyRound, Mail, UserPlus, LogIn, AlertCircle } from 'lucide-react';
@@ -148,7 +148,7 @@ export default function LoginPage() {
         </div>
 
         {isLogin && (
-          <div className="flex items-center mt-2">
+          <div className="flex items-center justify-between mt-2">
             <label className="flex items-center space-x-2 text-xs text-muted-foreground cursor-pointer select-none">
               <input
                 type="checkbox"
@@ -158,6 +158,13 @@ export default function LoginPage() {
               />
               <span>Remember Me</span>
             </label>
+
+            <Link
+              to="/forgot-password"
+              className="text-xs text-primary font-medium hover:underline transition-all"
+            >
+              Forgot password?
+            </Link>
           </div>
         )}
 

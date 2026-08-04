@@ -2,12 +2,12 @@ import httpx
 from typing import Optional
 from datetime import timedelta
 from urllib.parse import urlencode
-from fastapi import APIRouter, Depends, HTTPException, status, Response, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Response, Request, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.config import settings
 from app.core.security import create_access_token, create_refresh_token, verify_token
-from app.schemas.auth import UserRegister, UserLogin, Token, UserOut
+from app.schemas.auth import UserRegister, UserLogin, Token, UserOut, ForgotPasswordRequest, ResetPasswordRequest
 from app.services.auth_service import AuthService
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from app.models.user import User, UserPreference
@@ -651,4 +651,134 @@ async def github_callback(
         access_token=access_token,
         expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
     )
+
+
+@router.get("/verify-reset-token", status_code=status.HTTP_200_OK)
+async def verify_token_status(
+    token: str = Query(..., description="Password reset token to verify")
+):
+    """
+    Verifies if a password reset token is active and valid in real-time without consuming it.
+    Returns 200 OK with {"valid": true} if valid, or 400 Bad Request if invalid/expired.
+    """
+    from app.core.security import verify_reset_token
+
+    if not token or not token.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Reset token is required."
+        )
+
+    is_valid = await verify_reset_token(token)
+    if not is_valid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset token. Please request a new password reset link."
+        )
+
+    return {"valid": True, "detail": "Token is valid and active."}
+
+
+@router.post("/forgot-password", status_code=status.HTTP_200_OK)
+async def forgot_password(
+    schema: ForgotPasswordRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Sends a password reset link to the user's email if registered.
+    Always returns a generic success message to prevent user enumeration attacks.
+    Rate-limited to 3 requests per 15 minutes per email address.
+    """
+    import secrets
+    from urllib.parse import urlparse
+    from app.core.security import check_reset_rate_limit, store_reset_token
+    from app.services.email_service import EmailService
+    from app.services.audit_service import AuditService
+
+    client_ip = request.client.host if request.client else "unknown"
+
+    # Enforce rate limiting
+    is_allowed = await check_reset_rate_limit(schema.email)
+    if not is_allowed:
+        await AuditService.log_event(db, None, "password_reset_rate_limited", {"email": schema.email}, client_ip)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many password reset requests for this email. Please try again in 15 minutes."
+        )
+
+    # Determine base frontend URL dynamically from request headers if available to prevent port/domain mismatch
+    base_url = settings.FRONTEND_URL.rstrip('/')
+    raw_origin = request.headers.get("origin") or request.headers.get("referer")
+    if raw_origin:
+        parsed = urlparse(raw_origin)
+        if parsed.scheme and parsed.netloc:
+            base_url = f"{parsed.scheme}://{parsed.netloc}"
+
+    # User lookup
+    user = await AuthService.get_user_by_email(db, schema.email)
+    if user and user.hashed_password:
+        # Generate token & store in Redis / memory fallback with TTL
+        token = secrets.token_urlsafe(32)
+        ttl_seconds = settings.PASSWORD_RESET_TOKEN_EXPIRE_MINUTES * 60
+        await store_reset_token(token, user.id, ttl_seconds)
+
+        # Build reset link
+        reset_url = f"{base_url}/reset-password?token={token}"
+
+        # Send email asynchronously
+        await EmailService.send_password_reset_email(user.email, reset_url)
+        await AuditService.log_event(db, user.id, "password_reset_requested", {"email": user.email}, client_ip)
+    else:
+        # User not found or OAuth-only user — log silently, don't disclose to client
+        await AuditService.log_event(db, None, "password_reset_requested_unknown_email", {"email": schema.email}, client_ip)
+
+    return {"detail": "If an account exists with that email, a password reset link has been sent."}
+
+
+
+@router.post("/reset-password", status_code=status.HTTP_200_OK)
+async def reset_password(
+    schema: ResetPasswordRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Validates single-use reset token and updates the user's password.
+    Also invalidates all active sessions for the user for security.
+    """
+    from app.core.security import verify_and_consume_reset_token, blacklist_token
+    from app.services.audit_service import AuditService
+
+    client_ip = request.client.host if request.client else "unknown"
+
+    if len(schema.new_password) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password must be at least 8 characters long."
+        )
+
+    user_id = await verify_and_consume_reset_token(schema.token)
+    if not user_id:
+        await AuditService.log_event(db, None, "password_reset_invalid_token", {}, client_ip)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset token. Please request a new password reset link."
+        )
+
+    updated = await AuthService.update_user_password(db, user_id, schema.new_password)
+    if not updated:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User account not found."
+        )
+
+    # Invalidate all active sessions (compromise circuit breaker pattern)
+    await blacklist_token(f"user_revoked:{user_id}", settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 3600)
+
+    await AuditService.log_event(db, user_id, "password_reset_completed", {}, client_ip)
+
+    return {"detail": "Password has been reset successfully. You can now log in with your new password."}
+
+
 

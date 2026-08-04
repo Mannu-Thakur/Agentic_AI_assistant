@@ -237,37 +237,70 @@ class MemoryService:
         """
         FastAPI Background Task to analyze a chat exchange, extract memories,
         deduplicate, resolve conflicts, and persist them.
+
+        Production hardening:
+        • Multi-provider fallback: Gemini → Groq → OpenAI → rule-based
+          so memory extraction succeeds even when Gemini is rate-limited (HTTP 429).
+        • Rule-based extraction is always the final fallback.
         """
         from app.core.database import AsyncSessionLocal
         from app.providers.gemini import GeminiProvider
+        from app.providers.groq import GroqProvider
+        from app.providers.openai_provider import OpenAIProvider
+        from app.providers.openrouter import OpenRouterProvider
 
-        provider = GeminiProvider()
-
-        # Fetch user API key
-        user_gemini_key = None
+        # Fetch all user API keys for multi-provider fallback
+        user_keys: dict = {}
         try:
             from app.models.user import ApiKey
             from app.core.security import decrypt_api_key
             from sqlalchemy import select as sa_select
             async with AsyncSessionLocal() as db:
                 result = await db.execute(
-                    sa_select(ApiKey).where(
-                        ApiKey.user_id == user_id,
-                        ApiKey.provider_name.in_(["gemini", "google"]),
-                    )
+                    sa_select(ApiKey).where(ApiKey.user_id == user_id)
                 )
-                key_record = result.scalars().first()
-                if key_record:
-                    user_gemini_key = decrypt_api_key(key_record.encrypted_api_key)
+                for key_record in result.scalars().all():
+                    pname = (key_record.provider_name or "").lower()
+                    user_keys[pname] = decrypt_api_key(key_record.encrypted_api_key)
         except Exception as exc:
-            logger.error(f"Failed to fetch user Gemini key: {exc}")
+            logger.error(f"Failed to fetch user API keys: {exc}")
+
+        # Build multi-provider candidate list for extraction
+        extraction_candidates = [
+            (GeminiProvider(),     "gemini",     "gemini-2.0-flash",
+             user_keys.get("gemini") or user_keys.get("google") or settings.GEMINI_API_KEY),
+            (GroqProvider(),       "groq",       "llama-3.3-70b-versatile",
+             user_keys.get("groq") or settings.GROQ_API_KEY),
+            (OpenAIProvider(),     "openai",     "gpt-4o-mini",
+             user_keys.get("openai") or settings.OPENAI_API_KEY),
+            (OpenRouterProvider(), "openrouter", "google/gemini-2.0-flash",
+             user_keys.get("openrouter") or settings.OPENROUTER_API_KEY),
+        ]
 
         memories_to_create: List[dict] = []
-        user_gemini_key = user_gemini_key or settings.GEMINI_API_KEY
-        if user_gemini_key:
-            memories_to_create = await _llm_based_extraction(
-                provider, user_gemini_key, user_content, assistant_content
-            )
+        for prov, prov_name, model, api_key in extraction_candidates:
+            if not api_key:
+                continue
+            try:
+                memories_to_create = await _llm_based_extraction(
+                    prov, api_key, model, user_content, assistant_content
+                )
+                if memories_to_create is not None:
+                    logger.info(
+                        f"[MemoryService] Memory extraction succeeded via '{prov_name}' "
+                        f"({len(memories_to_create)} items)"
+                    )
+                    break
+            except Exception as exc:
+                err_str = str(exc).lower()
+                if "429" in err_str or "rate limit" in err_str:
+                    logger.warning(
+                        f"[MemoryService] Provider '{prov_name}' rate-limited — "
+                        "trying next fallback for memory extraction."
+                    )
+                else:
+                    logger.warning(f"[MemoryService] Provider '{prov_name}' failed: {exc}")
+                continue
 
         if not memories_to_create:
             memories_to_create = _rule_based_extraction(user_content)
@@ -365,7 +398,7 @@ class MemoryService:
                         importance_score=importance,
                         project_id=project_id,
                         session_id=session_id,
-                        api_key=user_gemini_key,  # real Gemini key for live embeddings
+                        api_key=user_keys.get("gemini") or user_keys.get("google") or settings.GEMINI_API_KEY,  # Gemini key for embeddings
                     )
                 except Exception as exc:
                     logger.warning(f"Memory vector store sync failed in extraction: {exc}")
@@ -417,8 +450,16 @@ def _rule_based_extraction(user_content: str) -> List[dict]:
     return results
 
 
-async def _llm_based_extraction(provider, api_key, user_content: str, assistant_content: str) -> List[dict]:
-    """LLM-based memory extraction using Gemini."""
+async def _llm_based_extraction(
+    provider, api_key: str, model: str, user_content: str, assistant_content: str
+) -> List[dict]:
+    """
+    LLM-based memory extraction.
+
+    Accepts any provider instance that implements .generate().
+    The model parameter specifies which model to use for this provider.
+    Returns [] if extraction fails (caller should try next provider or rule-based fallback).
+    """
     system_instruction = (
         "You are an AI memory consolidation module.\n"
         "Extract user facts, preferences, goals, interests, and project context from this conversation.\n"

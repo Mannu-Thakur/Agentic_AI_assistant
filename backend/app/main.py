@@ -84,6 +84,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Schema migration failed: {e}")
     
+    # Validate provider API keys and emit startup diagnostics
+    try:
+        from app.providers.registry import provider_registry
+        await provider_registry.startup_validate()
+    except Exception as _pv_err:
+        logger.warning(f"Provider startup validation encountered an issue (non-fatal): {_pv_err}")
+
     # Start background provider health check task
     from app.workers.health_check import provider_health_check_loop
     bg_task = asyncio.create_task(provider_health_check_loop())

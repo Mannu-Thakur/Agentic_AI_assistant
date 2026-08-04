@@ -55,10 +55,12 @@ AI Assistant Chatbot/
 * **Source Attribution**: Accurate tracking and citation of web links and ingested document passages. Web search sources now carry clickable URLs and provider names to the frontend.
 * **Context-Aware Prompts**: Dynamically injects long-term semantic memory, workspace documents, and systemic rules into model context.
 
-### 🤖 2. Multi-Provider LLM Orchestration
+### 🤖 2. Multi-Provider LLM Orchestration & Resilience
 * **Supported Providers**: Google Gemini (2.0 / 2.5), Groq (Llama 3.1 / 3.3, Gemma 2, Mixtral), OpenRouter (Claude 3.5 Sonnet, DeepSeek R1/V3, GPT-4o), and custom OpenAI-compatible endpoints.
+* **Provider Circuit Breakers**: Built-in `CircuitBreaker` instances (`CLOSED`, `OPEN`, `HALF_OPEN`) with a 30-second cooldown window for isolated error recovery. Degraded or failing providers are automatically bypassed without bringing down the entire pipeline.
+* **Provider Telemetry & Health Tracking**: Tracks request counts, average latency, error rates, and failure thresholds (`app/providers/provider_metrics.py`).
 * **Curated Model Picker**: Frontend exposes a hand-curated list of tested, reliable models filtered by which provider keys are currently verified — eliminating the 300+ entry OpenRouter model flood. Includes automatic snap-back to `gemini-2.5-flash` if a stale/unknown model is detected in localStorage.
-* **Dynamic Provider Fallback**: Automatic fallback on rate limits or API errors.
+* **Dynamic Provider Fallback**: Automatic fallback on rate limits or API errors via the central `ProviderRegistry`.
 * **BYOK (Bring Your Own Key)**: Secure user-level API key storage and runtime validation via `x-api-keys` header.
 * **Improved Provider Routing**: `gemma` and `groq` prefixed model IDs now correctly resolve to the Groq provider.
 
@@ -116,10 +118,11 @@ The RAG (Retrieval-Augmented Generation) engine combines **Dense Vector Search**
 
 ### 🛡️ 8. Enterprise Hardening & Security
 * **Authentication**: JWT access tokens (24h) + refresh tokens (30 days). Each refresh token now carries a unique `jti` (JWT ID) to ensure token rotation always produces a distinct, non-reusable token. Bcrypt password hashing and OAuth 2.0 (Google & GitHub).
+* **Self-Service Password Reset**: Complete password recovery flow with single-use, 15-minute expiration tokens (`/api/v1/auth/forgot-password` and `/api/v1/auth/reset-password`). Integrates with SMTP (`email_service.py`) for email delivery, with dev token cache fallback for offline testing.
 * **Mock OAuth Support**: Test-mode mock codes (`mock_` prefix) for both Google and GitHub OAuth flows — allows integration testing without live external OAuth.
 * **Open Redirect Defense**: Strict URI whitelisting (`ALLOWED_REDIRECT_URIS`).
 * **Security Middlewares**: `SecureHeadersMiddleware` (CSP, HSTS, X-Frame-Options), `PayloadLimitMiddleware` (upload size restriction), and `InputSanitizationMiddleware` (XSS sanitization).
-* **Rate Limiting & Observability**: Redis-backed soft rate limiting (100 req/min per IP, fails open), W3C Trace Context propagation (`traceparent`, `X-Trace-ID`, `X-Span-ID`), structured single-line JSON logging, and Prometheus metrics endpoint (`/api/v1/metrics`).
+* **Resilient Cache & Rate Limiting**: Redis-backed soft rate limiting with an in-memory fallback cache layer (`app/core/redis_client.py`) to prevent service interruption during Redis outages. W3C Trace Context propagation (`traceparent`, `X-Trace-ID`, `X-Span-ID`), structured single-line JSON logging, and Prometheus metrics endpoint (`/api/v1/metrics`).
 
 ### 📊 9. Developer Telemetry (DevHUD)
 * **Execution Telemetry**: Live step breakdown showing node transitions, latency, execution state, prompt token consumption, and raw tool output payloads.
@@ -139,7 +142,7 @@ The RAG (Retrieval-Augmented Generation) engine combines **Dense Vector Search**
 | **Backend Framework** | FastAPI, Uvicorn, Python 3.10+ |
 | **Agent Orchestration** | LangGraph, LangChain Core |
 | **Database & ORM** | SQLAlchemy 2.0, Alembic, SQLite (Dev) / PostgreSQL (Prod) |
-| **Caching & Rate Limit** | Redis 7 |
+| **Caching & Rate Limit** | Redis 7 + In-Memory Fallback Cache |
 | **Vector Database** | ChromaDB |
 | **Document Parsing & OCR** | PyPDF, python-docx, openpyxl, python-pptx, PyTesseract, pdf2image, OpenCV |
 | **Web Search** | Tavily SDK, SerpAPI, Exa AI, DuckDuckGo Search |
@@ -245,6 +248,12 @@ Access points:
 | `SERP_API_KEY` | SerpAPI Key (Google Search) | `your_serp_key` |
 | `EXA_API_KEY` | Exa AI Search Key | `your_exa_key` |
 | `WEB_SEARCH_PROVIDER_ORDER` | Search engine fallback priority | `tavily,serpapi,exa,duckduckgo` |
+| `SMTP_SERVER` | SMTP host for sending password reset emails | `smtp.gmail.com` |
+| `SMTP_PORT` | SMTP server port | `587` |
+| `SMTP_USERNAME` | SMTP authentication username | `your_email@example.com` |
+| `SMTP_PASSWORD` | SMTP authentication password / App password | `your_app_password` |
+| `EMAILS_FROM_EMAIL` | From email address for system emails | `noreply@yourdomain.com` |
+| `FRONTEND_URL` | Frontend URL used in password reset links | `http://localhost:5173` |
 | `TESSERACT_CMD` | Explicit path to Tesseract binary | Auto-detected if blank |
 | `REQUIRE_OCR` | Enforce server exit if Tesseract missing | `false` |
 | `ALLOWED_REDIRECT_URIS` | Whitelisted OAuth redirect URIs | `http://localhost:5173/auth/google/callback` |
@@ -257,7 +266,7 @@ Run the automated backend test suite using `pytest`:
 
 ```bash
 cd backend
-python -m pytest
+python -m pytest tests
 ```
 
 ---
@@ -270,6 +279,8 @@ python -m pytest
 | | `/api/v1/auth/login` | `POST` | User login (JWT access & refresh tokens) |
 | | `/api/v1/auth/refresh` | `POST` | Refresh access token |
 | | `/api/v1/auth/me` | `GET` | Get current user profile |
+| | `/api/v1/auth/forgot-password` | `POST` | Request password reset token via email |
+| | `/api/v1/auth/reset-password` | `POST` | Reset password using valid reset token |
 | **Chat** | `/api/v1/chat/stream` | `POST` | SSE real-time agent message streaming |
 | | `/api/v1/chat/conversations` | `GET` | List user chat conversations |
 | | `/api/v1/chat/conversations/{id}` | `DELETE` | Delete single conversation |
@@ -292,3 +303,4 @@ python -m pytest
 ## 📝 License
 
 This project is licensed under the MIT License.
+

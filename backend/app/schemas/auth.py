@@ -34,3 +34,20 @@ class UserPreferenceOut(BaseModel):
     system_prompt_override: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+    @classmethod
+    def __get_validators__(cls):
+        yield cls.validate
+
+    def validate_password(self) -> None:
+        if len(self.new_password) < 8:
+            raise ValueError("Password must be at least 8 characters long")
