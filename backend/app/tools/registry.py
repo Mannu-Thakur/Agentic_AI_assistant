@@ -89,12 +89,17 @@ class ToolRegistry:
 
         current_dir       = os.path.dirname(os.path.abspath(__file__))
         calculator_script = os.path.join(current_dir, "mcp_calculator_server.py")
+        web_mcp_script    = os.path.join(current_dir, "mcp_web_server.py")
         python_exe        = sys.executable or "python"
 
         mcp_configs = {
             "calculator": {
                 "command": python_exe,
                 "args":    [calculator_script]
+            },
+            "web_mcp": {
+                "command": python_exe,
+                "args":    [web_mcp_script]
             }
         }
 
@@ -214,6 +219,30 @@ class ToolRegistry:
                 })
 
         return declarations
+
+    async def get_semantically_relevant_tools(
+        self,
+        query: str,
+        allowed_tools: List[str],
+        top_k: int = 5,
+        min_threshold: float = 0.20,
+        api_key: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieves declarations for allowed tools and filters/ranks them using SemanticToolRouter.
+        """
+        all_allowed_declarations = self.get_tool_schemas_for_intent(allowed_tools)
+        if not all_allowed_declarations or not query:
+            return all_allowed_declarations
+
+        from app.tools.semantic_router import semantic_router
+        return await semantic_router.select_relevant_tools(
+            query=query,
+            tool_declarations=all_allowed_declarations,
+            top_k=top_k,
+            min_threshold=min_threshold,
+            api_key=api_key
+        )
 
     async def call_tool(
         self,

@@ -1,41 +1,39 @@
-import { Outlet } from 'react-router-dom';
-import Logo from '../components/ui/Logo';
+import { Outlet, useNavigate } from 'react-router-dom';
+import { X } from 'lucide-react';
 
 export default function AuthLayout() {
-  return (
-    <div className="min-h-screen relative flex items-center justify-center p-4 bg-background overflow-hidden">
+  const navigate = useNavigate();
 
-      {/* Ambient background glows */}
-      <div className="pointer-events-none absolute inset-0 overflow-hidden">
-        <div className="absolute -top-1/4 -left-1/4 w-[60%] h-[60%] rounded-full
-                        bg-accent/4 blur-[120px] animate-pulse" style={{ animationDuration: '8s' }} />
-        <div className="absolute -bottom-1/4 -right-1/4 w-[60%] h-[60%] rounded-full
-                        bg-accent/3 blur-[120px] animate-pulse" style={{ animationDuration: '12s' }} />
-        {/* Grid overlay */}
-        <div className="absolute inset-0 opacity-[0.02]"
-             style={{ backgroundImage: 'linear-gradient(hsl(var(--border)) 1px, transparent 1px), linear-gradient(90deg, hsl(var(--border)) 1px, transparent 1px)', backgroundSize: '40px 40px' }} />
+  return (
+    <div className="min-h-screen relative flex items-center justify-center p-4 sm:p-6 bg-[#0c0e14] text-foreground overflow-x-hidden selection:bg-blue-500/20 selection:text-white">
+
+      {/* Subtle ambient background glow */}
+      <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] rounded-full bg-blue-600/[0.03] blur-[140px]" />
       </div>
 
-      {/* Card */}
-      <div className="w-full max-w-[400px] relative z-10">
-        <div className="glass-heavy rounded-2xl shadow-2xl p-8 border border-border animate-fade-in">
+      {/* Main Elevated Card Container */}
+      <div className="w-full max-w-[430px] relative z-10 my-auto">
+        <div className="relative bg-[#1c1f26] rounded-2xl shadow-[0_25px_70px_-15px_rgba(0,0,0,0.8)] p-6 sm:p-8 border border-white/[0.09] transition-all duration-300 animate-in fade-in-0 zoom-in-95">
 
-          {/* Branding */}
-          <div className="flex flex-col items-center mb-8 space-y-2">
-            <div className="mb-1">
-              <Logo size={36} />
-            </div>
-            <h1 className="text-xl font-semibold text-foreground tracking-tight">openChat AI Workspace</h1>
-            <p className="text-foreground-3 text-xs">Production-grade agent orchestrator</p>
-          </div>
+          {/* Close Button Top Right */}
+          <button
+            type="button"
+            onClick={() => navigate('/')}
+            className="absolute top-5 right-5 p-1 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 transition-colors focus:outline-none focus:ring-1 focus:ring-blue-500/40"
+            title="Close"
+            aria-label="Close"
+          >
+            <X className="w-4 h-4" />
+          </button>
 
-          <Outlet />
+          <main>
+            <Outlet />
+          </main>
         </div>
-
-        <p className="text-center text-foreground-3 text-[11px] mt-5">
-          © {new Date().getFullYear()} openChat Systems. All rights reserved.
-        </p>
       </div>
     </div>
   );
 }
+
+

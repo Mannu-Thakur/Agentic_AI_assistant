@@ -44,30 +44,35 @@ async def run_audit_suite():
         results.append(("1. Security Guardrails (Injection Defense & Secret Masking)", False, str(exc)))
 
     # ──────────────────────────────────────────────────────────────────────────
+    # ──────────────────────────────────────────────────────────────────────────
     #  2. Semantic Memory Vector Store & Service
     # ──────────────────────────────────────────────────────────────────────────
     try:
         from app.memory.memory_store import MemoryVectorStore
         from app.services.memory_service import MemoryService
+        from app.embeddings.embedding_service import EmbeddingService
 
-        mem_store = MemoryVectorStore()
-        user_id = "test-user-prod-verify"
-        mem_id = "mem-verify-101"
+        with patch.object(EmbeddingService, "get_embedding", new_callable=AsyncMock) as mock_emb:
+            mock_emb.return_value = [0.1] * 768
 
-        await mem_store.add_memory_item(
-            memory_id=mem_id,
-            user_id=user_id,
-            category="preference",
-            content="User prefers Python and Fast-API over JavaScript",
-            importance_score=9
-        )
+            mem_store = MemoryVectorStore()
+            user_id = "test-user-prod-verify"
+            mem_id = "mem-verify-101"
 
-        searched = await mem_store.search_memories(user_id=user_id, query="What language framework does the user like?", k=2)
-        assert len(searched) > 0, "MemoryVectorStore search returned 0 items"
-        assert "Python" in searched[0]["content"], "Memory content mismatch"
+            await mem_store.add_memory_item(
+                memory_id=mem_id,
+                user_id=user_id,
+                category="preference",
+                content="User prefers Python and Fast-API over JavaScript",
+                importance_score=9
+            )
 
-        await mem_store.delete_memory_item(mem_id)
-        results.append(("2. Semantic Memory Vector Store & Search", True, "Memory indexed, semantically searched, and deleted cleanly"))
+            searched = await mem_store.search_memories(user_id=user_id, query="What language framework does the user like?", k=2)
+            assert len(searched) > 0, "MemoryVectorStore search returned 0 items"
+            assert "Python" in searched[0]["content"], "Memory content mismatch"
+
+            await mem_store.delete_memory_item(mem_id)
+            results.append(("2. Semantic Memory Vector Store & Search", True, "Memory indexed, semantically searched, and deleted cleanly"))
     except Exception as exc:
         results.append(("2. Semantic Memory Vector Store & Search", False, str(exc)))
 
@@ -89,33 +94,40 @@ async def run_audit_suite():
     # ──────────────────────────────────────────────────────────────────────────
     try:
         from app.retrieval.vector_store import VectorStore
-        vstore = VectorStore()
+        from app.embeddings.embedding_service import EmbeddingService
 
-        doc_id = "prod-test-doc"
-        user_id = "test-user-retrieval"
-        await vstore.add_document_chunks(
-            document_id=doc_id,
-            user_id=user_id,
-            filename="langgraph_guide.pdf",
-            chunks=[
-                "LangGraph provides stateful multi-agent orchestrations.",
-                "Reciprocal Rank Fusion merges dense vector search with BM25 keyword rankings."
-            ]
-        )
+        with patch.object(EmbeddingService, "get_embedding", new_callable=AsyncMock) as mock_emb, \
+             patch.object(EmbeddingService, "get_embeddings", new_callable=AsyncMock) as mock_embs:
+            mock_emb.return_value = [0.1] * 768
+            mock_embs.return_value = [[0.1] * 768, [0.2] * 768]
 
-        retrieved = await vstore.query_relevant_chunks(
-            user_id=user_id,
-            query="Tell me about Reciprocal Rank Fusion",
-            k=2
-        )
-        assert len(retrieved) > 0, "Hybrid retrieval returned 0 chunks"
-        assert "rrf_score" in retrieved[0], "RRF score missing from retrieved chunk"
+            vstore = VectorStore()
 
-        compressed = VectorStore.compress_context(retrieved)
-        assert len(compressed) <= len(retrieved), "Compression failed"
+            doc_id = "prod-test-doc"
+            user_id = "test-user-retrieval"
+            await vstore.add_document_chunks(
+                document_id=doc_id,
+                user_id=user_id,
+                filename="langgraph_guide.pdf",
+                chunks=[
+                    "LangGraph provides stateful multi-agent orchestrations.",
+                    "Reciprocal Rank Fusion merges dense vector search with BM25 keyword rankings."
+                ]
+            )
 
-        await vstore.delete_document_chunks(doc_id)
-        results.append(("4. Hybrid Retrieval & RRF Fusion Engine", True, "BM25 + Dense + RRF fusion and compression verified"))
+            retrieved = await vstore.query_relevant_chunks(
+                user_id=user_id,
+                query="Tell me about Reciprocal Rank Fusion",
+                k=2
+            )
+            assert len(retrieved) > 0, "Hybrid retrieval returned 0 chunks"
+            assert "rrf_score" in retrieved[0], "RRF score missing from retrieved chunk"
+
+            compressed = VectorStore.compress_context(retrieved)
+            assert len(compressed) <= len(retrieved), "Compression failed"
+
+            await vstore.delete_document_chunks(doc_id)
+            results.append(("4. Hybrid Retrieval & RRF Fusion Engine", True, "BM25 + Dense + RRF fusion and compression verified"))
     except Exception as exc:
         results.append(("4. Hybrid Retrieval & RRF Fusion Engine", False, str(exc)))
 

@@ -31,6 +31,8 @@ def _is_sqlite(url: str) -> bool:
 
 def _build_sync_engine():
     url = settings.DATABASE_URL
+    if url.startswith("postgresql+asyncpg://"):
+        url = url.replace("postgresql+asyncpg://", "postgresql+psycopg2://", 1)
     if _is_sqlite(url):
         return create_engine(
             url,

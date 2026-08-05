@@ -2407,7 +2407,15 @@ async def generate_response_node(
         except Exception as exc:
             logger.warning(f"ToolRegistry initialization warning in generate_response_node: {exc}")
 
-    if allowed_tools:
+    last_user_query = state.get("resolved_query") or state.get("original_query") or _extract_last_user_query(messages)
+    if allowed_tools and last_user_query:
+        tool_schemas = await registry.get_semantically_relevant_tools(
+            query=last_user_query,
+            allowed_tools=allowed_tools,
+            top_k=5,
+            api_key=keys.get("gemini_api_key")
+        )
+    elif allowed_tools:
         tool_schemas = registry.get_tool_schemas_for_intent(allowed_tools)
     else:
         tool_schemas = []  # Pure generation — no tools offered
