@@ -7,7 +7,7 @@ services:
   - type: web
     name: ai-assistant-backend
     runtime: docker
-    dockerContext: ./backend
+    dockerContextDir: ./backend
     dockerfilePath: ./backend/Dockerfile
     plan: starter
     healthCheckPath: /api/v1/health
@@ -30,6 +30,19 @@ services:
           property: port
       - key: SECRET_KEY
         generateValue: true
+      - key: FRONTEND_URL
+        fromService:
+          type: web
+          name: ai-assistant-frontend
+          property: url
+      - key: BACKEND_CORS_ORIGINS
+        value: '["https://ai-assistant-frontend.onrender.com"]'
+      - key: GOOGLE_REDIRECT_URI
+        value: https://ai-assistant-frontend.onrender.com/auth/google/callback
+      - key: GITHUB_REDIRECT_URI
+        value: https://ai-assistant-frontend.onrender.com/auth/github/callback
+      - key: ALLOWED_REDIRECT_URIS
+        value: '["https://ai-assistant-frontend.onrender.com/auth/google/callback","https://ai-assistant-frontend.onrender.com/auth/github/callback"]'
       - key: GROQ_API_KEY
         sync: false
       - key: GEMINI_API_KEY
@@ -52,14 +65,12 @@ services:
         sync: false
       - key: GITHUB_CLIENT_SECRET
         sync: false
-      - key: BACKEND_CORS_ORIGINS
-        value: '["*"]'
 
   # ── React/Vite Frontend Service ────────────────────────────────────────────
   - type: web
     name: ai-assistant-frontend
     runtime: docker
-    dockerContext: ./frontend
+    dockerContextDir: ./frontend
     dockerfilePath: ./frontend/Dockerfile
     plan: starter
     healthCheckPath: /health
@@ -68,16 +79,14 @@ services:
         fromService:
           type: web
           name: ai-assistant-backend
-          property: host
+          property: url
 
   # ── Redis Cache Service ───────────────────────────────────────────────────
   - type: redis
     name: ai-assistant-redis
     plan: starter
     maxmemoryPolicy: allkeys-lru
-    ipAllowList:
-      - source: 0.0.0.0/0
-        description: everywhere
+    ipAllowList: []
 
 # ── Managed PostgreSQL Database ──────────────────────────────────────────────
 databases:
@@ -85,3 +94,4 @@ databases:
     databaseName: ai_workspace_db
     user: ai_user
     plan: starter
+
