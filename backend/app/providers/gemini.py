@@ -221,8 +221,17 @@ class GeminiProvider(BaseLLMProvider):
             metrics.record_call_failure(self.provider_name, model, "circuit_open")
             raise ProviderCircuitOpenError(err_msg)
 
-        # ── Deprecated model remapping ────────────────────────────────────────
+        # ── Deprecated/alias model remapping ──────────────────────────────────
         model = registry.remap_model(model)
+        _gemini_aliases = {
+            "gemini-2.5-flash": "gemini-2.0-flash",
+            "gemini-2.5-pro": "gemini-2.0-flash",
+            "google/gemini-2.5-flash": "gemini-2.0-flash",
+            "google/gemini-2.5-pro": "gemini-2.0-flash",
+            "google/gemini-2.0-flash": "gemini-2.0-flash",
+        }
+        if model in _gemini_aliases:
+            model = _gemini_aliases[model]
 
         # ── Model availability check ──────────────────────────────────────────
         if not registry.is_model_available(self.provider_name, model):
