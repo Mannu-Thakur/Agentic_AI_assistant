@@ -68,7 +68,11 @@ from app.agent.nodes import (
     evidence_checker_node,
     query_rewriter_node,
 )
-from app.agent.prompts import INTENT_MEMORY_WRITE
+from app.agent.prompts import (
+    INTENT_MEMORY_WRITE,
+    INTENT_NORMAL_CHAT,
+    INTENT_DOCUMENT_QA,
+)
 
 MAX_ITERATIONS = 1  # maximum reflection-driven regeneration passes
 
@@ -82,13 +86,16 @@ def route_after_classify(state: AgentState) -> str:
     After intent classification:
       is_ambiguous=True → clarification
       MEMORY_WRITE → memory_write (short-circuits the full pipeline)
-      Everything else → plan (normal flow)
+      NORMAL_CHAT | DOCUMENT_QA → check_retrieval (bypasses tool planning for fast single-turn path)
+      Everything else (COMPLEX, MCP_TOOL, CODE_EXECUTION, etc.) → plan
     """
     if state.get("is_ambiguous", False):
         return "clarification"
-    intent = state.get("intent", "NORMAL_CHAT")
+    intent = state.get("intent", INTENT_NORMAL_CHAT)
     if intent == INTENT_MEMORY_WRITE:
         return "memory_write"
+    if intent in (INTENT_NORMAL_CHAT, INTENT_DOCUMENT_QA):
+        return "check_retrieval"
     return "plan"
 
 
@@ -161,14 +168,15 @@ workflow.add_node("reflect",                   reflect_node)
 # Entry point → intent classifier
 workflow.set_entry_point("classify_intent")
 
-# classify_intent → memory_write | clarification | plan
+# classify_intent → memory_write | clarification | check_retrieval | plan
 workflow.add_conditional_edges(
     "classify_intent",
     route_after_classify,
     {
-        "memory_write":  "memory_write",
-        "clarification": "clarification",
-        "plan":          "plan",
+        "memory_write":    "memory_write",
+        "clarification":   "clarification",
+        "check_retrieval": "check_retrieval",
+        "plan":            "plan",
     },
 )
 

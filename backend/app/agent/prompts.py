@@ -383,7 +383,9 @@ HAS ATTACHED IMAGES: {has_images}
 5. MCP_TOOL — User wants to compute, track, manage, or summarize expenses, transactions, math expressions, reminders, or emails via system tools.
    Examples: "Fetch total spent on food and add expense", "List expenses", "Summarize expenses", "Calculate 12 * 12", "Remind me at 10 AM", "Send email"
 
-6. DOCUMENT_QA — Question about user's UPLOADED documents, personal projects, custom platforms/systems ("project I made", "my coding platform", "IoT project", "visualizer feature", "my chatbot", "my app"), resume, or profile data.
+6. DOCUMENT_QA — Question about user's UPLOADED documents, personal projects, custom platforms/systems, resume, or profile data.
+   Examples: "Tell me about my project", "What does my resume say about my experience?",
+             "Explain the feature in my uploaded doc", "What is my CGPA according to my transcript?"
 
 7. VISION — Analyze/describe/extract from an ATTACHED IMAGE.
 
@@ -392,9 +394,10 @@ HAS ATTACHED IMAGES: {has_images}
 ====== CRITICAL RULES FOR IS_PRIVATE_DOC_QUERY ======
 Set "is_private_doc_query": true if the user query asks ANY question about:
 - Their uploaded files, PDFs, notes, or code
-- Their personal projects ("project I made", "IoT project", "food tracking project")
-- Their custom platforms or software ("my coding platform", "visualizer feature", "my chatbot", "my app")
-- Their resume, CV, CGPA, grades, or work experience
+- Their personal projects (any project the user says they built or own)
+- Their custom platforms, software, or systems (anything described as "my [thing]"
+  where [thing] refers to something they created or uploaded)
+- Their resume, CV, academic record, grades, or work experience
 
 Reply with ONLY this JSON object (no markdown, no extra text):
 {{

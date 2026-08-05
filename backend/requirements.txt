@@ -35,6 +35,15 @@ langgraph>=0.0.26
 chromadb>=0.4.0
 openai>=1.0.0
 requests>=2.31.0
+
+# ── Production Reranker (Fix 3) ───────────────────────────────────────────────
+# Local cross-encoder model — replaces 10 LLM API calls per query reranking.
+# Model: cross-encoder/ms-marco-MiniLM-L-6-v2 (~22 MB, CPU-compatible)
+# Use torch CPU-only build for minimal install size in non-GPU environments.
+sentence-transformers>=2.6.0
+torch>=2.0.0
+
+
 # ── Web Search Providers ──────────────────────────────────────────────────────
 tavily-python>=0.5.0          # Tavily AI-curated search SDK
 google-search-results>=2.4.2  # SerpAPI official SDK (real Google results)

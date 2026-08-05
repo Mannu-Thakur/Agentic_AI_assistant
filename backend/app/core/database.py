@@ -55,11 +55,16 @@ def _build_async_engine():
             pool_pre_ping=True,
             connect_args={"check_same_thread": False, "timeout": 30},
         )
+    # PostgreSQL: full production pool configuration
+    # pool_recycle=1800: recycle connections every 30 min to avoid stale connections
+    # pool_timeout=10: raise after 10 s if no connection available (prevents request queuing)
     return create_async_engine(
         url,
         pool_pre_ping=True,
         pool_size=10,
         max_overflow=20,
+        pool_recycle=1800,
+        pool_timeout=10,
     )
 
 
@@ -74,6 +79,9 @@ AsyncSessionLocal = async_sessionmaker(
     class_=AsyncSession,
     expire_on_commit=False,
 )
+
+_db_type = "PostgreSQL" if not _is_sqlite(settings.DATABASE_URL) else "SQLite"
+logger.info(f"[DB] Engine initialised: {_db_type} | URL prefix: {settings.DATABASE_URL[:30]}...")
 
 # ── SQLite PRAGMA configuration for WAL mode (for sync and async) ─────────────
 @event.listens_for(engine, "connect")

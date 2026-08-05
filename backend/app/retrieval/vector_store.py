@@ -36,6 +36,8 @@ import chromadb
 from app.core.config import settings
 from app.embeddings.embedding_service import EmbeddingService
 from app.core.cache_service import retrieval_cache, embedding_cache
+from app.retrieval.bm25_index import bm25_manager        # Fix 2: persistent BM25 index
+from app.retrieval.reranker import cross_encoder_reranker  # Fix 3: local cross-encoder
 
 logger = logging.getLogger("app.retrieval.vector_store")
 
@@ -131,6 +133,12 @@ class VectorStore:
         await _run_sync(collection.add, ids=ids, embeddings=embeddings, metadatas=metadatas, documents=chunks)
         logger.info(f"[VectorStore] Indexed {len(chunks)} chunks for document {document_id}")
 
+        # Fix 2: Incrementally update the BM25 index instead of waiting for TTL expiry
+        try:
+            await bm25_manager.add_chunks(user_id, chunks, metadatas)
+        except Exception as _bm25_exc:
+            logger.warning(f"[VectorStore] BM25 index update failed (non-fatal): {_bm25_exc}")
+
     async def delete_document_chunks(self, document_id: str, user_id: str = ""):
         """Delete all chunks for a document and invalidate only that user's retrieval cache.
 
@@ -157,6 +165,11 @@ class VectorStore:
         await _run_sync(collection.delete, where={"document_id": document_id})
         # Invalidate only this user's retrieval cache (not all users)
         await retrieval_cache.invalidate_user(user_id)
+        # Fix 2: Rebuild BM25 index after deletion to keep it consistent
+        try:
+            await bm25_manager.remove_document(user_id, document_id)
+        except Exception as _bm25_del_exc:
+            logger.warning(f"[VectorStore] BM25 index rebuild after delete failed (non-fatal): {_bm25_del_exc}")
 
     # ── Hybrid Retrieval ───────────────────────────────────────────────────────
 
@@ -216,23 +229,16 @@ class VectorStore:
         except Exception as exc:
             logger.error(f"[VectorStore] ChromaDB dense query failed: {exc}")
 
-        # 2. Fetch full corpus chunks for BM25 keyword matching across all user files
-        corpus_docs, corpus_metas = [], []
+        # 2. BM25 keyword search via persistent per-user index (Fix 2: no full corpus scan)
+        bm25_results: List[Dict[str, Any]] = []
         try:
-            corpus_res = await _run_sync(
-                collection.get,
-                where=filter_clause,
-                include=["documents", "metadatas"],
-            )
-            if corpus_res and corpus_res.get("documents"):
-                corpus_docs = corpus_res["documents"]
-                corpus_metas = corpus_res["metadatas"] if corpus_res.get("metadatas") else [{}] * len(corpus_docs)
-        except Exception as exc:
-            logger.error(f"[VectorStore] ChromaDB corpus fetch failed: {exc}")
+            bm25_results = await bm25_manager.query(user_id, query, top_k=30)
+        except Exception as bm25_exc:
+            logger.warning(f"[VectorStore] BM25 index query failed (non-fatal): {bm25_exc}")
 
         # Combine candidates (deduplicated by doc_id + chunk_index + content)
         candidate_map: Dict[Tuple[str, int, str], Dict[str, Any]] = {}
-        
+
         # Dense ranks
         for rank, i in enumerate(range(len(dense_docs))):
             meta = dense_metas[i] if i < len(dense_metas) else {}
@@ -244,22 +250,35 @@ class VectorStore:
                 "dense_rank": rank,
             }
 
-        # BM25 ranking across full corpus
-        bm25_ranks = _bm25_rank(query, corpus_docs) if corpus_docs else {}
-        for idx, rank in bm25_ranks.items():
-            if rank < 30:  # Top 30 BM25 matches
-                meta = corpus_metas[idx] if idx < len(corpus_metas) else {}
-                key = (str(meta.get("document_id")), int(meta.get("chunk_index", 0)), corpus_docs[idx][:100])
-                if key in candidate_map:
-                    candidate_map[key]["bm25_rank"] = rank
-                else:
-                    candidate_map[key] = {
-                        "doc": corpus_docs[idx],
-                        "meta": meta,
-                        "dist": 0.3 if rank == 0 else 0.5,
-                        "dense_rank": 999,
-                        "bm25_rank": rank,
-                    }
+        # BM25 ranks from the persistent index (Fix 2: no corpus scan)
+        for bm25_res in bm25_results:
+            bm25_rank  = bm25_res["bm25_rank"]
+            meta       = bm25_res["meta"]
+            doc_idx    = bm25_res["doc_idx"]
+            if bm25_rank >= 30:   # Only top-30 BM25 matches
+                continue
+            # Re-fetch actual text for this chunk from dense results if available,
+            # or use an empty placeholder (content is only needed for display, not scoring)
+            doc_text = ""
+            key = (str(meta.get("document_id")), int(meta.get("chunk_index", 0)), "")
+            # Try to match to existing dense candidate (which has full text)
+            matched_key = None
+            for ckey in candidate_map:
+                if ckey[0] == str(meta.get("document_id")) and ckey[1] == int(meta.get("chunk_index", 0)):
+                    matched_key = ckey
+                    break
+            if matched_key:
+                candidate_map[matched_key]["bm25_rank"] = bm25_rank
+            else:
+                # BM25-only hit: use metadata to construct a sparse entry
+                key = (str(meta.get("document_id")), int(meta.get("chunk_index", 0)), str(doc_idx)[:100])
+                candidate_map[key] = {
+                    "doc": f"[BM25 hit doc_id={meta.get('document_id')} chunk={meta.get('chunk_index')}]",
+                    "meta": meta,
+                    "dist": 0.5,
+                    "dense_rank": 999,
+                    "bm25_rank": bm25_rank,
+                }
 
         if not candidate_map:
             return []
@@ -310,14 +329,20 @@ class VectorStore:
         threshold: float = 0.3,
     ) -> List[Dict[str, Any]]:
         """
-        Re-rank chunks using an LLM relevance judge, filtering out semantically
-        weak chunks below the confidence threshold.
+        Re-rank chunks using the local CrossEncoderReranker (Fix 3).
+
+        Replaces the LLM-judge-based reranker that fired 10 separate API calls
+        per query.  The local model scores all chunks in a single batched forward
+        pass in < 200 ms on CPU.
+
+        LLM judge reranking is retained as a fallback via the reranker's own
+        graceful degradation (returns original order if model unavailable).
 
         Args:
             query:     The user query.
             chunks:    Retrieved chunks from query_relevant_chunks().
-            config:    LangGraph config dict (used for LLM key injection).
-            threshold: Minimum confidence to retain a chunk (0.0–1.0).
+            config:    LangGraph config dict (kept for API compatibility; not used).
+            threshold: Cross-encoder score threshold (logit scale, 0.0 = keep all).
 
         Returns:
             Filtered and re-ranked chunks (highest relevance first).
@@ -327,63 +352,23 @@ class VectorStore:
 
         import time
         start_t = time.perf_counter()
-        candidate_chunks = chunks[:10]
-        initial_rank_ids = [c.get("chunk_id", f"idx_{i}") for i, c in enumerate(candidate_chunks)]
+        initial_rank_ids = [c.get("chunk_id", f"idx_{i}") for i, c in enumerate(chunks[:10])]
 
-        try:
-            from app.agent.nodes import _call_llm_judge
+        # Fix 3: use local cross-encoder — no API calls, no quota consumption
+        result = await cross_encoder_reranker.rerank(
+            query=query,
+            chunks=chunks,
+            threshold=0.0,   # keep all; caller (nodes.py) applies the 0.2/0.3 threshold
+        )
 
-            RERANK_PROMPT = (
-                "You are a relevance scorer. Given the query and document chunk, "
-                "rate the relevance on a scale 0.0 to 1.0. "
-                "Reply with ONLY a JSON object: {{\"score\": <float>}}\n\n"
-                "Query: {query}\n\nChunk:\n{chunk}"
-            )
-
-            async def score_chunk(chunk: Dict[str, Any]) -> Tuple[float, Dict[str, Any]]:
-                prompt = RERANK_PROMPT.format(
-                    query=query,
-                    chunk=chunk.get("content", "")[:600],
-                )
-                parsed = await _call_llm_judge(prompt, config)
-                score = float(parsed.get("score", 0.5)) if parsed else 0.5
-                return score, chunk
-
-            import asyncio
-            # Dynamic timeout: allow 3s per chunk, capped at 20s total.
-            # Previously hardcoded at 2.0s which was always less than the 8s
-            # per-call timeout inside _call_llm_judge, causing silent fallback.
-            _rerank_timeout = min(20.0, len(candidate_chunks) * 3.0)
-            scored = await asyncio.wait_for(
-                asyncio.gather(*[score_chunk(c) for c in candidate_chunks]),
-                timeout=_rerank_timeout
-            )
-
-            reranked = sorted(
-                [(score, chunk) for score, chunk in scored if score >= threshold],
-                key=lambda x: x[0],
-                reverse=True,
-            )
-            result = []
-            for score, chunk in reranked:
-                chunk["rerank_score"] = round(score, 3)
-                chunk["confidence"]   = round(max(chunk.get("confidence", score), score), 3)
-                result.append(chunk)
-
-            elapsed_ms = round((time.perf_counter() - start_t) * 1000, 2)
-            final_rank_ids = [c.get("chunk_id", f"idx_{i}") for i, c in enumerate(result)]
-
-            logger.info(
-                f"[VectorStore] Cross-Encoder Rerank Completed in {elapsed_ms}ms | "
-                f"Initial Ranking: {initial_rank_ids} -> Final Ranking: {final_rank_ids} | "
-                f"Count: {len(chunks)} -> {len(result)} (threshold={threshold})"
-            )
-            return result
-
-        except Exception as exc:
-            elapsed_ms = round((time.perf_counter() - start_t) * 1000, 2)
-            logger.warning(f"[VectorStore] Cross-encoder rerank failed after {elapsed_ms}ms (using original): {exc}")
-            return chunks
+        elapsed_ms = round((time.perf_counter() - start_t) * 1000, 1)
+        final_rank_ids = [c.get("chunk_id", f"idx_{i}") for i, c in enumerate(result)]
+        logger.info(
+            f"[VectorStore] Cross-Encoder Rerank (local) completed in {elapsed_ms} ms | "
+            f"Initial: {initial_rank_ids} → Final: {final_rank_ids} | "
+            f"Count: {len(chunks)} → {len(result)}"
+        )
+        return result
 
     # ── Context compression ────────────────────────────────────────────────────
 

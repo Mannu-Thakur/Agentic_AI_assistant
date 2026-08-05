@@ -330,6 +330,9 @@ class ParserService:
             else:
                 layout_type = "text"
 
+            if confidence < 0.60 or layout_type == "handwriting":
+                full_text += "\n[Note: Low OCR Confidence / Handwriting detected. Multimodal Vision recommended for high precision.]"
+
             logger.info(
                 f"[OCR] {os.path.basename(file_path)} — pages={page_count} "
                 f"layout={layout_type} confidence={confidence:.2f} has_tables={has_tables}"

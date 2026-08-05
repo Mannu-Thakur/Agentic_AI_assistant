@@ -107,18 +107,16 @@ groq_provider       = GroqProvider()
 openrouter_provider = OpenRouterProvider()
 openai_provider     = OpenAIProvider()
 
-# ── Personal-data & project document possession signals ────────────────────────
-_PERSONAL_DOC_SIGNALS = (
-    "my projects", "my project", "project i made", "project i built", "project i created",
-    "project i developed", "project i designed", "iot based project", "iot project",
-    "my coding platform", "coding platform", "my chatbot", "my bot", "my app", "my code",
-    "my cgpa", "my gpa", "my xgpa", "my resume", "my cv", "my skills", "my education",
-    "my degree", "my achievements", "my experience", "my internship", "my internships",
-    "my grades", "my marks", "my result", "my results", "my score", "my background",
-    "my profile", "my qualification", "my college", "my university", "my institute",
-    "my document", "my file", "my notes", "in the file", "uploaded", "from the file",
-    "according to my", "in my project", "in my app", "in my platform", "my platform",
-    "visualiser feature", "visualizer feature", "food tracking", "bugx", "zerixa"
+# ── Private-document routing signals ─────────────────────────────────────────
+# PRODUCTION FIX: Static _PERSONAL_DOC_SIGNALS has been REPLACED with a dynamic
+# system (app/agent/doc_signals.py) that builds signal sets from the user's actual
+# uploaded document filenames.  No project-specific names are hardcoded here.
+# Use get_user_doc_signals(user_id) to obtain the per-user combined signal set.
+from app.agent.doc_signals import (
+    get_user_doc_signals,
+    query_matches_user_signals,
+    classify_sub_questions,
+    UNIVERSAL_SIGNALS,
 )
 
 
@@ -823,11 +821,20 @@ async def classify_intent_node(
                 intent = INTENT_NORMAL_CHAT
 
 
-    # ── Personal-data & project document possession override ───────────────────
+    # ── Private-document possession override (dynamic, per-user) ───────────────
+    # Build the signal set from the user's actual uploaded filenames so that
+    # no developer-specific project names are hardcoded in routing logic.
     if last_query_clean:
-        q_low_personal = last_query_clean.lower()
-        if any(sig in q_low_personal for sig in _PERSONAL_DOC_SIGNALS):
+        _user_id_for_signals = state.get("user_id") or config.get("configurable", {}).get("user_id", "")
+        try:
+            _doc_signals = await get_user_doc_signals(_user_id_for_signals) if _user_id_for_signals else UNIVERSAL_SIGNALS
+        except Exception as _sig_err:
+            logger.warning(f"[DocSignals] Falling back to UNIVERSAL_SIGNALS: {_sig_err}")
+            _doc_signals = UNIVERSAL_SIGNALS
+
+        if query_matches_user_signals(last_query_clean, _doc_signals):
             is_private_doc_query = True
+            q_low_personal = last_query_clean.lower()
             if intent in (INTENT_WEB_SEARCH, INTENT_NEWS, INTENT_CURRENT_EVENTS) or any(w in q_low_personal for w in ("2024", "2025", "2026", "news", "today", "latest")):
                 intent = INTENT_COMPLEX
                 logger.info(
@@ -1299,7 +1306,8 @@ async def check_retrieval_node(
         steps.append("check_retrieval")
         return {"needs_retrieval": True, "steps": steps}
 
-    # For NORMAL_CHAT without uploaded files: check for personal possession signals
+    # For NORMAL_CHAT without uploaded files: check for personal possession signals.
+    # Uses UNIVERSAL_SIGNALS from doc_signals to avoid hardcoded project names.
     if intent in (INTENT_NORMAL_CHAT,):
         last_q_temp = state.get("resolved_query") or ""
         if not last_q_temp:
@@ -1307,18 +1315,7 @@ async def check_retrieval_node(
                 if hasattr(msg, "type") and msg.type in ("human", "user"):
                     last_q_temp = msg.content if isinstance(msg.content, str) else ""
                     break
-        _personal_signals = (
-            "my projects", "my project", "my cgpa", "my gpa", "my xgpa",
-            "my resume", "my cv", "my skills", "my education", "my degree",
-            "my achievements", "my experience", "my internship", "my internships",
-            "my grades", "my marks", "my result", "my results", "my score",
-            "my background", "my profile", "my qualification",
-            "my college", "my university", "my institute",
-            "my document", "my file", "my notes", "in the file",
-            "uploaded", "from the file", "according to my",
-        )
-        q_lower_temp = last_q_temp.lower()
-        if any(sig in q_lower_temp for sig in _personal_signals):
+        if query_matches_user_signals(last_q_temp, UNIVERSAL_SIGNALS):
             logger.info(
                 f"Self-RAG: personal-data signal detected in NORMAL_CHAT query "
                 f"→ forcing needs_retrieval=True for '{last_q_temp[:60]}'"
@@ -1596,10 +1593,11 @@ async def retrieve_context_node(
             candidate_chunks = merged_chunks[:max(dynamic_k * 2, 10)]
 
             # ── Cross-encoder re-ranking ──────────────────────────────────────────
-            # For compound queries, rerank against private-doc sub-questions specifically,
-            # so bugX chunks aren't discarded due to unrelated query text (chess/expenses).
+            # For compound queries, rerank against private-doc sub-questions specifically
+            # so private-doc chunks aren't discarded due to unrelated query text.
             sub_qs = state.get("sub_questions") or []
-            private_sub_qs = [sq for sq in sub_qs if any(sig in sq.lower() for sig in _PERSONAL_DOC_SIGNALS)]
+            _ret_signals = state.get("_doc_signals") or UNIVERSAL_SIGNALS
+            _, private_sub_qs = classify_sub_questions(sub_qs, _ret_signals)
             rerank_query = " | ".join(private_sub_qs) if private_sub_qs else last_query
 
             _rerank_word_count = len(rerank_query.split())
@@ -1800,12 +1798,13 @@ async def grade_documents_node(
     freshness_required = any(k in query_lower for k in freshness_keywords)
 
     # 2b. For COMPLEX queries: build a doc-specific grading query from private-doc sub-questions only.
-    # This prevents bugX document chunks from being graded as irrelevant just because the
-    # full compound query also contains "chess 2026" or "total expenses".
+    # This prevents private-doc chunks from being graded as irrelevant just because the
+    # full compound query also contains public sub-questions (chess 2026, total expenses, etc.).
     grading_query = last_query
     if intent == INTENT_COMPLEX and is_private:
         sub_qs = state.get("sub_questions") or []
-        private_sub_qs = [sq for sq in sub_qs if any(sig in sq.lower() for sig in _PERSONAL_DOC_SIGNALS)]
+        _grade_signals = state.get("_doc_signals") or UNIVERSAL_SIGNALS
+        _, private_sub_qs = classify_sub_questions(sub_qs, _grade_signals)
         if private_sub_qs:
             grading_query = " | ".join(private_sub_qs)
             # Private doc grading is never freshness-required
@@ -1897,8 +1896,9 @@ async def grade_documents_node(
     # We separate sub_questions into public and private lists and handle each correctly.
     sub_questions_all: List[str] = state.get("sub_questions") or []
     # Classify sub-questions as public (need web) vs private (need docs)
-    public_sub_questions  = [sq for sq in sub_questions_all if not any(sig in sq.lower() for sig in _PERSONAL_DOC_SIGNALS)]
-    private_sub_questions = [sq for sq in sub_questions_all if any(sig in sq.lower() for sig in _PERSONAL_DOC_SIGNALS)]
+    # Uses per-user dynamic signals — no project-specific names hardcoded.
+    _grade_ws_signals = state.get("_doc_signals") or UNIVERSAL_SIGNALS
+    public_sub_questions, private_sub_questions = classify_sub_questions(sub_questions_all, _grade_ws_signals)
 
     # Always search web for public sub-questions regardless of is_private flag
     has_public_sub_questions = len(public_sub_questions) > 0

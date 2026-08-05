@@ -537,21 +537,23 @@ def format_for_llm(results: List[Any]) -> str:
 
 def format_as_source_documents(results: List[Any]) -> List[Dict[str, Any]]:
     """
-    Convert ranked results to source_documents list.
-    Each result becomes its own citable source — no more single-blob problem.
+    Convert ranked results to source_documents list with explicit web source metadata.
+    Each result becomes its own citable web source with distinct UI tagging.
     """
     results_list = _ensure_search_results(results)
     docs = []
     for i, r in enumerate(results_list, start=1):
         docs.append({
-            "index":    i,
-            "filename": r.title or r.url,
-            "content":  r.snippet,
-            "url":      r.url,
-            "distance": round(1.0 - r.score, 4),   # lower distance = higher relevance
-            "confidence": r.score,
-            "source":   r.source,
-            "published": r.published,
-            "used":     True,
+            "index":       i,
+            "filename":    f"[Web] {r.title}" if r.title else f"[Web] {r.url}",
+            "content":     r.snippet,
+            "url":         r.url,
+            "distance":    round(1.0 - r.score, 4),   # lower distance = higher relevance
+            "confidence":  r.score,
+            "source":      r.source,
+            "published":   r.published,
+            "is_web":      True,
+            "source_type": "web",
+            "used":        True,
         })
     return docs

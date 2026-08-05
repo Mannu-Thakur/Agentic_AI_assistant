@@ -73,6 +73,14 @@ class Settings(BaseSettings):
     ]
 
     # Database
+    # ── PRODUCTION NOTE ────────────────────────────────────────────────────────
+    # SQLite is acceptable ONLY for ENVIRONMENT=development.
+    # For staging / production set DATABASE_URL to a PostgreSQL connection string:
+    #
+    #   DATABASE_URL=postgresql://user:password@localhost:5432/dbname
+    #   DATABASE_URL=postgresql+asyncpg://user:password@localhost:5432/dbname
+    #
+    # The server will refuse to start if SQLite is configured in staging/production.
     DATABASE_URL: str = "sqlite:///./sql_app.db"
 
     @property
@@ -158,6 +166,27 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _post_init(self) -> "Settings":
+        # ── Database engine enforcement ─────────────────────────────────────
+        # SQLite cannot handle concurrent writes from multiple async workers.
+        # In staging and production environments we require PostgreSQL.
+        _db_url = self.DATABASE_URL.lower()
+        _is_sqlite = _db_url.startswith("sqlite")
+        if _is_sqlite and self.ENVIRONMENT in ("staging", "production"):
+            logger.critical(
+                "FATAL: SQLite is configured as the database in a "
+                f"{self.ENVIRONMENT} environment. SQLite cannot handle concurrent "
+                "writes from multiple async workers and will cause data corruption "
+                "and request failures under load. "
+                "Set DATABASE_URL to a PostgreSQL connection string in your .env file "
+                "(e.g. postgresql://user:pass@localhost:5432/yourdb) and restart."
+            )
+            sys.exit(1)
+        elif _is_sqlite and self.ENVIRONMENT == "development":
+            logger.warning(
+                "[DB] Using SQLite in development mode. "
+                "Set DATABASE_URL=postgresql://... in .env for staging/production."
+            )
+
         # ── Secret key hardening ────────────────────────────────────────────
         if self.SECRET_KEY == _DEFAULT_SECRET_KEY:
             if self.ENVIRONMENT in ("staging", "production"):

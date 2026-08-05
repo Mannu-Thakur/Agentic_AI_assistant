@@ -5,6 +5,7 @@ from sqlalchemy import select, delete, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.document import Document
 from app.retrieval.vector_store import VectorStore
+from app.agent.doc_signals import invalidate_user_signals
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,8 @@ class DocumentService:
         db.add(doc)
         await db.commit()
         await db.refresh(doc)
+        # Invalidate routing signal cache so next query picks up this new filename
+        invalidate_user_signals(user_id)
         return doc
 
     @staticmethod
@@ -85,4 +88,6 @@ class DocumentService:
         # 3. Remove relational entry
         await db.delete(doc)
         await db.commit()
+        # Invalidate routing signal cache so deleted filename is no longer a signal
+        invalidate_user_signals(user_id)
         return True
