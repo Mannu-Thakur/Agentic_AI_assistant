@@ -61,6 +61,8 @@ pillow>=10.0.0
 pytesseract>=0.3.10
 pdf2image>=1.17.0
 opencv-python-headless>=4.8.0
+easyocr>=1.7.0                  # Neural OCR engine for handwriting/unstructured text extraction
+
 
 # ── Utilities ────────────────────────────────────────────────────────────────
 python-dotenv>=1.0.0

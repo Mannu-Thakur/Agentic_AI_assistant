@@ -165,8 +165,8 @@ def _extract_last_user_query(messages: list) -> str:
     return ""
 
 
-def _perform_tesseract_ocr_on_images(images: list) -> str:
-    """Extract text from base64 image payload using local Tesseract OCR fallback."""
+def _perform_local_ocr_on_images(images: list) -> str:
+    """Extract text from base64 image payload using local multi-engine OCR (EasyOCR / Tesseract fallback)."""
     import base64
     from app.services.parser_service import ParserService
     ocr_outputs = []
@@ -180,8 +180,13 @@ def _perform_tesseract_ocr_on_images(images: list) -> str:
             if res and res.text and res.text.strip():
                 ocr_outputs.append(f"[Image {idx} OCR Text]:\n{res.text.strip()}")
         except Exception as exc:
-            logger.warning(f"[Tesseract OCR Fallback] Error processing image {idx}: {exc}")
+            logger.warning(f"[Local OCR Fallback] Error processing image {idx}: {exc}")
     return "\n\n".join(ocr_outputs)
+
+
+# Backward compatibility alias
+_perform_tesseract_ocr_on_images = _perform_local_ocr_on_images
+
 
 
 def _extract_api_keys(config: dict) -> dict:
@@ -776,26 +781,17 @@ async def classify_intent_node(
         q_lower = last_query_clean.lower()
         _word_count = len(last_query_clean.split())
 
-        # Fast-path 1: Unambiguous memory-write signals (saves LLM round-trip)
-        _memory_openers = (
-            "remember that", "remember this", "note that my", "note that i",
-            "save that i", "save that my", "keep in mind that", "keep in mind i",
-            "store this", "save this", "don't forget that", "don't forget i",
-            "make a note that", "make a note:", "note this",
+        # Fast-path 3: Unambiguous MCP / Expense / Math / Action signals
+        _mcp_action_signals = (
+            "mcp server", "mcp tool", "expense mcp", "add expense", "add an expense",
+            "log expense", "track expense", "new expense", "get expenses", "list expenses",
+            "show expenses", "total spent", "total spend", "expense breakdown",
+            "summarize expenses", "expense summary", "category summary", "monthly summary",
+            "top merchants", "create reminder", "set reminder", "send email", "send an email",
         )
-        _question_starters = ("what", "who", "where", "when", "why", "how", "do you", "can you", "is my", "what's")
-        if any(sig in q_lower for sig in _memory_openers) and not any(q_lower.startswith(qs) for qs in _question_starters):
-            intent = INTENT_MEMORY_WRITE
-            logger.info(f"classify_intent_node: Memory-write fast-path for: '{last_query_clean[:60]}'")
-
-        # Fast-path 2: Pure greetings / filler (≤ 4 words, no meaningful content)
-        elif _word_count <= 4 and q_lower.strip() in {
-            "hi", "hello", "hey", "thanks", "thank you", "ok", "okay", "sure",
-            "yes", "no", "bye", "goodbye", "good morning", "good evening",
-            "good night", "lol", "haha", "hmm", "cool", "nice", "great",
-        }:
-            intent = INTENT_NORMAL_CHAT
-            logger.info(f"classify_intent_node: Greeting fast-path for: '{last_query_clean[:60]}'")
+        if any(sig in q_lower for sig in _mcp_action_signals):
+            intent = INTENT_MCP_TOOL
+            logger.info(f"classify_intent_node: MCP tool fast-path for: '{last_query_clean[:60]}'")
 
         else:
             # ── LLM judge: real-time semantic classification ──────────────────
@@ -818,7 +814,12 @@ async def classify_intent_node(
                 if lang_from_llm and lang_from_llm.lower() not in ("unknown", "none", ""):
                     detected_language = lang_from_llm
             else:
-                intent = INTENT_NORMAL_CHAT
+                # Robust Fallback: if LLM judge fails, inspect query for MCP / action signals before defaulting to NORMAL_CHAT
+                if any(sig in q_lower for sig in _mcp_action_signals) or any(w in q_lower for w in ("expense", "spent", "mcp")):
+                    intent = INTENT_MCP_TOOL
+                    logger.info(f"classify_intent_node: LLM judge failed, fallback to INTENT_MCP_TOOL for '{last_query_clean[:60]}'")
+                else:
+                    intent = INTENT_NORMAL_CHAT
 
 
     # ── Private-document possession override (dynamic, per-user) ───────────────
@@ -835,16 +836,23 @@ async def classify_intent_node(
         if query_matches_user_signals(last_query_clean, _doc_signals):
             is_private_doc_query = True
             q_low_personal = last_query_clean.lower()
-            if intent in (INTENT_WEB_SEARCH, INTENT_NEWS, INTENT_CURRENT_EVENTS) or any(w in q_low_personal for w in ("2024", "2025", "2026", "news", "today", "latest")):
-                intent = INTENT_COMPLEX
-                logger.info(
-                    f"classify_intent_node: hybrid doc + web query detected → INTENT_COMPLEX "
-                    f"(is_private_doc_query=True) for query='{last_query_clean[:60]}'"
-                )
+            # CRITICAL FIX: Do NOT override active tool/action intents (MCP_TOOL, CODE_EXECUTION, MATH, FINANCE, MEMORY_WRITE)
+            if intent not in (INTENT_MCP_TOOL, INTENT_CODE_EXECUTION, INTENT_MATH, INTENT_FINANCE, INTENT_MEMORY_WRITE, INTENT_VISION):
+                if intent in (INTENT_WEB_SEARCH, INTENT_NEWS, INTENT_CURRENT_EVENTS) or any(w in q_low_personal for w in ("2024", "2025", "2026", "news", "today", "latest")):
+                    intent = INTENT_COMPLEX
+                    logger.info(
+                        f"classify_intent_node: hybrid doc + web query detected → INTENT_COMPLEX "
+                        f"(is_private_doc_query=True) for query='{last_query_clean[:60]}'"
+                    )
+                else:
+                    intent = INTENT_DOCUMENT_QA
+                    logger.info(
+                        f"classify_intent_node: personal-data signal detected → DOCUMENT_QA "
+                        f"(is_private_doc_query=True) for query='{last_query_clean[:60]}'"
+                    )
             else:
-                intent = INTENT_DOCUMENT_QA
                 logger.info(
-                    f"classify_intent_node: personal-data signal detected → DOCUMENT_QA "
+                    f"classify_intent_node: personal-data signal detected but preserving tool intent={intent} "
                     f"(is_private_doc_query=True) for query='{last_query_clean[:60]}'"
                 )
 

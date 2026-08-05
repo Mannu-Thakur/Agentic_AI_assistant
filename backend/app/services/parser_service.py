@@ -233,16 +233,61 @@ class ParserService:
             logger.debug(f"[OCR] Preprocessing skipped ({preproc_exc}); using raw image")
             return img.convert("RGB")
 
+    _easyocr_reader = None
+
+    @classmethod
+    def _get_easyocr_reader(cls):
+        """Lazy-initialize EasyOCR reader (with CUDA detection if available)."""
+        if cls._easyocr_reader is None:
+            try:
+                import torch
+                use_gpu = torch.cuda.is_available()
+            except Exception:
+                use_gpu = False
+            try:
+                import easyocr
+                cls._easyocr_reader = easyocr.Reader(["en"], gpu=use_gpu, verbose=False)
+                logger.info(f"[EasyOCR] Initialized EasyOCR Reader (gpu={use_gpu})")
+            except Exception as exc:
+                logger.debug(f"[EasyOCR] EasyOCR initialization unavailable ({exc})")
+                cls._easyocr_reader = False
+        return cls._easyocr_reader if cls._easyocr_reader is not False else None
+
+    @classmethod
+    def _run_easyocr_on_pil_image(cls, pil_img) -> Optional[OcrResult]:
+        """Attempt handwriting/neural text extraction using EasyOCR if installed."""
+        reader = cls._get_easyocr_reader()
+        if not reader:
+            return None
+        try:
+            import numpy as np
+            img_np = np.array(pil_img.convert("RGB"))
+            results = reader.readtext(img_np, detail=0, paragraph=True)
+            text = "\n".join([str(line).strip() for line in results if str(line).strip()]).strip()
+            if text:
+                word_count = len(text.split())
+                logger.info(f"[EasyOCR] Successfully extracted {word_count} words from image.")
+                return OcrResult(
+                    text=text,
+                    confidence=0.85,
+                    has_tables=False,
+                    layout_type="handwriting",
+                )
+        except Exception as exc:
+            logger.warning(f"[EasyOCR] Extraction error: {exc}")
+        return None
+
     @classmethod
     def extract_text_image(cls, file_path: str) -> OcrResult:
         """
-        Extract text from an image (PNG/JPEG/TIFF/BMP/WEBP) using pytesseract
+        Extract text from an image (PNG/JPEG/TIFF/BMP/WEBP) using pytesseract/EasyOCR
         with full preprocessing pipeline:
           - Image normalization & upscaling
           - Grayscale + CLAHE contrast enhancement
           - Gaussian noise removal
           - Otsu binarization (deskewing handled implicitly by binarization)
           - Confidence scoring (mean character confidence)
+          - EasyOCR handwriting/neural OCR fallback when Tesseract confidence is low
           - Layout detection (text / table / form / handwriting)
 
         For scanned PDFs, use extract_text_pdf_ocr() instead.
@@ -251,73 +296,83 @@ class ParserService:
         try:
             from PIL import Image
             import pytesseract
+            tess_available = True
+            try:
+                pytesseract.get_tesseract_version()
+            except Exception:
+                tess_available = False
         except ImportError:
-            return OcrResult(
-                text=f"[OCR unavailable: install pytesseract and Tesseract-OCR for image '{os.path.basename(file_path)}']",
-                confidence=0.0,
-                has_tables=False,
-                layout_type="text",
-            )
-
-        # Verify Tesseract binary is reachable
-        try:
-            pytesseract.get_tesseract_version()
-        except Exception as tess_err:
-            return OcrResult(
-                text=f"[Tesseract not installed or not in PATH: {tess_err}]",
-                confidence=0.0,
-                has_tables=False,
-                layout_type="text",
-            )
+            tess_available = False
 
         try:
             with Image.open(file_path) as raw_img:
-                # Handle multi-page TIFF
-                pages: List[str] = []
-                page_confs: List[float] = []
-                try:
-                    page_count = getattr(raw_img, "n_frames", 1)
-                except Exception:
+                if tess_available:
+                    # Handle multi-page TIFF
+                    pages: List[str] = []
+                    page_confs: List[float] = []
+                    try:
+                        page_count = getattr(raw_img, "n_frames", 1)
+                    except Exception:
+                        page_count = 1
+
+                    for page_idx in range(page_count):
+                        try:
+                            raw_img.seek(page_idx)
+                        except EOFError:
+                            break
+
+                        img = cls._preprocess_image_for_ocr(raw_img.copy())
+
+                        # ── Text extraction ─────────────────────────────────────
+                        page_text = pytesseract.image_to_string(img, config="--oem 3 --psm 6")
+                        pages.append(page_text)
+
+                        # ── Confidence scoring ──────────────────────────────────
+                        try:
+                            data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
+                            confs = [
+                                c for c in data.get("conf", [])
+                                if isinstance(c, (int, float)) and int(c) >= 0
+                            ]
+                            page_confs.append(round(sum(confs) / (len(confs) * 100), 3) if confs else 0.5)
+                        except Exception:
+                            page_confs.append(0.5)
+
+                    full_text = "\n".join(pages).strip()
+                    confidence = round(sum(page_confs) / max(len(page_confs), 1), 3)
+                else:
+                    full_text = ""
+                    confidence = 0.0
                     page_count = 1
 
-                for page_idx in range(page_count):
-                    try:
-                        raw_img.seek(page_idx)
-                    except EOFError:
-                        break
+                # If Tesseract returned low confidence or empty text, attempt EasyOCR rescue
+                if not full_text or len(full_text.split()) < 5 or confidence < 0.55:
+                    easy_res = cls._run_easyocr_on_pil_image(raw_img)
+                    if easy_res and easy_res.text:
+                        return easy_res
 
-                    img = cls._preprocess_image_for_ocr(raw_img.copy())
-
-                    # ── Text extraction ─────────────────────────────────────
-                    page_text = pytesseract.image_to_string(img, config="--oem 3 --psm 6")
-                    pages.append(page_text)
-
-                    # ── Confidence scoring ──────────────────────────────────
-                    try:
-                        data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
-                        confs = [
-                            c for c in data.get("conf", [])
-                            if isinstance(c, (int, float)) and int(c) >= 0
-                        ]
-                        page_confs.append(round(sum(confs) / (len(confs) * 100), 3) if confs else 0.5)
-                    except Exception:
-                        page_confs.append(0.5)
-
-                full_text = "\n".join(pages)
-                confidence = round(sum(page_confs) / max(len(page_confs), 1), 3)
+                if not full_text and not tess_available:
+                    return OcrResult(
+                        text=f"[OCR unavailable: install pytesseract/Tesseract-OCR or EasyOCR for image '{os.path.basename(file_path)}']",
+                        confidence=0.0,
+                        has_tables=False,
+                        layout_type="text",
+                    )
 
                 # ── Layout detection via HOCR ────────────────────────────────
-                try:
-                    hocr = pytesseract.image_to_pdf_or_hocr(
-                        cls._preprocess_image_for_ocr(raw_img.convert("RGB")),
-                        extension="hocr"
-                    ).decode("utf-8", errors="ignore")
-                    has_tables = bool(
-                        re.search(r"<span[^>]+class=['\"]ocr_line['\"]", hocr, re.I)
-                        and hocr.count("ocr_line") > 10
-                    )
-                except Exception:
-                    has_tables = False
+                has_tables = False
+                if tess_available:
+                    try:
+                        hocr = pytesseract.image_to_pdf_or_hocr(
+                            cls._preprocess_image_for_ocr(raw_img.convert("RGB")),
+                            extension="hocr"
+                        ).decode("utf-8", errors="ignore")
+                        has_tables = bool(
+                            re.search(r"<span[^>]+class=['\"]ocr_line['\"]", hocr, re.I)
+                            and hocr.count("ocr_line") > 10
+                        )
+                    except Exception:
+                        has_tables = False
 
             # ── Layout type heuristic ─────────────────────────────────────
             text_lower = full_text.lower()
@@ -356,72 +411,146 @@ class ParserService:
     @classmethod
     def extract_text_image_bytes(cls, image_bytes: bytes) -> OcrResult:
         """
-        Extract text from raw image bytes (PNG/JPEG/WEBP/BMP/TIFF) using pytesseract
+        Extract text from raw image bytes (PNG/JPEG/WEBP/BMP/TIFF) using pytesseract/EasyOCR
         with image preprocessing. Used as a fallback when vision API is unavailable.
         """
         try:
             import io
             from PIL import Image
-            import pytesseract
-        except ImportError:
-            return OcrResult(
-                text="[OCR unavailable: install pytesseract and Pillow]",
-                confidence=0.0,
-                has_tables=False,
-                layout_type="text",
-            )
-
-        try:
-            with Image.open(io.BytesIO(image_bytes)) as raw_img:
-                preproc_img = cls._preprocess_image_for_ocr(raw_img)
-                candidates = []
-
-                # Multi-pass OCR: try combinations of preprocessed & raw images with PSM 6, PSM 11 (sparse text), and PSM 3 (auto layout)
-                passes = [
-                    (preproc_img, "--oem 3 --psm 6"),
-                    (preproc_img, "--oem 3 --psm 11"),
-                    (preproc_img, "--oem 3 --psm 3"),
-                    (raw_img.convert("RGB"), "--oem 3 --psm 6"),
-                    (raw_img.convert("RGB"), "--oem 3 --psm 11"),
-                ]
-
-                for img_target, config_str in passes:
-                    try:
-                        t = pytesseract.image_to_string(img_target, config=config_str).strip()
-                        if t:
-                            data = pytesseract.image_to_data(img_target, output_type=pytesseract.Output.DICT)
-                            confs = [c for c in data.get("conf", []) if isinstance(c, (int, float)) and int(c) >= 0]
-                            conf = round(sum(confs) / (len(confs) * 100), 3) if confs else 0.5
-                            word_count = len(t.split())
-                            candidates.append((word_count, conf, t))
-                    except Exception:
-                        continue
-
-                if candidates:
-                    # Pick candidate with highest word count (most text extracted) and best confidence
-                    candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
-                    best_words, best_conf, best_text = candidates[0]
-                    return OcrResult(
-                        text=best_text,
-                        confidence=best_conf,
-                        has_tables=False,
-                        layout_type="handwriting" if best_conf < 0.6 else "text",
-                    )
-
-                return OcrResult(
-                    text="[No readable text found in image]",
-                    confidence=0.0,
-                    has_tables=False,
-                    layout_type="text",
-                )
+            raw_img = Image.open(io.BytesIO(image_bytes))
         except Exception as exc:
-            logger.warning(f"[OCR] Failed on image bytes: {exc}")
             return OcrResult(
-                text=f"[OCR failed on image bytes: {exc}]",
+                text=f"[OCR unavailable: failed to open image bytes ({exc})]",
                 confidence=0.0,
                 has_tables=False,
                 layout_type="text",
             )
+
+        # Attempt Tesseract multi-pass OCR if pytesseract is installed
+        candidates = []
+        try:
+            import pytesseract
+            preproc_img = cls._preprocess_image_for_ocr(raw_img)
+            passes = [
+                (preproc_img, "--oem 3 --psm 6"),
+                (preproc_img, "--oem 3 --psm 11"),
+                (preproc_img, "--oem 3 --psm 3"),
+                (raw_img.convert("RGB"), "--oem 3 --psm 6"),
+                (raw_img.convert("RGB"), "--oem 3 --psm 11"),
+            ]
+            for img_target, config_str in passes:
+                try:
+                    t = pytesseract.image_to_string(img_target, config=config_str).strip()
+                    if t:
+                        data = pytesseract.image_to_data(img_target, output_type=pytesseract.Output.DICT)
+                        confs = [c for c in data.get("conf", []) if isinstance(c, (int, float)) and int(c) >= 0]
+                        conf = round(sum(confs) / (len(confs) * 100), 3) if confs else 0.5
+                        word_count = len(t.split())
+                        candidates.append((word_count, conf, t))
+                except Exception:
+                    continue
+        except ImportError:
+            pass
+
+    @classmethod
+    def _clean_ocr_noise(cls, text: str) -> str:
+        """Filter out garbled OCR noise lines (random symbols, solitary brackets, backslashes)."""
+        if not text:
+            return ""
+        cleaned = []
+        for line in text.splitlines():
+            s = line.strip()
+            if not s:
+                continue
+            if len(s) == 1 and not s.isalnum():
+                continue
+            letters = sum(1 for c in s if c.isalpha())
+            if letters == 0:
+                continue
+            if len(s) > 3 and (letters / len(s)) < 0.30:
+                continue
+            cleaned.append(s)
+        return "\n".join(cleaned).strip()
+
+    @classmethod
+    def extract_text_image_bytes(cls, image_bytes: bytes) -> OcrResult:
+        """
+        Extract text from raw image bytes (PNG/JPEG/WEBP/BMP/TIFF) using pytesseract/EasyOCR
+        with image preprocessing. Used as a fallback when vision API is unavailable.
+        """
+        try:
+            import io
+            from PIL import Image
+            raw_img = Image.open(io.BytesIO(image_bytes))
+        except Exception as exc:
+            return OcrResult(
+                text=f"[OCR unavailable: failed to open image bytes ({exc})]",
+                confidence=0.0,
+                has_tables=False,
+                layout_type="text",
+            )
+
+        # Attempt Tesseract multi-pass OCR if pytesseract is installed
+        candidates = []
+        try:
+            import pytesseract
+            preproc_img = cls._preprocess_image_for_ocr(raw_img)
+            passes = [
+                (preproc_img, "--oem 3 --psm 6"),
+                (preproc_img, "--oem 3 --psm 11"),
+                (preproc_img, "--oem 3 --psm 3"),
+                (raw_img.convert("RGB"), "--oem 3 --psm 6"),
+                (raw_img.convert("RGB"), "--oem 3 --psm 11"),
+            ]
+            for img_target, config_str in passes:
+                try:
+                    t = pytesseract.image_to_string(img_target, config=config_str).strip()
+                    cleaned_t = cls._clean_ocr_noise(t)
+                    if cleaned_t:
+                        data = pytesseract.image_to_data(img_target, output_type=pytesseract.Output.DICT)
+                        confs = [c for c in data.get("conf", []) if isinstance(c, (int, float)) and int(c) >= 0]
+                        conf = round(sum(confs) / (len(confs) * 100), 3) if confs else 0.5
+                        word_count = len(cleaned_t.split())
+                        candidates.append((word_count, conf, cleaned_t))
+                except Exception:
+                    continue
+        except ImportError:
+            pass
+
+        # Evaluate Tesseract results
+        if candidates:
+            candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
+            best_words, best_conf, best_text = candidates[0]
+
+            # If Tesseract produced solid text with good confidence, return it
+            if best_words >= 5 and best_conf >= 0.55:
+                return OcrResult(
+                    text=best_text,
+                    confidence=best_conf,
+                    has_tables=False,
+                    layout_type="handwriting" if best_conf < 0.6 else "text",
+                )
+
+        # If Tesseract returned empty/low-confidence/short text, trigger EasyOCR rescue
+        easy_res = cls._run_easyocr_on_pil_image(raw_img)
+        if easy_res and easy_res.text:
+            return easy_res
+
+        if candidates:
+            best_words, best_conf, best_text = candidates[0]
+            return OcrResult(
+                text=best_text,
+                confidence=best_conf,
+                has_tables=False,
+                layout_type="handwriting",
+            )
+
+        return OcrResult(
+            text="[No readable text found in image]",
+            confidence=0.0,
+            has_tables=False,
+            layout_type="text",
+        )
 
     @classmethod
     def extract_text_pdf_ocr(cls, file_path: str) -> OcrResult:
