@@ -31,10 +31,7 @@ services:
       - key: SECRET_KEY
         generateValue: true
       - key: FRONTEND_URL
-        fromService:
-          type: web
-          name: ai-assistant-frontend
-          property: url
+        value: https://ai-assistant-frontend.onrender.com
       - key: BACKEND_CORS_ORIGINS
         value: '["https://ai-assistant-frontend.onrender.com"]'
       - key: GOOGLE_REDIRECT_URI
@@ -76,10 +73,7 @@ services:
     healthCheckPath: /health
     envVars:
       - key: VITE_API_BASE_URL
-        fromService:
-          type: web
-          name: ai-assistant-backend
-          property: url
+        value: https://ai-assistant-backend.onrender.com
 
   # ── Redis Cache Service ───────────────────────────────────────────────────
   - type: redis
