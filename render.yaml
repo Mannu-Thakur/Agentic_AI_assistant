@@ -36,7 +36,21 @@ services:
         sync: false
       - key: OPENAI_API_KEY
         sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
       - key: TAVILY_API_KEY
+        sync: false
+      - key: SERP_API_KEY
+        sync: false
+      - key: EXA_API_KEY
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GITHUB_CLIENT_ID
+        sync: false
+      - key: GITHUB_CLIENT_SECRET
         sync: false
       - key: BACKEND_CORS_ORIGINS
         value: '["*"]'
@@ -54,13 +68,16 @@ services:
         fromService:
           type: web
           name: ai-assistant-backend
-          property: url
+          property: host
 
   # ── Redis Cache Service ───────────────────────────────────────────────────
   - type: redis
     name: ai-assistant-redis
     plan: starter
     maxmemoryPolicy: allkeys-lru
+    ipAllowList:
+      - source: 0.0.0.0/0
+        description: everywhere
 
 # ── Managed PostgreSQL Database ──────────────────────────────────────────────
 databases:
