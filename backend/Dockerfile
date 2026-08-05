@@ -18,7 +18,7 @@ RUN apt-get update -o Acquire::Retries=3 && apt-get install -y -o Acquire::Retri
 
 # Install Python dependencies first (layer cache)
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir --default-timeout=100 --retries 5 -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
 
 # Copy application source (backend/.dockerignore excludes .env, venv, *.db, etc.)
 COPY . .
