@@ -270,6 +270,27 @@ python -m pytest tests
 ```
 
 ---
+## Screenshots
+<img width="1919" height="1077" alt="image" src="https://github.com/user-attachments/assets/c3789c67-3ec3-4172-9206-bd29e7480979" />
+<img width="1919" height="1070" alt="image" src="https://github.com/user-attachments/assets/a8152484-0b2d-4255-b545-3035cdf17e32" />
+<img width="1919" height="1070" alt="image" src="https://github.com/user-attachments/assets/d47bb8d1-7a31-40c1-a270-8af46f66ad60" />
+<img width="1919" height="1072" alt="image" src="https://github.com/user-attachments/assets/fe9ae77c-3d65-4103-8c4c-9491c5adde8f" />
+<img width="1918" height="1072" alt="image" src="https://github.com/user-attachments/assets/e2bcc44d-5603-4744-8b02-69a0c8469014" />
+<img width="1919" height="1079" alt="image" src="https://github.com/user-attachments/assets/54ab2a3c-c570-4c8f-b2b0-2902c5e01016" />
+<img width="1919" height="1070" alt="image" src="https://github.com/user-attachments/assets/bbeff630-7591-49dc-814a-0eac530fac56" />
+<img width="1917" height="1072" alt="image" src="https://github.com/user-attachments/assets/9d9e4453-d997-4ea3-9b35-6dcf3439a244" />
+<img width="1919" height="1065" alt="image" src="https://github.com/user-attachments/assets/46a07944-2d14-47ef-932b-c56901222272" />
+<img width="1919" height="1067" alt="image" src="https://github.com/user-attachments/assets/1b615035-7eb1-485b-b335-4d06f0f093b8" />
+<img width="1919" height="1064" alt="image" src="https://github.com/user-attachments/assets/d4a0881a-95b2-4e12-9fba-cfe3aa336bb8" />
+<img width="1919" height="1070" alt="image" src="https://github.com/user-attachments/assets/2ca8bb05-2857-4d4c-91f6-b0b943dee8a3" />
+<img width="1905" height="1074" alt="image" src="https://github.com/user-attachments/assets/25220bab-a12e-49b4-bbe6-d515141c1bb4" />
+<img width="1919" height="1057" alt="image" src="https://github.com/user-attachments/assets/d46a966b-f188-43ef-957e-4f7dd90b7920" />
+<img width="1919" height="1046" alt="image" src="https://github.com/user-attachments/assets/4366463a-8fb3-45a2-b3d1-31e9ebb0866b" />
+
+
+
+
+
 
 ## 📡 Key API Endpoints Summary
 
