@@ -324,7 +324,7 @@ class ParserService:
                         img = cls._preprocess_image_for_ocr(raw_img.copy())
 
                         # ── Text extraction ─────────────────────────────────────
-                        page_text = pytesseract.image_to_string(img, config="--oem 3 --psm 6")
+                        page_text = pytesseract.image_to_string(img, config="--oem 3 --psm 11")
                         pages.append(page_text)
 
                         # ── Confidence scoring ──────────────────────────────────
@@ -346,7 +346,7 @@ class ParserService:
                     page_count = 1
 
                 # If Tesseract returned low confidence or empty text, attempt EasyOCR rescue
-                if not full_text or len(full_text.split()) < 5 or confidence < 0.55:
+                if not full_text or len(full_text.split()) < 5 or confidence < 0.50:
                     easy_res = cls._run_easyocr_on_pil_image(raw_img)
                     if easy_res and easy_res.text:
                         return easy_res
@@ -454,7 +454,7 @@ class ParserService:
 
     @classmethod
     def _clean_ocr_noise(cls, text: str) -> str:
-        """Filter out garbled OCR noise lines (random symbols, solitary brackets, backslashes)."""
+        """Filter garbled OCR noise and join short fragment lines into readable paragraphs."""
         if not text:
             return ""
         cleaned = []
@@ -462,15 +462,31 @@ class ParserService:
             s = line.strip()
             if not s:
                 continue
+            # Drop single non-alphanumeric chars (brackets, slashes, etc)
             if len(s) == 1 and not s.isalnum():
                 continue
+            # Drop lines with zero letters
             letters = sum(1 for c in s if c.isalpha())
             if letters == 0:
                 continue
-            if len(s) > 3 and (letters / len(s)) < 0.30:
+            # Drop lines where less than 25% of chars are letters (noise)
+            if len(s) > 4 and (letters / len(s)) < 0.25:
                 continue
             cleaned.append(s)
-        return "\n".join(cleaned).strip()
+
+        if not cleaned:
+            return ""
+
+        # Join very short fragment lines (< 4 words) into the previous line
+        # This prevents the "one word per line" presentation issue with handwriting
+        merged: list[str] = []
+        for line in cleaned:
+            word_count = len(line.split())
+            if merged and word_count < 4 and len(merged[-1].split()) < 10:
+                merged[-1] = merged[-1] + " " + line
+            else:
+                merged.append(line)
+        return "\n".join(merged).strip()
 
     @classmethod
     def extract_text_image_bytes(cls, image_bytes: bytes) -> OcrResult:
@@ -496,11 +512,11 @@ class ParserService:
             import pytesseract
             preproc_img = cls._preprocess_image_for_ocr(raw_img)
             passes = [
+                (preproc_img, "--oem 3 --psm 11"),  # sparse text — best for handwriting
                 (preproc_img, "--oem 3 --psm 6"),
-                (preproc_img, "--oem 3 --psm 11"),
                 (preproc_img, "--oem 3 --psm 3"),
-                (raw_img.convert("RGB"), "--oem 3 --psm 6"),
                 (raw_img.convert("RGB"), "--oem 3 --psm 11"),
+                (raw_img.convert("RGB"), "--oem 3 --psm 6"),
             ]
             for img_target, config_str in passes:
                 try:
@@ -523,7 +539,8 @@ class ParserService:
             best_words, best_conf, best_text = candidates[0]
 
             # If Tesseract produced solid text with good confidence, return it
-            if best_words >= 5 and best_conf >= 0.55:
+            # Lower threshold: if confidence < 0.48 or text is very short, always try EasyOCR
+            if best_words >= 5 and best_conf >= 0.48:
                 return OcrResult(
                     text=best_text,
                     confidence=best_conf,

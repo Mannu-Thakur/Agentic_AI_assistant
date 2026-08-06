@@ -1510,17 +1510,21 @@ export default function ChatPage() {
       // We schedule a delayed re-fetch so the cache has the canonical DB IDs
       // and the answer survives navigation away and back to this chat.
       if (chatId) {
-        setTimeout(() => {
-          // Only sync if we're still on the same chat and not streaming again
+        const syncFromDb = (delay: number) => setTimeout(() => {
           const s = useChatStore.getState();
           if (s.activeChatId === chatId && !s.isStreaming) {
             apiRequest(`/chats/${chatId}`)
               .then((dbMsgs) => {
                 const latest = useChatStore.getState();
-                // Only overwrite if the DB now has at least as many messages
-                // (meaning the assistant reply was committed)
-                const localMsgs = latest.messageCache[chatId] || [];
-                if (!latest.isStreaming && dbMsgs.length >= localMsgs.length) {
+                if (latest.isStreaming) return; // Don't overwrite if a new stream started
+                // Always sync from DB — replace local optimistic messages with real DB IDs/content.
+                // The last assistant message from DB must have real content to be worth replacing.
+                const lastDbAsst = [...dbMsgs].reverse().find((m: any) => m.role === 'assistant');
+                const lastLocalAsst = [...(latest.messageCache[chatId] || [])].reverse().find((m: any) => m.role === 'assistant');
+                const dbHasContent = lastDbAsst && lastDbAsst.content && lastDbAsst.content.trim().length > 0;
+                const localIsEmpty = !lastLocalAsst || !lastLocalAsst.content || lastLocalAsst.content.trim().length === 0;
+                // Sync if: DB has real content OR DB has more messages than local
+                if (dbHasContent || dbMsgs.length > (latest.messageCache[chatId] || []).length) {
                   const hydrated = dbMsgs.map((m: import('../types/chat').Message) => ({
                     ...m,
                     imagePreviewUrls:
@@ -1529,11 +1533,16 @@ export default function ChatPage() {
                         : m.imagePreviewUrls,
                   }));
                   useChatStore.getState().setMessagesForChat(chatId, hydrated);
+                } else if (localIsEmpty) {
+                  // Local is empty but DB wasn't ready yet — will retry at 3s
                 }
               })
               .catch(() => {/* silent — local streamed messages remain intact */});
           }
-        }, 1500); // 1.5s gives backend time to commit the assistant message
+        }, delay);
+
+        syncFromDb(1500); // Primary sync: 1.5s gives backend time to commit
+        syncFromDb(3500); // Safety net: retry at 3.5s in case DB commit was delayed
       }
     }
   }, [activeChatId, isStreaming, messages, activeModel, language, token, addChat, addMessage, updateMessage, setActiveChatId, setIsStreaming, navigate, currentModel, validateChatRequest]);
@@ -2456,6 +2465,16 @@ export default function ChatPage() {
                   className={`absolute ${convoOpen ? 'left-0' : 'left-full ml-2'} bottom-full mb-2 w-48 bg-surface border border-border-2 rounded-2xl shadow-2xl p-1.5 z-50 animate-scale-in space-y-0.5`}
                   style={{ animationDuration: '180ms' }}
                 >
+                  <button
+                    onClick={() => { navigate('/resume'); setShowUserMenu(false); }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium text-foreground-2 hover:text-foreground hover:bg-surface-2 transition-all duration-150"
+                  >
+                    <FileText className="w-4 h-4 text-violet-400" />
+                    <span className="flex items-center gap-1">
+                      <span>Resume Builder</span>
+                      <span className="px-1.5 py-0.2 text-[9px] font-bold bg-violet-500/20 text-violet-300 rounded border border-violet-500/30">AI</span>
+                    </span>
+                  </button>
                   <button
                     onClick={() => { navigate('/settings'); setShowUserMenu(false); }}
                     className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium text-foreground-2 hover:text-foreground hover:bg-surface-2 transition-all duration-150"

@@ -215,12 +215,26 @@ async def stream_agent_message(
   images_payload = (
       [img.model_dump() for img in schema.images] if schema.images else None
   )
+
+  # Guard: verify parent_message_id still exists after the delete above.
+  # When the user edits the very first message, delete_messages_after removes
+  # ALL messages, so parent_message_id no longer exists in the DB.
+  # Passing a stale FK causes a ForeignKeyViolationError (HTTP 500).
+  safe_parent_id: Optional[str] = None
+  if schema.parent_message_id:
+    from sqlalchemy.future import select as _select
+    _ref = await db.execute(
+        _select(Message.id).where(Message.id == schema.parent_message_id)
+    )
+    if _ref.scalar_one_or_none():
+      safe_parent_id = schema.parent_message_id
+
   user_msg = await ChatService.save_message(
       db=db,
       chat_id=chat_id,
       role="user",
       content=clean_save_content,
-      parent_id=schema.parent_message_id,
+      parent_id=safe_parent_id,
       images=images_payload,
   )
 

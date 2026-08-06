@@ -338,9 +338,9 @@ export default function LoginPage() {
         </button>
       </form>
 
-      {/* Card Footer: By using bugX... */}
+      {/* Card Footer: By using OpenChat... */}
       <div className="text-center text-[11px] text-gray-500 pt-3 mt-4 border-t border-white/[0.06]">
-        By using bugX, you agree to our terms and policies.
+        By using OpenChat, you agree to our terms and policies.
       </div>
     </div>
   );

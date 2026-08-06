@@ -165,6 +165,58 @@ def _extract_last_user_query(messages: list) -> str:
     return ""
 
 
+def _format_ocr_text_to_markdown(raw_text: str) -> str:
+    """Format raw OCR text into structured, elegant Markdown with headings, bold keys, and code blocks."""
+    if not raw_text or not raw_text.strip():
+        return raw_text
+
+    text = raw_text.strip()
+
+    # 1. Format Notes / Constraints
+    text = re.sub(
+        r"(?i)\bNote:\s*",
+        r"\n\n> 💡 **Note:** ",
+        text
+    )
+
+    # 2. Format Examples Section
+    text = re.sub(
+        r"(?i)\bExamples:\s*",
+        r"\n\n### 📌 **Examples**\n\n",
+        text
+    )
+
+    # 3. Format Input / Output / Explanation
+    text = re.sub(
+        r"(?i)\bInput:\s*",
+        r"\n* **Input:** ",
+        text
+    )
+    text = re.sub(
+        r"(?i)\bOutput:\s*",
+        r"\n* **Output:** ",
+        text
+    )
+    text = re.sub(
+        r"(?i)\bExplanation:\s*",
+        r"\n* **Explanation:** ",
+        text
+    )
+
+    # 4. Format Problem / Question headings
+    text = re.sub(
+        r"(?i)\b(Problem|Question|Task|Constraints?):\s*",
+        r"\n\n#### 📝 **\1:** ",
+        text
+    )
+
+    # Clean up linebreaks
+    lines = [line.strip() for line in text.split("\n")]
+    formatted = "\n".join(lines)
+    formatted = re.sub(r"\n{3,}", "\n\n", formatted).strip()
+    return formatted
+
+
 def _perform_local_ocr_on_images(images: list) -> str:
     """Extract text from base64 image payload using local multi-engine OCR (EasyOCR / Tesseract fallback)."""
     import base64
@@ -178,10 +230,11 @@ def _perform_local_ocr_on_images(images: list) -> str:
             raw_bytes = base64.b64decode(b64)
             res = ParserService.extract_text_image_bytes(raw_bytes)
             if res and res.text and res.text.strip():
-                ocr_outputs.append(f"[Image {idx} OCR Text]:\n{res.text.strip()}")
+                formatted_text = _format_ocr_text_to_markdown(res.text.strip())
+                ocr_outputs.append(f"### 📷 Image {idx} (Extracted Text)\n\n{formatted_text}")
         except Exception as exc:
             logger.warning(f"[Local OCR Fallback] Error processing image {idx}: {exc}")
-    return "\n\n".join(ocr_outputs)
+    return "\n\n---\n\n".join(ocr_outputs)
 
 
 # Backward compatibility alias
@@ -1456,7 +1509,7 @@ async def retrieve_context_node(
 
     if user_id and last_query:
         # ── PRODUCTION FIX: For pure web-search intents, skip local ChromaDB
-        # retrieval entirely. Local documents like 'bugX_documentation_part1.md'
+        # retrieval entirely. Local documents like 'project_documentation_part1.md'
         # have ZERO relevance to public web queries ('who won tennis 2026?') but
         # can still pass the BM25/cosine similarity threshold and appear as noise
         # sources. Web search results are the authoritative source for these intents.
@@ -2781,16 +2834,18 @@ async def generate_response_node(
             ocr_rescue_note = "*(Vision processing failed. Extracted text using local OCR — trying text model to summarize...)*\n\n"
             for m in reversed(raw_messages):
                 if m.get("role") == "user":
-                    m["content"] = f"{m['content']}\n\n[Extracted Image Text (Tesseract OCR Rescue)]:\n{ocr_text}"
+                    m["content"] = f"Attached document/image content extracted via OCR:\n{ocr_text}\n\nUser Question:\n{m['content']}"
                     break
             images = []
             rescue_attempts = []
+            if keys.get("openai"):
+                rescue_attempts.append((openai_provider, "gpt-4o-mini", keys["openai"]))
+            if keys.get("gemini") or keys.get("google"):
+                rescue_attempts.append((gemini_provider, "gemini-2.0-flash", keys.get("gemini") or keys.get("google")))
             if keys.get("groq"):
                 rescue_attempts.append((groq_provider, "llama-3.3-70b-versatile", keys["groq"]))
             if keys.get("openrouter"):
                 rescue_attempts.append((openrouter_provider, "meta-llama/llama-3.3-70b-instruct", keys["openrouter"]))
-            if keys.get("gemini") or keys.get("google"):
-                rescue_attempts.append((gemini_provider, "gemini-2.0-flash", keys.get("gemini") or keys.get("google")))
 
             for r_prov, r_mod, r_key in rescue_attempts:
                 try:

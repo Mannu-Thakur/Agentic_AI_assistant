@@ -2,7 +2,7 @@
 app/agent/doc_signals.py — Dynamic private-document routing signals.
 
 Replaces the static ``_PERSONAL_DOC_SIGNALS`` tuple that previously contained
-developer-specific project names (e.g. "bugx", "zerixa", "visualiser feature").
+developer-specific project names (e.g. "myproject", "dashboard", "visualiser feature").
 
 How it works
 ────────────
@@ -14,8 +14,8 @@ How it works
 
 2. DYNAMIC filename-derived signals — for each document the user has uploaded,
    we extract meaningful tokens from the filename and add them as signals.
-   Example: "BugX_Architecture_v2.pdf" → {"bugx", "architecture"}
-            "Zerixa_Resume_2026.pdf"   → {"zerixa", "resume"}
+   Example: "MyApp_Architecture_v2.pdf" → {"myapp", "architecture"}
+            "John_Resume_2026.pdf"     → {"john", "resume"}
    This means signals are only active for the user who actually uploaded that file.
 
 Cache
@@ -89,8 +89,8 @@ def _extract_filename_tokens(filename: str) -> FrozenSet[str]:
     Convert a filename into a set of meaningful lowercase tokens.
 
     Examples:
-        "BugX_Architecture_v2.pdf"       → {"bugx", "architecture"}
-        "Zerixa_Resume_2026.docx"        → {"zerixa", "resume"}
+        "MyApp_Architecture_v2.pdf"       → {"myapp", "architecture"}
+        "John_Resume_2026.docx"          → {"john", "resume"}
         "My Food Tracking System.pdf"    → {"food", "tracking", "system"}
         "IoT_Sensor_Board_Project.pdf"   → {"iot", "sensor", "board", "project"}
     """

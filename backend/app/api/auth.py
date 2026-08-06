@@ -61,6 +61,22 @@ async def get_current_user(
     return user
 
 
+security_optional = HTTPBearer(auto_error=False)
+
+async def get_current_user_optional(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_optional),
+    db: AsyncSession = Depends(get_db)
+) -> Optional[UserOut]:
+    """Optional authentication dependency: returns UserOut if valid bearer token present, else None."""
+    if not credentials or not credentials.credentials:
+        return None
+    try:
+        return await get_current_user(request, credentials, db)
+    except HTTPException:
+        return None
+
+
 class RoleChecker:
     """Dependency checker to enforce RBAC permissions (User, Moderator, Admin)."""
     def __init__(self, allowed_roles: list[str]):

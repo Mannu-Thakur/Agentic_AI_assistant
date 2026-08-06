@@ -178,6 +178,8 @@ app.add_middleware(SecureHeadersMiddleware)
 app.add_middleware(PayloadLimitMiddleware)
 app.add_middleware(InputSanitizationMiddleware)
 
+from app.resume.routes import router as resume_router
+
 app.include_router(auth.router,        prefix=settings.API_V1_STR)
 app.include_router(chat.router,        prefix=settings.API_V1_STR)
 app.include_router(documents.router,   prefix=settings.API_V1_STR)
@@ -188,6 +190,7 @@ app.include_router(health_router.router, prefix=settings.API_V1_STR)
 app.include_router(admin.router,        prefix=settings.API_V1_STR)
 app.include_router(mcp_servers.router,  prefix=settings.API_V1_STR)
 app.include_router(metrics_router.router, prefix=settings.API_V1_STR)
+app.include_router(resume_router,       prefix=settings.API_V1_STR)
 
 
 # ── Cache metrics endpoint ─────────────────────────────────────────────────────

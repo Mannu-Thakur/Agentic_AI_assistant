@@ -9,6 +9,7 @@ import WorkspacePage from '../pages/WorkspacePage';
 import SettingsPage from '../pages/SettingsPage';
 import OAuthCallbackPage from '../pages/OAuthCallbackPage';
 import SharedChatPage from '../pages/SharedChatPage';
+import ResumePage from '../pages/ResumePage';
 import { useAuthStore } from '../store/authStore';
 
 // Protected Route Helper
@@ -93,6 +94,10 @@ export const router = createBrowserRouter([
       {
         path: 'settings',
         element: <SettingsPage />,
+      },
+      {
+        path: 'resume',
+        element: <ResumePage />,
       },
     ],
   },
