@@ -39,7 +39,8 @@ SKILL_TAXONOMY: Dict[str, Set[str]] = {
         "spring", "spring boot", "ruby on rails", "rails", "laravel", "asp.net", ".net",
         "graphql", "rest api", "rest apis", "restful apis", "microservices", "grpc", "celery",
         "kafka", "rabbitmq", "activemq", "zeromq", "socket.io", "websockets",
-        "nest.js", "nestjs", "gin", "echo", "actix", "axum", "phoenix"
+        "nest.js", "nestjs", "gin", "echo", "actix", "axum", "phoenix",
+        "jwt", "jwt authentication", "oauth", "oauth 2.0", "oauth2"
     },
     "Databases": {
         "postgresql", "postgres", "mongodb", "mongo", "mysql", "redis", "sqlite",
@@ -52,16 +53,18 @@ SKILL_TAXONOMY: Dict[str, Set[str]] = {
         "google cloud", "google cloud platform", "azure", "ci/cd", "github actions",
         "gitlab ci", "jenkins", "terraform", "ansible", "helm", "nginx", "apache",
         "caddy", "prometheus", "grafana", "datadog", "new relic", "serverless",
-        "lambda", "cloudformation", "pulumi", "linux", "ubuntu", "debian", "centos"
+        "lambda", "cloudformation", "pulumi", "linux", "ubuntu", "debian", "centos",
+        "lora", "v2x", "imu", "iot", "multi-sensor fusion"
     },
     "AI/ML / GenAI": {
         "pytorch", "tensorflow", "keras", "scikit-learn", "sklearn", "opencv",
-        "llm", "llms", "large language models", "genai", "genai & agents", "generative ai", "langgraph", "langchain",
-        "llamaindex", "rag", "retrieval augmented generation", "hugging face",
-        "huggingface", "transformers", "deep learning", "machine learning", "nlp",
-        "natural language processing", "computer vision", "fine-tuning", "lora",
-        "qlora", "ollama", "vllm", "tgi", "bert", "gpt", "whisper", "stable diffusion",
-        "prompt engineering", "agentic ai", "semantic search", "embeddings"
+        "llm", "llms", "large language models", "genai", "genai & agents", "generative ai",
+        "langgraph", "langchain", "langsmith", "llamaindex", "rag", "retrieval augmented generation",
+        "self-rag", "corrective rag", "crag", "hugging face", "huggingface", "transformers",
+        "deep learning", "machine learning", "nlp", "natural language processing", "computer vision",
+        "fine-tuning", "lora", "qlora", "ollama", "vllm", "tgi", "bert", "gpt", "whisper",
+        "stable diffusion", "prompt engineering", "agentic ai", "semantic search", "embeddings",
+        "mcp", "openrouter", "gemini", "groq", "deepseek"
     },
     "Developer Tools": {
         "git", "github", "gitlab", "bitbucket", "vs code", "vscode", "postman",
@@ -70,10 +73,10 @@ SKILL_TAXONOMY: Dict[str, Set[str]] = {
         "gdb", "valgrind", "dbeaver", "pgadmin"
     },
     "Core CS": {
-        "data structures", "data structures & algorithms", "algorithms", "system design", "object-oriented programming",
-        "oop", "design patterns", "operating systems", "computer networks",
-        "multithreading", "concurrency", "distributed systems", "database internals",
-        "compilers", "agile", "scrum", "sdlc", "test-driven development", "tdd"
+        "data structures", "data structures & algorithms", "algorithms", "dbms", "system design",
+        "object-oriented programming", "oop", "design patterns", "operating systems",
+        "computer networks", "multithreading", "concurrency", "distributed systems",
+        "database internals", "compilers", "agile", "scrum", "sdlc", "test-driven development", "tdd"
     }
 }
 
@@ -81,6 +84,12 @@ VALID_CATEGORIES = [
     "Languages", "Frontend", "Backend", "Databases", "DevOps",
     "AI/ML / GenAI", "Developer Tools", "Core CS", "Others"
 ]
+
+GENERIC_NOISE_WORDS = {
+    "2.0", "apis", "authentication", "systems", "networks", "secure", "safely",
+    "context", "memory", "by~30%", "real-time", "api", "key", "platform",
+    "reasoning", "multi-file", "stateful", "failover", "index", "updates", "0"
+}
 
 
 def classify_single_skill(skill_name: str) -> str:
@@ -125,7 +134,7 @@ def categorize_skills(raw_skills: List[Union[SkillGroup, dict, str]]) -> List[Sk
         # Clean leading/trailing punctuation artifacts (. , - ~ : ; etc.)
         sk_clean = re.sub(r"^[\s•·\-\~–—:,;.]+|[\s•·\-\~–—:,;.]+$", "", sk_clean)
         
-        if not sk_clean or sk_clean in (".", "-", "~", ":", ";", ",", "by", "updates"):
+        if not sk_clean or sk_clean in (".", "-", "~", ":", ";", ",", "by", "updates", "2.0"):
             return
         
         # Check if skill string contains a header prefix like "Languages: C, C++" or "Frontend: React.js"
@@ -157,14 +166,12 @@ def categorize_skills(raw_skills: List[Union[SkillGroup, dict, str]]) -> List[Sk
                 break
 
         if exact_match and len(sk_clean.split()) > 2:
-            # Replace wordy phrase like "multi-provider LLM selection" with clean skill name "LLMs" or "LLM"
             cat, matched_term = exact_match
             canonical_skill = matched_term.upper() if len(matched_term) <= 4 else matched_term.title()
             add_skill(canonical_skill, suggested_cat=cat)
             return
 
         if len(sk_clean.split()) > 4 or len(sk_clean) > 35:
-            # Sentence/bullet text without matched taxonomy skill; drop
             return
 
         if lower_sk in seen_skills or len(lower_sk) < 1:
@@ -172,24 +179,27 @@ def categorize_skills(raw_skills: List[Union[SkillGroup, dict, str]]) -> List[Sk
 
         # Determine best category
         cat = classify_single_skill(sk_clean)
-        if cat == "Others" and suggested_cat:
-            s_lower = suggested_cat.lower()
-            if "lang" in s_lower:
-                cat = "Languages"
-            elif "front" in s_lower or "web" in s_lower:
-                cat = "Frontend"
-            elif "back" in s_lower or "api" in s_lower or "server" in s_lower:
-                cat = "Backend"
-            elif "data" in s_lower or "db" in s_lower:
-                cat = "Databases"
-            elif "cloud" in s_lower or "devops" in s_lower or "infra" in s_lower:
-                cat = "DevOps"
-            elif "ai" in s_lower or "ml" in s_lower or "gen" in s_lower or "agent" in s_lower:
-                cat = "AI/ML / GenAI"
-            elif "tool" in s_lower or "ide" in s_lower:
-                cat = "Developer Tools"
-            elif "cs" in s_lower or "concept" in s_lower or "core" in s_lower:
-                cat = "Core CS"
+        if cat == "Others":
+            if lower_sk in GENERIC_NOISE_WORDS or re.search(r"^\d+(\.\d+)?%?$", lower_sk):
+                return
+            if suggested_cat:
+                s_lower = suggested_cat.lower()
+                if "lang" in s_lower:
+                    cat = "Languages"
+                elif "front" in s_lower or "web" in s_lower:
+                    cat = "Frontend"
+                elif "back" in s_lower or "api" in s_lower or "server" in s_lower:
+                    cat = "Backend"
+                elif "data" in s_lower or "db" in s_lower:
+                    cat = "Databases"
+                elif "cloud" in s_lower or "devops" in s_lower or "infra" in s_lower:
+                    cat = "DevOps"
+                elif "ai" in s_lower or "ml" in s_lower or "gen" in s_lower or "agent" in s_lower:
+                    cat = "AI/ML / GenAI"
+                elif "tool" in s_lower or "ide" in s_lower:
+                    cat = "Developer Tools"
+                elif "cs" in s_lower or "concept" in s_lower or "core" in s_lower:
+                    cat = "Core CS"
 
         seen_skills.add(lower_sk)
         category_map[cat].append(sk_clean)

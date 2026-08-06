@@ -151,3 +151,6 @@ export interface DiffResponse {
 }
 
 export type TemplateType = 'classic_ats' | 'modern' | 'minimal' | 'executive' | 'developer' | 'academic';
+
+export type ExportFormat = 'pdf' | 'docx' | 'markdown' | 'json' | 'latex' | 'tex';
+

@@ -122,7 +122,7 @@ def compute_weighted_confidence(
         sec_proj = 0.95
         completeness_points += 1.0
     else:
-        sec_proj = 0.5
+        sec_proj = 0.0
     section_confidences["projects"] = sec_proj
 
     # Achievements Confidence
@@ -130,26 +130,27 @@ def compute_weighted_confidence(
         sec_ach = 0.95
         completeness_points += 1.0
     else:
-        sec_ach = 0.5
+        sec_ach = 0.0
     section_confidences["achievements"] = sec_ach
 
     # Certifications Confidence
     if resume.certifications:
         sec_cert = 0.95
-        completeness_points += 1.0
+        completeness_points += 0.5
     else:
-        sec_cert = 0.5
+        sec_cert = 0.0
     section_confidences["certifications"] = sec_cert
 
     # Languages Confidence
     if resume.languages:
         sec_lang = 1.0
-        completeness_points += 1.0
+        completeness_points += 0.5
     else:
-        sec_lang = 0.5
+        sec_lang = 0.0
     section_confidences["languages"] = sec_lang
 
-    section_completeness_score = round(completeness_points / total_sections, 2)
+    # Base completeness requires core 4 sections (Personal, Edu, Skills, Exp/Proj) = 4.0 points
+    section_completeness_score = round(min(1.0, completeness_points / 4.0), 2)
 
     # 5. Schema Validation Score (15%)
     schema_score = 1.0 if not low_confidence_fields else max(0.6, 1.0 - (len(low_confidence_fields) * 0.08))
@@ -166,6 +167,7 @@ def compute_weighted_confidence(
     overall_confidence = round(min(1.0, max(0.0, overall_confidence)), 2)
 
     return overall_confidence, low_confidence_fields, section_confidences
+
 
 
 # Backward compatibility alias

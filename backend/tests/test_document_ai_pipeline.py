@@ -152,3 +152,45 @@ def test_performance_benchmark():
     duration_ms = (time.time() - t0) * 1000
     assert duration_ms < 10.0
     assert res["email"] == "john@example.com"
+
+
+def test_pymupdf_markdown_header_segmentation():
+    """Verify markdown section headers (e.g. ## PROFESSIONAL SUMMARY) are properly segmented."""
+    from app.resume.section_segmenter import segment_resume_sections
+    from app.resume.parser import _regex_fallback_parser
+
+    sample_md = """
+    Mannu Thakur
+    mannumay15@gmail.com | +91-7827075170 | https://github.com/Mannu-Thakur
+
+    ## PROFESSIONAL SUMMARY
+    Computer Engineering undergraduate specializing in backend architectures, distributed systems, and agentic AI.
+
+    ## EDUCATION
+    International Institute of Information Technology, Bhubaneswar 2023 – 2027
+    B.Tech in Computer Engineering CGPA: 8.57
+
+    ## TECHNICAL SKILLS
+    Languages: C, C++, Java, Python, TypeScript
+    Backend: Node.js, Express.js, FastAPI, REST APIs
+
+    ## WORK EXPERIENCE
+    Frontend Developer Intern May 2026 – Jul 2026
+    Nemhans Solutions Pvt. Ltd.
+    - Engineered an IoT-based food waste intelligence platform.
+    """
+    sections = segment_resume_sections(sample_md)
+    assert sections["summary"] != ""
+    assert "Computer Engineering undergraduate" in sections["summary"]
+    assert sections["education"] != ""
+    assert sections["experience"] != ""
+
+    deterministic = run_deterministic_extraction(sample_md)
+    parsed = _regex_fallback_parser(sample_md, deterministic)
+    validated = validate_and_sanitize_resume(parsed, sample_md)
+    overall_conf, low_fields, _ = compute_weighted_confidence(validated)
+
+    assert "summary" not in low_fields
+    assert "Computer Engineering undergraduate" in validated.summary
+    assert overall_conf >= 0.90
+

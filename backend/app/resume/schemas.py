@@ -48,10 +48,18 @@ class DiffRequest(BaseModel):
 
 class ExportRequest(BaseModel):
     resume: ResumeData
-    format: Literal["pdf", "docx", "markdown", "json"] = "pdf"
+    format: Literal["pdf", "docx", "markdown", "json", "latex", "tex"] = "pdf"
     template: Literal[
         "classic_ats", "modern", "minimal", "executive", "developer", "academic"
     ] = "modern"
+
+
+class LatexPreviewRequest(BaseModel):
+    resume: ResumeData
+    template: Literal[
+        "classic_ats", "modern", "minimal", "executive", "developer", "academic"
+    ] = "modern"
+
 
 
 class ApplySuggestionRequest(BaseModel):
@@ -119,6 +127,11 @@ class SuggestionResult(BaseModel):
     changes: List[str] = Field(default_factory=list)
 
 
+class LatexPreviewResponse(BaseModel):
+    latex_code: str
+
+
 class HealthResponse(BaseModel):
     status: str = "ok"
     module: str = "resume_builder"
+

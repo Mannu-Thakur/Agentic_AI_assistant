@@ -1,7 +1,7 @@
 import { apiRequest } from './api';
 import {
   ResumeData, JDAnalysis, ATSScoreBreakdown,
-  DiffResponse, TemplateType
+  DiffResponse, TemplateType, ExportFormat
 } from '../types/resume';
 
 export const resumeApi = {
@@ -84,9 +84,20 @@ export const resumeApi = {
     });
   },
 
+  async getLatexPreview(params: {
+    resume: ResumeData;
+    template?: TemplateType;
+  }): Promise<{ latex_code: string }> {
+
+    return apiRequest('/resume/preview-latex', {
+      method: 'POST',
+      json: params,
+    });
+  },
+
   async downloadExport(params: {
     resume: ResumeData;
-    format: 'pdf' | 'docx' | 'markdown' | 'json';
+    format: ExportFormat;
     template?: TemplateType;
   }): Promise<Blob> {
     const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
@@ -106,3 +117,4 @@ export const resumeApi = {
     return response.blob();
   },
 };
+

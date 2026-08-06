@@ -17,16 +17,21 @@ from __future__ import annotations
 import re
 from typing import Dict, List, Tuple
 
-# Top-level section header patterns (standalone lines or bold headers)
+# Prefix matching line start/newline, optional spaces, markdown #/bold/bullet/numbering tags
+_HEADER_PREFIX = r"(?:^|\n)[ \t]*(?:[#*\-_•\u2022]+[ \t]*)*(?:\d+\.|\w\.)?[ \t]*\**[ \t]*"
+# Postfix matching trailing bold tags, optional colon, and lookahead to line end/newline
+_HEADER_POSTFIX = r"[ \t]*\**[ \t]*(?::[ \t]*$|:?[ \t]*(?=\n|$))"
+
+# Top-level section header patterns (standalone lines, markdown headers, or bold headers)
 SECTION_HEADER_PATTERNS = [
-    ("summary", re.compile(r"(?:\n|^)[ \t]*(?:PROFESSIONAL\s+SUMMARY|SUMMARY|PROFILE|OBJECTIVE|ABOUT\s+ME)[ \t]*(?::|\n|$)", re.I)),
-    ("education", re.compile(r"(?:\n|^)[ \t]*(?:EDUCATION|ACADEMIC\s+BACKGROUND|QUALIFICATIONS|ACADEMICS)[ \t]*(?::|\n|$)", re.I)),
-    ("skills", re.compile(r"(?:\n|^)[ \t]*(?:TECHNICAL\s+SKILLS|TECHNICALSKILLS|SKILLS|TECHNOLOGIES|CORE\s+COMPETENCIES)[ \t]*(?::|\n|$)", re.I)),
-    ("experience", re.compile(r"(?:\n|^)[ \t]*(?:WORK\s+EXPERIENCE|WORKEXPERIENCE|EXPERIENCE|PROFESSIONAL\s+EXPERIENCE|EMPLOYMENT\s+HISTORY|INTERNSHIPS)[ \t]*(?::|\n|$)", re.I)),
-    ("projects", re.compile(r"(?:\n|^)[ \t]*(?:PROJECTS|KEY\s+PROJECTS|PERSONAL\s+PROJECTS)[ \t]*(?::|\n|$)", re.I)),
-    ("achievements", re.compile(r"(?:\n|^)[ \t]*(?:ACHIEVEMENTS|ACCOMPLISHMENTS|HONORS\s*&\s*AWARDS|AWARDS|COMPETITIVE\s+PROGRAMMING)[ \t]*(?::|\n|$)", re.I)),
-    ("certifications", re.compile(r"(?:\n|^)[ \t]*(?:CERTIFICATIONS|CERTIFICATES|LICENSES)[ \t]*(?::|\n|$)", re.I)),
-    ("languages", re.compile(r"(?:\n|^)[ \t]*(?:LANGUAGES\s+SPOKEN|FOREIGN\s+LANGUAGES)[ \t]*(?::|\n|$)", re.I)),
+    ("summary", re.compile(_HEADER_PREFIX + r"(?:PROFESSIONAL\s+SUMMARY|SUMMARY\s+OF\s+QUALIFICATIONS|EXECUTIVE\s+SUMMARY|CAREER\s+SUMMARY|SUMMARY|PROFILE|PROFESSIONAL\s+PROFILE|OBJECTIVE|CAREER\s+OBJECTIVE|ABOUT\s+ME|OVERVIEW)" + _HEADER_POSTFIX, re.I)),
+    ("education", re.compile(_HEADER_PREFIX + r"(?:EDUCATION\s+AND\s+TRAINING|EDUCATION\s+&\s+QUALIFICATIONS|EDUCATIONAL\s+BACKGROUND|ACADEMIC\s+BACKGROUND|ACADEMIC\s+QUALIFICATIONS|QUALIFICATIONS|EDUCATION|ACADEMICS)" + _HEADER_POSTFIX, re.I)),
+    ("skills", re.compile(_HEADER_PREFIX + r"(?:TECHNICAL\s+SKILLS|TECHNICALSKILLS|SKILLS\s+&\s+EXPERTISE|SKILLS\s+&\s+TECHNOLOGIES|SKILLS\s+/\s+TECHNOLOGIES|TOOLS\s+&\s+TECHNOLOGIES|TOOLS\s+AND\s+TECHNOLOGIES|CORE\s+COMPETENCIES|TECHNICAL\s+PROFICIENCIES|AREAS\s+OF\s+EXPERTISE|TECHNICAL\s+SUMMARY|SKILLS)" + _HEADER_POSTFIX, re.I)),
+    ("experience", re.compile(_HEADER_PREFIX + r"(?:WORK\s+EXPERIENCE|WORKEXPERIENCE|PROFESSIONAL\s+EXPERIENCE|EMPLOYMENT\s+HISTORY|RELEVANT\s+EXPERIENCE|CAREER\s+HISTORY|WORK\s+HISTORY|EXPERIENCE|EMPLOYMENT|INTERNSHIPS)" + _HEADER_POSTFIX, re.I)),
+    ("projects", re.compile(_HEADER_PREFIX + r"(?:KEY\s+PROJECTS|PERSONAL\s+PROJECTS|ACADEMIC\s+PROJECTS|FEATURED\s+PROJECTS|TECHNICAL\s+PROJECTS|RELEVANT\s+PROJECTS|PROJECTS)" + _HEADER_POSTFIX, re.I)),
+    ("achievements", re.compile(_HEADER_PREFIX + r"(?:ACHIEVEMENTS|ACCOMPLISHMENTS|HONORS\s*&\s*AWARDS|HONORS\s+AND\s+AWARDS|AWARDS\s*&\s*ACHIEVEMENTS|AWARDS|HONORS|COMPETITIVE\s+PROGRAMMING|KEY\s+ACHIEVEMENTS)" + _HEADER_POSTFIX, re.I)),
+    ("certifications", re.compile(_HEADER_PREFIX + r"(?:CERTIFICATIONS\s+&\s+LICENSES|LICENSES\s+&\s+CERTIFICATIONS|PROFESSIONAL\s+CERTIFICATIONS|CERTIFICATIONS|CERTIFICATES|LICENSES)" + _HEADER_POSTFIX, re.I)),
+    ("languages", re.compile(_HEADER_PREFIX + r"(?:LANGUAGES\s+SPOKEN|FOREIGN\s+LANGUAGES|LANGUAGE\s+PROFICIENCY|LANGUAGES)" + _HEADER_POSTFIX, re.I)),
 ]
 
 

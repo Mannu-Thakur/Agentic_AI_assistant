@@ -25,6 +25,7 @@ from app.resume.schemas import (
     ComputeATSRequest, ATSResponse,
     DiffRequest, DiffResponse,
     ExportRequest, ApplySuggestionRequest, SuggestionResult,
+    LatexPreviewRequest, LatexPreviewResponse,
     HealthResponse,
 )
 from app.resume.parser import parse_resume_file
@@ -32,7 +33,8 @@ from app.resume.jd_analyzer import analyze_job_description
 from app.resume.ats import compute_ats_score
 from app.resume.services import ResumeService
 from app.resume.diff import compute_resume_diff
-from app.resume.renderer import export_resume
+from app.resume.renderer import export_resume, generate_latex
+
 
 logger = logging.getLogger("app.resume.routes")
 
@@ -241,3 +243,24 @@ async def render_resume_endpoint(
     Alias endpoint for live PDF generation preview.
     """
     return await export_resume_endpoint(req, current_user)
+
+
+@router.post("/preview-latex", response_model=LatexPreviewResponse)
+async def preview_latex_endpoint(
+    req: LatexPreviewRequest,
+    current_user: Optional[UserOut] = Depends(get_current_user_optional),
+):
+    """
+    Generate raw LaTeX source code string as JSON response.
+    Used for frontend UI code preview, copy-to-clipboard, and Overleaf integration.
+    """
+    try:
+        latex_code = generate_latex(req.resume, template=req.template)
+        return LatexPreviewResponse(latex_code=latex_code)
+    except Exception as exc:
+        logger.error(f"[ResumeRoutes] LaTeX preview failed: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate LaTeX preview: {str(exc)}",
+        )
+

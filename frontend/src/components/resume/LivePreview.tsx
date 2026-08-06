@@ -154,10 +154,64 @@ export const LivePreview: React.FC = () => {
                 <div key={idx} className="flex justify-between items-baseline text-xs">
                   <div>
                     <span className="font-bold text-gray-900">{edu.institution}</span>
-                    <span className="text-gray-700"> — {edu.degree} in {edu.field_of_study}</span>
+                    <span className="text-gray-700">
+                      {' — '}{edu.degree}
+                      {edu.field_of_study ? ` in ${edu.field_of_study}` : ''}
+                      {edu.gpa ? ` (CGPA: ${edu.gpa})` : ''}
+                    </span>
                   </div>
-                  <span className="text-[11px] text-gray-500 font-mono">{edu.start_date} – {edu.end_date}</span>
+                  <span className="text-[11px] text-gray-500 font-mono">
+                    {edu.start_date}{edu.start_date && edu.end_date ? ' – ' : ''}{edu.end_date}
+                  </span>
                 </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Achievements */}
+        {currentResume.achievements && currentResume.achievements.length > 0 && (
+          <div>
+            <h2 className={st.sectionHeader}>Achievements</h2>
+            <ul className="list-disc list-inside text-xs text-gray-700 space-y-1">
+              {currentResume.achievements.map((ach, idx) => (
+                <li key={idx} className="leading-relaxed">
+                  {ach.title && ach.title !== ach.description ? (
+                    <span className="font-semibold text-gray-900">{ach.title}: </span>
+                  ) : null}
+                  <span>{ach.description || ach.title}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {/* Certifications */}
+        {currentResume.certifications && currentResume.certifications.length > 0 && (
+          <div>
+            <h2 className={st.sectionHeader}>Certifications</h2>
+            <div className="space-y-1 text-xs text-gray-700">
+              {currentResume.certifications.map((cert, idx) => (
+                <div key={idx}>
+                  <span className="font-semibold text-gray-900">{cert.name}</span>
+                  {cert.issuer && <span> — {cert.issuer}</span>}
+                  {cert.date && <span className="text-gray-500 font-mono"> ({cert.date})</span>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Languages */}
+        {currentResume.languages && currentResume.languages.length > 0 && (
+          <div>
+            <h2 className={st.sectionHeader}>Languages</h2>
+            <div className="text-xs text-gray-700 flex flex-wrap gap-x-4 gap-y-1">
+              {currentResume.languages.map((lang, idx) => (
+                <span key={idx}>
+                  <span className="font-medium text-gray-900">{lang.language}</span>
+                  {lang.proficiency && <span className="text-gray-500"> ({lang.proficiency})</span>}
+                </span>
               ))}
             </div>
           </div>

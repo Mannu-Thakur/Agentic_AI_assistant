@@ -16,10 +16,11 @@ export const ReviewStep: React.FC = () => {
   const confidencePercent = Math.round(parseConfidence * 100);
 
   const getConfidence = (key: string, isPresent: boolean, defaultHigh: number = 0.95) => {
-    if (sectionConfidences && typeof sectionConfidences[key] === 'number') {
+    if (!isPresent) return 0;
+    if (sectionConfidences && typeof sectionConfidences[key] === 'number' && sectionConfidences[key] > 0) {
       return Math.round(sectionConfidences[key] * 100);
     }
-    return isPresent ? Math.round(defaultHigh * 100) : 0;
+    return Math.round(defaultHigh * 100);
   };
 
   const sectionsList = [
@@ -85,7 +86,7 @@ export const ReviewStep: React.FC = () => {
       icon: Award,
       present: currentResume.certifications.length > 0,
       confidence: getConfidence('certifications', currentResume.certifications.length > 0, 0.90),
-      count: `${currentResume.certifications.length} certifications`
+      count: currentResume.certifications.length > 0 ? `${currentResume.certifications.length} certifications` : 'Not Listed'
     },
     {
       key: 'languages',
@@ -93,7 +94,7 @@ export const ReviewStep: React.FC = () => {
       icon: LangIcon,
       present: currentResume.languages.length > 0,
       confidence: getConfidence('languages', currentResume.languages.length > 0, 0.90),
-      count: `${currentResume.languages.length} languages`
+      count: currentResume.languages.length > 0 ? `${currentResume.languages.length} languages` : 'Not Listed'
     },
   ];
 
@@ -199,20 +200,27 @@ export const ReviewStep: React.FC = () => {
                     </div>
 
                     <div className="text-right">
-                      <span className={`inline-block px-2.5 py-0.5 rounded-full text-xs font-semibold border ${
-                        sec.confidence >= 90
-                          ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                          : sec.confidence >= 75
-                          ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
-                          : 'bg-rose-500/10 text-rose-400 border-rose-500/20'
-                      }`}>
-                        {sec.confidence}% Confidence
-                      </span>
+                      {sec.present ? (
+                        <span className={`inline-block px-2.5 py-0.5 rounded-full text-xs font-semibold border ${
+                          sec.confidence >= 90
+                            ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                            : sec.confidence >= 75
+                            ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                            : 'bg-rose-500/10 text-rose-400 border-rose-500/20'
+                        }`}>
+                          {sec.confidence}% Confidence
+                        </span>
+                      ) : (
+                        <span className="inline-block px-2.5 py-0.5 rounded-full text-xs font-semibold border bg-zinc-800/60 text-zinc-400 border-zinc-700/60">
+                          Optional / Not Listed
+                        </span>
+                      )}
                     </div>
                   </div>
                 );
               })}
             </div>
+
           ) : (
             <div className="space-y-5">
               <div className="space-y-3">

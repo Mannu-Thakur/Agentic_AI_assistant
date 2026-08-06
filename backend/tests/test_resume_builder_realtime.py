@@ -161,7 +161,7 @@ def _run_suggest(resume_data, jd_analysis):
     assert "updated_resume" in sug
 
 def _run_export(resume_data):
-    formats = ["pdf", "docx", "markdown", "json"]
+    formats = ["pdf", "docx", "markdown", "json", "latex", "tex"]
     for fmt in formats:
         res = client.post(
             "/api/v1/resume/export",
@@ -173,6 +173,25 @@ def _run_export(resume_data):
         )
         assert res.status_code == 200
         assert len(res.content) > 0
+        if fmt in ("latex", "tex"):
+            tex_str = res.content.decode("utf-8")
+            assert r"\usepackage{hyperref}" in tex_str
+            assert r"\documentclass" in tex_str
+
+    # Test LaTeX raw string preview endpoint
+    res_preview = client.post(
+        "/api/v1/resume/preview-latex",
+        json={
+            "resume": resume_data,
+            "template": "modern"
+        }
+    )
+    assert res_preview.status_code == 200
+    preview_data = res_preview.json()
+    assert "latex_code" in preview_data
+    latex_code = preview_data["latex_code"]
+    assert r"\usepackage{hyperref}" in latex_code
+    assert r"\begin{document}" in latex_code
 
 def test_full_resume_pipeline():
     _run_health_check()
@@ -183,3 +202,4 @@ def test_full_resume_pipeline():
     _run_diff(resume_data, tailored)
     _run_suggest(resume_data, jd_analysis)
     _run_export(tailored)
+

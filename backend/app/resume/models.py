@@ -44,9 +44,11 @@ class ProjectEntry(BaseModel):
     technologies: List[str] = Field(default_factory=list)
     url: str = ""
     github_url: str = ""
+    link: str = ""
     bullets: List[str] = Field(default_factory=list)
     start_date: str = ""
     end_date: str = ""
+
 
 
 class EducationEntry(BaseModel):

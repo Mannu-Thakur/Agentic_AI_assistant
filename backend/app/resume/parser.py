@@ -73,7 +73,7 @@ def _extract_text_adaptive(file_path: str, file_ext: str) -> Tuple[str, str, str
     if ext == "pdf":
         native_text = ""
         try:
-            native_text, page_meta = ParserService.extract_text_pdf(file_path)
+            native_text, page_meta = ParserService.extract_layout_markdown_pymupdf(file_path)
             # Detect two-column layout heuristic (short lines + multiple offset columns)
             if native_text and "  " in native_text and "\n" in native_text:
                 avg_line_len = sum(len(l) for l in native_text.splitlines() if l.strip()) / max(len(native_text.splitlines()), 1)
@@ -81,9 +81,15 @@ def _extract_text_adaptive(file_path: str, file_ext: str) -> Tuple[str, str, str
                     detected_layout = "two_column"
 
             if not _is_text_sparse_or_corrupted(native_text):
-                return native_text, "pdf_native", detected_layout
+                return native_text, "pdf_layout_pymupdf", detected_layout
         except Exception as e:
-            logger.warning(f"[AdaptiveParser] PDF native extraction failed: {e}")
+            logger.warning(f"[AdaptiveParser] PyMuPDF layout extraction failed: {e}")
+            try:
+                native_text, page_meta = ParserService.extract_text_pdf(file_path)
+                if not _is_text_sparse_or_corrupted(native_text):
+                    return native_text, "pdf_native_fallback", detected_layout
+            except Exception as exc:
+                logger.warning(f"[AdaptiveParser] PDF fallback failed: {exc}")
 
         # Trigger OCR pipeline for scanned/image PDFs
         try:
@@ -97,6 +103,7 @@ def _extract_text_adaptive(file_path: str, file_ext: str) -> Tuple[str, str, str
             return native_text, "pdf_native_sparse", detected_layout
 
         raise ValueError("Could not extract readable text from PDF file.")
+
 
     elif ext in ("docx", "doc"):
         try:
@@ -220,7 +227,7 @@ def _regex_fallback_parser(text: str, deterministic_findings: Dict[str, Any]) ->
     resume.personal.linkedin = deterministic_findings.get("linkedin", "")
     resume.personal.github = deterministic_findings.get("github", "")
 
-    # Extract name from personal block or document header
+    # Extract name & location from personal block or document header
     p_text = sections.get("personal", "") or text
     lines = [l.strip() for l in p_text.splitlines() if l.strip()]
     for l in lines[:5]:
@@ -229,9 +236,28 @@ def _regex_fallback_parser(text: str, deterministic_findings: Dict[str, Any]) ->
                 resume.personal.name = l
                 break
 
+    loc_match = re.search(r"(?:location|city|address)[:\s]+([^\n,]+(?:,\s*[^\n]+)?)", text, re.I)
+    if not loc_match:
+        loc_match = re.search(r"\b([A-Z][a-zA-Z\s]+,\s*(?:India|USA|UK|Canada|California|CA|NY|MA|TX|FL))\b", text)
+    if loc_match:
+        resume.personal.location = loc_match.group(1).strip()
+
     # 2. Professional Summary
     if sections.get("summary"):
-        resume.summary = sections["summary"][:600]
+        resume.summary = sections["summary"][:600].strip()
+    elif sections.get("personal"):
+        p_lines = [l.strip() for l in sections["personal"].splitlines() if l.strip()]
+        summary_candidates = []
+        for line in p_lines:
+            if "@" in line or re.search(r"\+?\d[\d\s\-\(\)\.]{7,}", line) or "linkedin.com" in line or "github.com" in line or "http" in line:
+                continue
+            if line == resume.personal.name or re.search(r"^(?:full\s+name|email|phone|location|linkedin|github)\b", line, re.I):
+                continue
+            summary_candidates.append(line)
+        if summary_candidates:
+            cand_text = " ".join(summary_candidates).strip()
+            if len(cand_text.split()) >= 6:
+                resume.summary = cand_text[:600]
 
     # 3. Skills (parsed cleanly within sections["skills"])
     if sections.get("skills"):
@@ -306,30 +332,78 @@ def _regex_fallback_parser(text: str, deterministic_findings: Dict[str, Any]) ->
     if sections.get("projects"):
         proj_block = sections["projects"]
         lines = [l.strip() for l in proj_block.splitlines() if l.strip()]
-        if lines:
-            proj_name = lines[0].split("/")[0].split("-")[0].strip()
-            tech_m = re.search(r"Technologies[:\s]*([^\n]+)", proj_block, re.I)
-            techs = [t.strip() for t in tech_m.group(1).split(",") if t.strip()] if tech_m else []
-            desc_lines = [l.lstrip("•-· ") for l in lines[1:] if len(l.split()) > 3]
-            resume.projects.append(ProjectEntry(
-                id="proj_1",
-                name=proj_name,
-                technologies=techs,
-                description=desc_lines[0] if desc_lines else "",
-                bullets=desc_lines
-            ))
+        cur_proj = None
+        proj_idx = 1
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            clean_l = line.lstrip("•-–—·* ").strip()
+            is_tech = clean_l.lower().startswith(("technologies:", "tech:", "tech stack:", "technologies used:"))
+            
+            next_is_tech = False
+            if i + 1 < len(lines):
+                next_clean = lines[i+1].lstrip("•-–—·* ").strip()
+                next_is_tech = next_clean.lower().startswith(("technologies:", "tech:", "tech stack:", "technologies used:"))
+            
+            if next_is_tech or (not is_tech and not line.startswith(("•", "-", "–", "—", "*", "·")) and cur_proj is None):
+                if cur_proj and cur_proj.get("name"):
+                    resume.projects.append(ProjectEntry(**cur_proj))
+                    proj_idx += 1
+                name_clean = re.sub(r"\s+\d+$", "", clean_l)
+                name_clean = re.sub(r"\s*/\s*external-link-alt.*$", "", name_clean, flags=re.I).strip()
+                cur_proj = {
+                    "id": f"proj_{proj_idx}",
+                    "name": name_clean,
+                    "technologies": [],
+                    "description": "",
+                    "bullets": []
+                }
+                i += 1
+                continue
+                
+            if cur_proj:
+                if is_tech:
+                    tech_str = re.sub(r"^(?:technologies|tech|tech stack|technologies used)[:\s]*", "", clean_l, flags=re.I)
+                    cur_proj["technologies"] = [t.strip() for t in tech_str.split(",") if t.strip()]
+                else:
+                    if cur_proj["bullets"] and not line.startswith(("•", "-", "–", "—", "*", "·")) and not cur_proj["bullets"][-1].endswith((".", "!", ";")):
+                        cur_proj["bullets"][-1] += " " + clean_l
+                    else:
+                        cur_proj["bullets"].append(clean_l)
+            i += 1
+
+        if cur_proj and cur_proj.get("name"):
+            resume.projects.append(ProjectEntry(**cur_proj))
 
     # 7. Achievements Section Parsing
     if sections.get("achievements"):
         ach_block = sections["achievements"]
         lines = [l.strip() for l in ach_block.splitlines() if l.strip()]
-        for idx, line in enumerate(lines, start=1):
-            if len(line) > 10:
-                resume.achievements.append(AchievementEntry(
-                    id=f"ach_{idx}",
-                    title=line[:60],
-                    description=line
-                ))
+        ach_items = []
+        for line in lines:
+            is_bullet = line.startswith(("•", "-", "–", "—", "*", "·"))
+            clean_l = line.lstrip("•-–—·* ").strip()
+            if not clean_l:
+                continue
+            if is_bullet or not ach_items:
+                ach_items.append(clean_l)
+            else:
+                ach_items[-1] += " " + clean_l
+
+        for idx, item in enumerate(ach_items, start=1):
+            colon_split = item.split(":", 1)
+            if len(colon_split) == 2 and len(colon_split[0].split()) <= 6:
+                title = colon_split[0].strip()
+                desc = item.strip()
+            else:
+                title = item[:60].strip()
+                desc = item.strip()
+
+            resume.achievements.append(AchievementEntry(
+                id=f"ach_{idx}",
+                title=title,
+                description=desc
+            ))
 
     return resume
 

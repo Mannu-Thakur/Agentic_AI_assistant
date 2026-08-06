@@ -101,16 +101,35 @@ def sanitize_string(val: Optional[str]) -> str:
     return s if s and s.lower() != "null" and s.lower() != "none" else ""
 
 
-def deduplicate_list(items: List[str]) -> List[str]:
-    """Deduplicate a list of strings while preserving order."""
+# Bullet glyphs and stray dashes prefix pattern
+STRAY_BULLET_PREFIX_RE = re.compile(
+    r"^[\s\u2022\u2023\u25e6\u2043\u2219\u25aa\u25ab\u25cf\u25cb\u25a0\u25a1\uf0a7\uf0b7\u25ba\u25c4\*\-\–\—\.]+\s*"
+)
+
+
+def sanitize_bullet_point(val: Optional[str]) -> str:
+    """
+    Strip leading bullet characters (e.g. '•', '*', '-', '–'), stray dashes,
+    and whitespace from extracted bullet strings.
+    """
+    if not val:
+        return ""
+    s = str(val).strip()
+    s = STRAY_BULLET_PREFIX_RE.sub("", s).strip()
+    return s if s and s.lower() not in ("null", "none") else ""
+
+
+def deduplicate_list(items: List[str], is_bullets: bool = False) -> List[str]:
+    """Deduplicate a list of strings while preserving order and stripping bullet prefixes."""
     seen = set()
     result = []
     for item in items:
-        cleaned = sanitize_string(item)
+        cleaned = sanitize_bullet_point(item) if is_bullets else sanitize_string(item)
         if cleaned and cleaned.lower() not in seen:
             seen.add(cleaned.lower())
             result.append(cleaned)
     return result
+
 
 
 def validate_and_sanitize_resume(resume: ResumeData, raw_text: str = "") -> ResumeData:
@@ -153,7 +172,7 @@ def validate_and_sanitize_resume(resume: ResumeData, raw_text: str = "") -> Resu
         if exp.end_date.lower() in ("present", "current", "now"):
             exp.end_date = "Present"
             exp.is_current = True
-        exp.bullets = deduplicate_list(exp.bullets)
+        exp.bullets = deduplicate_list(exp.bullets, is_bullets=True)
         exp.technologies = deduplicate_list(exp.technologies)
         clean_exp.append(exp)
     resume.experience = clean_exp
@@ -170,8 +189,9 @@ def validate_and_sanitize_resume(resume: ResumeData, raw_text: str = "") -> Resu
         proj.description = sanitize_string(proj.description)
         proj.url = validate_url(proj.url)
         proj.github_url = validate_url(proj.github_url)
-        proj.bullets = deduplicate_list(proj.bullets)
+        proj.bullets = deduplicate_list(proj.bullets, is_bullets=True)
         proj.technologies = deduplicate_list(proj.technologies)
+
         proj.start_date = sanitize_string(proj.start_date)
         proj.end_date = sanitize_string(proj.end_date)
         clean_proj.append(proj)

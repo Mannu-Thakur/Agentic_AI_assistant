@@ -129,6 +129,148 @@ class ParserService:
 
         return "\n".join(text_parts), page_meta
 
+    @staticmethod
+    def extract_layout_markdown_pymupdf(file_path: str) -> Tuple[str, List[Dict[str, Any]]]:
+        """
+        Layout-aware PyMuPDF (fitz) Markdown Extraction Engine.
+        Uses page.get_text("dict") to analyze font sizes, font weights, and bounding boxes.
+        Preserves document visual hierarchy into clean Markdown:
+          1. Calculates base font size (mode font size representing body text).
+          2. Identifies headers (font size > base font size or bold title lines) and prefixes with '# ' or '## '.
+          3. Bolds text spans with bold font flags or bold font names ('**text**').
+          4. Groups text blocks and left-aligned lines to naturally merge multi-line bullet points
+             without mid-sentence raw line breaks.
+        """
+        try:
+            import fitz  # PyMuPDF
+        except ImportError:
+            logger.info("[PyMuPDFParser] PyMuPDF (fitz) module not available; falling back to pypdf.")
+            return ParserService.extract_text_pdf(file_path)
+
+        try:
+            doc = fitz.open(file_path)
+        except Exception as exc:
+            logger.warning(f"[PyMuPDFParser] PyMuPDF open failed: {exc}; falling back to pypdf.")
+            return ParserService.extract_text_pdf(file_path)
+
+        # Pass 1: Base Font Size Calculation
+        font_sizes: List[float] = []
+        for page in doc:
+            page_dict = page.get_text("dict")
+            for block in page_dict.get("blocks", []):
+                if block.get("type") == 0:  # Text block
+                    for line in block.get("lines", []):
+                        for span in line.get("spans", []):
+                            t = span.get("text", "").strip()
+                            if t:
+                                font_sizes.append(round(span.get("size", 10.0), 1))
+
+        if not font_sizes:
+            doc.close()
+            return ParserService.extract_text_pdf(file_path)
+
+        from collections import Counter
+        base_font_size = Counter(font_sizes).most_common(1)[0][0]
+        logger.info(f"[PyMuPDFParser] Base body font size calculated: {base_font_size}pt across {len(doc)} pages.")
+
+        markdown_pages: List[str] = []
+        page_meta: List[Dict[str, Any]] = []
+        char_offset = 0
+
+        # Pass 2: Layout-to-Markdown Transformation
+        for page_num, page in enumerate(doc, start=1):
+            page_dict = page.get_text("dict")
+            blocks = page_dict.get("blocks", [])
+
+            # Sort blocks top-to-bottom, left-to-right (handles multi-column layouts)
+            text_blocks = [b for b in blocks if b.get("type") == 0]
+            text_blocks.sort(key=lambda b: (round(b.get("bbox", [0, 0, 0, 0])[1], 1), round(b.get("bbox", [0, 0, 0, 0])[0], 1)))
+
+            page_blocks_md: List[str] = []
+
+            for block in text_blocks:
+                lines = block.get("lines", [])
+                block_lines_md: List[str] = []
+
+                for line in lines:
+                    spans = line.get("spans", [])
+                    line_parts: List[str] = []
+                    max_span_size = 0.0
+                    is_line_all_bold = True
+
+                    for span in spans:
+                        t = span.get("text", "").strip()
+                        if not t:
+                            continue
+
+                        sz = span.get("size", 10.0)
+                        font_name = span.get("font", "").lower()
+                        flags = span.get("flags", 0)
+
+                        max_span_size = max(max_span_size, sz)
+                        is_span_bold = bool(flags & 2 or "bold" in font_name or "black" in font_name or "heavy" in font_name or "semi" in font_name)
+
+                        if not is_span_bold:
+                            is_line_all_bold = False
+
+                        if is_span_bold and len(t) > 1 and not (t.startswith("**") and t.endswith("**")):
+                            line_parts.append(f"**{t}**")
+                        else:
+                            line_parts.append(t)
+
+                    full_line = " ".join(line_parts).strip()
+                    if not full_line:
+                        continue
+
+                    # Header detection
+                    clean_line = full_line.replace("**", "").strip()
+                    if max_span_size >= base_font_size * 1.3:
+                        full_line = f"# {clean_line}"
+                    elif max_span_size >= base_font_size * 1.15 or (is_line_all_bold and len(clean_line) < 60 and not clean_line.startswith(("•", "-", "*", "–"))):
+                        full_line = f"## {clean_line}"
+
+                    block_lines_md.append(full_line)
+
+                # Merge multi-line bullet points / paragraphs in block
+                if block_lines_md:
+                    coherent_items: List[str] = []
+                    current_item: List[str] = []
+
+                    for l in block_lines_md:
+                        is_header = l.startswith("#")
+                        is_bullet = l.startswith(("•", "-", "*", "–"))
+
+                        if is_header:
+                            if current_item:
+                                coherent_items.append(" ".join(current_item))
+                                current_item = []
+                            coherent_items.append(l)
+                        elif is_bullet:
+                            if current_item:
+                                coherent_items.append(" ".join(current_item))
+                                current_item = []
+                            current_item.append(l)
+                        else:
+                            current_item.append(l)
+
+                    if current_item:
+                        coherent_items.append(" ".join(current_item))
+
+                    block_md = "\n".join(coherent_items)
+                    page_blocks_md.append(block_md)
+
+            page_text = "\n\n".join(page_blocks_md)
+            marker = f"\n[Page {page_num}]\n"
+            page_meta.append({"page_number": page_num, "char_offset": char_offset + len(marker)})
+
+            markdown_pages.append(marker + page_text)
+            char_offset += len(marker) + len(page_text)
+
+        doc.close()
+        full_result = "\n".join(markdown_pages)
+        return full_result if full_result.strip() else ParserService.extract_text_pdf(file_path)
+
+
     # ── DOCX ─────────────────────────────────────────────────────────────────
 
     @staticmethod
