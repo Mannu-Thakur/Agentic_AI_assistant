@@ -50,15 +50,16 @@ async def test_mcp_client_and_calculator_server():
     client = McpStdioClient(command=python_exe, args=[calculator_script])
     await client.connect()
 
-    # 1. List tools — 6 tools (calculate + add_expense + get_expenses + summarize_expenses + create_reminder + send_email)
+    # 1. List tools — 7 tools (calculate + add_expense + get_expenses + summarize_expenses + create_reminder + get_reminders + send_email)
     tools = await client.list_tools()
     tool_names = [t["name"] for t in tools]
-    assert len(tools) == 6
+    assert len(tools) == 7
     assert "calculate" in tool_names
     assert "add_expense" in tool_names
     assert "get_expenses" in tool_names
     assert "summarize_expenses" in tool_names
     assert "create_reminder" in tool_names
+    assert "get_reminders" in tool_names
     assert "send_email" in tool_names
 
     # 2. Call tool calculate
