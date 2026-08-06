@@ -1,18 +1,16 @@
-import { useState, useId } from 'react';
+import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { apiRequest } from '../services/api';
-import { Mail, User, Shield, AlertCircle, Loader2, Bug, CheckCircle2 } from 'lucide-react';
+import { Mail, Shield, AlertCircle, Loader2, CheckCircle2 } from 'lucide-react';
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState<string>('');
-  const [username, setUsername] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
   const [submitted, setSubmitted] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
   const navigate = useNavigate();
-  const emailId = useId();
-  const usernameId = useId();
+  const emailId = crypto.randomUUID();
 
   const isEmailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
 
@@ -30,7 +28,7 @@ export default function ForgotPasswordPage() {
     try {
       await apiRequest<{ detail: string }>('/auth/forgot-password', {
         method: 'POST',
-        json: { email: email.trim(), username: username.trim() },
+        json: { email: email.trim() },
       });
 
       setSubmitted(true);
@@ -48,14 +46,14 @@ export default function ForgotPasswordPage() {
       {/* Top Logo Badge */}
       <div className="flex justify-center">
         <div className="w-12 h-12 rounded-xl bg-[#232731] border border-white/10 flex items-center justify-center shadow-md">
-          <Bug className="w-6 h-6 text-white" />
+          <Shield className="w-6 h-6 text-white" />
         </div>
       </div>
 
       {/* Header Title & Subtitle */}
       <div className="text-center">
         <h2 className="text-xl font-bold text-white tracking-tight">
-          reset password for bug<span className="text-[#2563eb]">X</span>
+          Reset your password
         </h2>
         <p className="text-gray-400 text-xs mt-1 font-normal">
           Remember your password?{' '}
@@ -144,24 +142,7 @@ export default function ForgotPasswordPage() {
             </div>
           </div>
 
-          {/* Username */}
-          <div className="space-y-1">
-            <label htmlFor={usernameId} className="text-xs font-semibold text-gray-200 select-none block">
-              Username
-            </label>
-            <div className="relative">
-              <input
-                id={usernameId}
-                type="text"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder="username"
-                disabled={loading}
-                className="w-full h-11 bg-[#272a33]/80 border border-white/10 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-xl py-2 px-3.5 pl-10 text-sm text-white placeholder:text-gray-500 transition-all duration-200 disabled:opacity-50"
-              />
-              <User className="absolute left-3.5 top-3.5 w-4 h-4 text-gray-400 pointer-events-none" />
-            </div>
-          </div>
+
 
           {/* Primary Action Button: Blue Send Verification Code */}
           <button

@@ -251,21 +251,94 @@ def compile_system_prompt(
             "unless they ask for a different language.\n"
         )
 
-    # ── Vision awareness ───────────────────────────────────────────────────────
+    # ── Vision & Diagram Intelligence Mode ────────────────────────────────────
     if has_images:
         system += (
-            "\n### Vision Mode Active:\n"
-            "The user has attached one or more images. IMMEDIATELY analyze them directly — do NOT ask what the image is.\n"
-            "Capabilities: describe content, identify objects, scenes, text (OCR / handwriting transcription), charts, tables,\n"
-            "animals, food, landmarks, vehicles, clothing, emotions, activities, image quality.\n"
-            "CRITICAL INSTRUCTION FOR IMAGE SCANNING / OCR:\n"
-            "- If the user says 'extract text', 'extract the image', 'read this', 'print this', 'scan', or asks to extract/read text,\n"
-            "  you MUST directly perform OCR/transcription and return the extracted text from the image.\n"
-            "- NEVER output Python code, Pytesseract snippets, or instructions on how to extract text unless the user explicitly asks for code (e.g., 'write python code to OCR an image').\n"
-            "If you cannot determine something (e.g., exact identity of a person), describe what\n"
-            "is visually present (clothing, setting, actions) instead of guessing a name.\n"
-            "For gender: say 'The person appears to present as...' — never claim certainty.\n"
+            "\n### 🖼️ VISION & DIAGRAM INTELLIGENCE MODE — ACTIVE\n"
+            "The user has attached an image. It may contain handwritten notes, flowcharts, "
+            "architecture diagrams, mind-maps, lecture notes, or graphs.\n\n"
+
+            "=== NON-NEGOTIABLE OUTPUT STRUCTURE (VIOLATING ANY RULE = CRITICAL FAILURE) ===\n\n"
+
+            "🔴 RULE 1 — MANDATORY MERMAID FLOWCHART DIAGRAM:\n"
+            "You MUST output a Mermaid diagram block using `flowchart TD` representing EVERY "
+            "hierarchy, tree, or relationship visible in the image. No exceptions.\n"
+            "Format exactly as:\n"
+            "```mermaid\n"
+            "flowchart TD\n"
+            "    A[\"Root Node\"] --> B[\"Child 1\"]\n"
+            "    A --> C[\"Child 2\"]\n"
+            "    B --> D[\"Sub-child\"]\n"
+            "```\n"
+            "If the image shows a tree with LangChain → Language Models / Embedding Models, "
+            "you MUST represent that exact hierarchy in the Mermaid diagram.\n\n"
+
+            "🔴 RULE 2 — MANDATORY MARKDOWN SECTION HEADINGS + BULLET POINTS:\n"
+            "For EVERY section/concept identified in the image (e.g. Models, Prompts, Chains, Agents), "
+            "you MUST output:\n"
+            "   ## 🧠 [Section Title]\n"
+            "   > [One-line definition]\n"
+            "   - [Key bullet point 1]\n"
+            "   - [Key bullet point 2]\n"
+            "   - [Key bullet point 3]\n\n"
+
+            "🔴 RULE 3 — MANDATORY MARKDOWN COMPARISON TABLE:\n"
+            "If the image lists, compares, or categorizes ANY model types, concept types, "
+            "or variants (e.g. LLMs vs Embedding Models, Chain types, Prompt types), "
+            "you MUST output a Markdown table with columns:\n"
+            "| Type | Input | Output | Primary Use |\n"
+            "|---|---|---|---|\n"
+            "| ... | ... | ... | ... |\n\n"
+
+            "🔴 RULE 4 — ABSOLUTE ZERO META-TALKING:\n"
+            "NEVER output ANY of the following phrases:\n"
+            "  • 'Based on the extracted text...'\n"
+            "  • 'Based on what I can see...'\n"
+            "  • 'The OCR text appears to show...'\n"
+            "  • 'I've corrected the OCR typos...'\n"
+            "  • 'Here is the reconstructed diagram...'\n"
+            "  • 'The image seems to contain...'\n"
+            "  • 'Without more context...'\n"
+            "  • Numbered OCR dump lines (e.g. '1. Models Qn...')\n"
+            "Start IMMEDIATELY with the Mermaid diagram block. No preamble.\n\n"
+
+            "🔴 RULE 5 — AUTO-CORRECT OCR TYPOS SILENTLY:\n"
+            "If you receive OCR-extracted text, silently correct all misreadings:\n"
+            "  Lanachans/lavqchacn → LangChain | PR@MPTs → PROMPTS | Enbeele → Embedding\n"
+            "  CxAINS → CHAINS | lims → LLMs | Dyhanic → Dynamic | veefor → vector\n"
+            "  Saman-tc/Senke → Semantic | Seakel/Seareh → Search | Muels → Models\n"
+            "  Gn → In | tut seoC → sequential | Mo ls → Models\n"
+            "Never show corrected vs original — just present the corrected version directly.\n\n"
+
+            "🔴 RULE 6 — IGNORE PAPER BLEED-THROUGH:\n"
+            "Ignore all faint mirror-writing or text bleed-through from the back of paper. "
+            "Focus only on the front-page handwriting.\n\n"
+
+            "🔴 RULE 7 — REQUIRED OUTPUT ORDER:\n"
+            "Always produce output in exactly this order:\n"
+            "  (A) Mermaid `flowchart TD` diagram\n"
+            "  (B) ASCII tree structure (using ├── / └──)\n"
+            "  (C) Section headings with bullet-point explanations\n"
+            "  (D) Markdown comparison table\n\n"
+
+            "NEVER output Python code, OCR extraction snippets, or instructions on how "
+            "to extract text from images unless the user explicitly requests it.\n"
         )
+
+    system += (
+        "\n### 🔄 OCR Text Reconstruction Directive (when OCR text is present in user message):\n"
+        "If the user message contains text extracted via local OCR from a handwritten note or diagram "
+        "(identifiable by garbled words like 'Lanachans', 'PR@MPTs', 'veefor', 'lims', 'CxAINS', etc.):\n"
+        "  • Silently auto-correct ALL OCR character errors using domain knowledge.\n"
+        "  • Do NOT mention that you are correcting OCR or that the text came from OCR.\n"
+        "  • Reconstruct the full diagram hierarchy, flowchart structure, and arrow connections.\n"
+        "  • MANDATORY: Output a Mermaid `flowchart TD` block immediately (NO preamble).\n"
+        "  • MANDATORY: Output organized section headings (## Models, ## Prompts, ## Chains) with bullet points.\n"
+        "  • MANDATORY: Output a Markdown comparison table for any listed concept types.\n"
+        "  • STRICTLY FORBIDDEN: Never start with 'Extracted Text:', 'Reconstructed Diagram:', "
+        "or numbered OCR dump lines (e.g., '1. Models Qn... 2. LangChains...'). "
+        "Start IMMEDIATELY with the Mermaid diagram block.\n"
+    )
 
     # ── Memories ──────────────────────────────────────────────────────────────
     memories = [

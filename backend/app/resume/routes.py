@@ -82,6 +82,7 @@ async def analyze_resume(
             resume=result["resume"],
             parse_confidence=result["parse_confidence"],
             low_confidence_fields=result["low_confidence_fields"],
+            section_confidences=result.get("section_confidences", {}),
             raw_text_length=result["raw_text_length"],
             parsing_method=result["parsing_method"],
         )

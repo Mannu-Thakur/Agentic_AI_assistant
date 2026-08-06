@@ -270,13 +270,27 @@ class ToolRegistry:
             logger.info(f"Invoking local tool '{name}' with arguments: {arguments}")
             try:
                 func = self.local_tools[name]["func"]
+                kwargs = dict(arguments or {})
                 if name == "tavily_search":
-                    kwargs = dict(arguments or {})
+                    # Normalize query parameter aliases
+                    if "query" not in kwargs:
+                        for alias in ("query_text", "search_query", "q", "text"):
+                            if alias in kwargs:
+                                kwargs["query"] = kwargs.pop(alias)
+                                break
                     if "api_keys" not in kwargs and api_keys:
                         kwargs["api_keys"] = api_keys
                     result_str = await func(**kwargs)
+                elif name == "python_sandbox":
+                    # Normalize code parameter aliases
+                    if "code" not in kwargs:
+                        for alias in ("python_code", "script", "command", "source"):
+                            if alias in kwargs:
+                                kwargs["code"] = kwargs.pop(alias)
+                                break
+                    result_str = await func(**kwargs)
                 else:
-                    result_str = await func(**(arguments or {}))
+                    result_str = await func(**kwargs)
             except Exception as e:
                 status_label = "error"
                 err_msg = str(e)

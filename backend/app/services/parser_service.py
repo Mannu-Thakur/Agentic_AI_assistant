@@ -44,7 +44,11 @@ class OcrResult:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _find_poppler() -> Optional[str]:
-    """Auto-detect Poppler install directory on Windows."""
+    """Auto-detect Poppler install directory on Linux or Windows."""
+    import shutil
+    system_path = shutil.which("pdftoppm")
+    if system_path:
+        return os.path.dirname(system_path)
     import glob
     search_paths = [
         r"C:\Program Files\poppler\bin",
@@ -54,7 +58,7 @@ def _find_poppler() -> Optional[str]:
     winget_pattern = os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Packages\*Poppler*\poppler-*\Library\bin")
     search_paths.extend(glob.glob(winget_pattern))
     for p in search_paths:
-        if os.path.isfile(os.path.join(p, "pdftoppm.exe")):
+        if os.path.isfile(os.path.join(p, "pdftoppm.exe")) or os.path.isfile(os.path.join(p, "pdftoppm")):
             return p
     return None
 
@@ -538,17 +542,23 @@ class ParserService:
             candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
             best_words, best_conf, best_text = candidates[0]
 
-            # If Tesseract produced solid text with good confidence, return it
-            # Lower threshold: if confidence < 0.48 or text is very short, always try EasyOCR
-            if best_words >= 5 and best_conf >= 0.48:
+            # Heuristic check for garbled OCR noise (e.g. "Lanachans", "Lanqhage", "Enbeele", "Muels")
+            # If word count is small, confidence is < 0.72, or text has garbled character artifacts,
+            # attempt EasyOCR rescue (EasyOCR uses a deep neural network far superior for handwriting).
+            is_high_quality = (
+                best_words >= 5
+                and best_conf >= 0.72
+                and not any(w in best_text for w in ("Lanachans", "Enbeele", "Muels", "PR@MPTs", "CxAINS", "Dyhanic"))
+            )
+            if is_high_quality:
                 return OcrResult(
                     text=best_text,
                     confidence=best_conf,
                     has_tables=False,
-                    layout_type="handwriting" if best_conf < 0.6 else "text",
+                    layout_type="handwriting" if best_conf < 0.8 else "text",
                 )
 
-        # If Tesseract returned empty/low-confidence/short text, trigger EasyOCR rescue
+        # If Tesseract returned empty, low-confidence, or garbled text, trigger EasyOCR rescue
         easy_res = cls._run_easyocr_on_pil_image(raw_img)
         if easy_res and easy_res.text:
             return easy_res

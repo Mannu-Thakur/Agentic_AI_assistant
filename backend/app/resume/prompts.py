@@ -13,24 +13,42 @@ from __future__ import annotations
 #  Resume Parsing Prompts
 # ─────────────────────────────────────────────────────────────────────────────
 
-PARSE_RESUME_SYSTEM = """You are a precise resume parser. Your job is to extract structured information from resume text and return ONLY valid JSON.
+PARSE_RESUME_SYSTEM = """You are a world-class precise resume parser and extraction architect.
+Your task is to extract high-fidelity structured information from resume text into valid JSON matching the target schema.
 
-Rules:
-- Extract exactly what is written — do NOT infer, fabricate, or embellish
-- If a field is not present, use an empty string "" or empty list []
-- For skills, group them by category (Languages, Frameworks, Tools, Databases, Cloud, etc.)
-- For experience bullets, preserve the original text exactly
-- Dates should be kept as-is from the document (e.g. "Jan 2022", "2020 - 2022", "Present")
-- Generate a short unique id for each experience, project, education, cert (use format "exp_1", "proj_1", etc.)
-- Return ONLY the JSON object, no markdown, no explanation"""
+CRITICAL EXTRACTION RULES:
+- Extract EXACTLY what is present in the text — NEVER fabricate, infer, or hallucinate companies, degrees, dates, skills, or projects.
+- Extract ALL sections if present:
+  1. Personal Information (name, email, phone, location, linkedin, github, website, portfolio)
+  2. Professional Summary
+  3. Work Experience (company, role, location, start_date, end_date, is_current, bullets, technologies)
+  4. Projects (name, description, technologies, url, github_url, bullets, start_date, end_date)
+  5. Education (institution, degree, field_of_study, location, start_date, end_date, gpa, honors, relevant_courses)
+  6. Certifications (name, issuer, date, url, expiry)
+  7. Achievements (title, description, date)
+  8. Languages (language, proficiency)
+  9. Skills (categorized into: Languages, Frontend, Backend, Databases, DevOps, AI/ML / GenAI, Developer Tools, Core CS, Others)
+- If a section or field is missing, use empty string "" or empty list [].
+- Preserve bullet points and accomplishment statements accurately.
+- Return ONLY valid JSON, no markdown formatting, no explanations."""
 
-PARSE_RESUME_USER = """Parse this resume text into structured JSON matching exactly this schema:
+PARSE_RESUME_USER = """Parse this resume text into structured JSON matching this exact schema:
 
 {{
   "personal": {{"name": "", "email": "", "phone": "", "location": "", "linkedin": "", "github": "", "website": "", "portfolio": ""}},
   "headline": "",
   "summary": "",
-  "skills": [{{"category": "", "skills": []}}],
+  "skills": [
+    {{"category": "Languages", "skills": []}},
+    {{"category": "Frontend", "skills": []}},
+    {{"category": "Backend", "skills": []}},
+    {{"category": "Databases", "skills": []}},
+    {{"category": "DevOps", "skills": []}},
+    {{"category": "AI/ML / GenAI", "skills": []}},
+    {{"category": "Developer Tools", "skills": []}},
+    {{"category": "Core CS", "skills": []}},
+    {{"category": "Others", "skills": []}}
+  ],
   "experience": [{{
     "id": "exp_1",
     "company": "", "role": "", "location": "",
@@ -53,6 +71,12 @@ PARSE_RESUME_USER = """Parse this resume text into structured JSON matching exac
   "achievements": [{{"id": "ach_1", "title": "", "description": "", "date": ""}}],
   "languages": [{{"language": "", "proficiency": ""}}]
 }}
+
+Pre-extracted contact hints (if any):
+- Email hint: {email_hint}
+- Phone hint: {phone_hint}
+- LinkedIn hint: {linkedin_hint}
+- GitHub hint: {github_hint}
 
 Resume text:
 {resume_text}"""

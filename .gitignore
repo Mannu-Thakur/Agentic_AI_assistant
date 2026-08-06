@@ -22,6 +22,7 @@ sql_app.db*
 uploads/
 vector_db/
 .pytest_cache/
+.pytest_tmp/
 tmp_pytest/
 mcp_store.json
 task.md

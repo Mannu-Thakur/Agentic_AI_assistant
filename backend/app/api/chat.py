@@ -474,6 +474,9 @@ async def stream_agent_message(
       logger.info("STARTING GRAPH TASK...")
       task = asyncio.create_task(agent_graph.ainvoke(initial_state, config))
 
+      # Send initial process step event to frontend
+      yield f"data: {json.dumps({'event': 'step', 'step': 'Reading query & context...'})}\n\n"
+
       # ── MASTER TIMEOUT GUARD ─────────────────────────────────────────────────
       # If the LLM or any pipeline node hangs silently (no error, no chunks),
       # we must cancel the task so the frontend doesn't show "Thinking" forever.

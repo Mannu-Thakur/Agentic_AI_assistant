@@ -72,6 +72,13 @@ from app.agent.prompts import (
     INTENT_MEMORY_WRITE,
     INTENT_NORMAL_CHAT,
     INTENT_DOCUMENT_QA,
+    INTENT_VISION,
+    INTENT_WEB_SEARCH,
+    INTENT_CODE_EXECUTION,
+    INTENT_MCP_TOOL,
+    INTENT_COMPLEX,
+    INTENT_MATH,
+    INTENT_FINANCE,
 )
 
 MAX_ITERATIONS = 1  # maximum reflection-driven regeneration passes
@@ -86,7 +93,7 @@ def route_after_classify(state: AgentState) -> str:
     After intent classification:
       is_ambiguous=True → clarification
       MEMORY_WRITE → memory_write (short-circuits the full pipeline)
-      NORMAL_CHAT | DOCUMENT_QA → check_retrieval (bypasses tool planning for fast single-turn path)
+      NORMAL_CHAT | DOCUMENT_QA | VISION → check_retrieval (bypasses tool planning for fast single-turn path)
       Everything else (COMPLEX, MCP_TOOL, CODE_EXECUTION, etc.) → plan
     """
     if state.get("is_ambiguous", False):
@@ -94,7 +101,7 @@ def route_after_classify(state: AgentState) -> str:
     intent = state.get("intent", INTENT_NORMAL_CHAT)
     if intent == INTENT_MEMORY_WRITE:
         return "memory_write"
-    if intent in (INTENT_NORMAL_CHAT, INTENT_DOCUMENT_QA):
+    if intent in (INTENT_NORMAL_CHAT, INTENT_DOCUMENT_QA, INTENT_VISION):
         return "check_retrieval"
     return "plan"
 
@@ -136,6 +143,9 @@ def route_after_evidence_checker(state: AgentState) -> str:
 
 def route_after_reflection(state: AgentState) -> str:
     """After reflection: regenerate if quality is insufficient, else finish."""
+    intent = state.get("intent", INTENT_NORMAL_CHAT)
+    if intent in (INTENT_VISION, INTENT_MEMORY_WRITE, INTENT_NORMAL_CHAT):
+        return END
     passed    = state.get("reflection_passed", True)
     iteration = state.get("iteration_count", 0)
     if not passed and iteration <= MAX_ITERATIONS:

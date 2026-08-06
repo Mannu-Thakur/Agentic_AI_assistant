@@ -181,22 +181,63 @@ def create_reminder(time: str, text: str) -> str:
     store = load_store()
     reminder = {
         "time": time,
-        "text": text
+        "text": text,
+        "created_at": str(os.getenv("CURRENT_TIME", ""))
     }
     store["reminders"].append(reminder)
     save_store(store)
     return f"✅ Reminder set for {time}: '{text}'."
 
+def get_reminders() -> str:
+    store = load_store()
+    reminders = store.get("reminders", [])
+    if not reminders:
+        return "No reminders found."
+    lines = [f"  • [{r.get('time', 'N/A')}] {r.get('text', '')}" for r in reminders]
+    return "⏰ Active Reminders:\n" + "\n".join(lines)
+
 def send_email(to: str, subject: str, body: str) -> str:
     store = load_store()
-    email = {
+    email_entry = {
         "to": to,
         "subject": subject,
-        "body": body
+        "body": body,
+        "timestamp": str(os.getenv("CURRENT_TIME", ""))
     }
-    store["emails"].append(email)
+    store["emails"].append(email_entry)
     save_store(store)
-    return f"✅ Email sent to {to} with subject '{subject}'."
+
+    smtp_user = os.getenv("SMTP_USER")
+    smtp_password = os.getenv("SMTP_PASSWORD")
+    smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+
+    if smtp_user and smtp_password:
+        try:
+            import smtplib
+            from email.message import EmailMessage
+
+            msg = EmailMessage()
+            msg["From"] = os.getenv("SMTP_FROM_EMAIL", smtp_user)
+            msg["To"] = to
+            msg["Subject"] = subject
+            msg.set_content(body)
+
+            if smtp_port == 465:
+                with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=10.0) as server:
+                    server.login(smtp_user, smtp_password)
+                    server.send_message(msg)
+            else:
+                with smtplib.SMTP(smtp_host, smtp_port, timeout=10.0) as server:
+                    server.starttls()
+                    server.login(smtp_user, smtp_password)
+                    server.send_message(msg)
+            return f"📧 Real Email successfully dispatched via SMTP to {to} with subject '{subject}'."
+        except Exception as exc:
+            return f"⚠️ Email saved to store, but SMTP dispatch failed: {exc}"
+
+    return f"✅ Email logged to local store for {to} with subject '{subject}' (Notice: Set SMTP_USER and SMTP_PASSWORD in .env for real SMTP transmission)."
+
 
 
 def send_response(req_id: int, result: dict = None, error: dict = None):
@@ -340,6 +381,14 @@ def main():
                         }
                     },
                     {
+                        "name": "get_reminders",
+                        "description": "Retrieve all active calendar reminders.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {}
+                        }
+                    },
+                    {
                         "name": "send_email",
                         "description": "Send a notification email.",
                         "inputSchema": {
@@ -367,84 +416,63 @@ def main():
             elif method == "tools/call":
                 tool_name = params.get("name")
                 arguments = params.get("arguments", {})
-                
+                if not isinstance(arguments, dict):
+                    arguments = {}
+
                 if tool_name == "calculate":
-                    expr = arguments.get("expression", "")
+                    expr = (
+                        arguments.get("expression") or
+                        arguments.get("expr") or
+                        arguments.get("formula") or
+                        arguments.get("math_expression") or ""
+                    )
                     calc_result = calculate(expr)
-                    result = {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": calc_result
-                            }
-                        ]
-                    }
+                    result = {"content": [{"type": "text", "text": calc_result}]}
                     send_response(req_id, result=result)
                 elif tool_name == "add_expense":
-                    amount = float(arguments.get("amount", 0))
-                    description = arguments.get("description", "")
-                    category = arguments.get("category", "food")
-                    date = arguments.get("date", None)
+                    amount_val = (
+                        arguments.get("amount") or
+                        arguments.get("cost") or
+                        arguments.get("price") or 0
+                    )
+                    amount = float(amount_val)
+                    description = (
+                        arguments.get("description") or
+                        arguments.get("desc") or
+                        arguments.get("item") or
+                        arguments.get("title") or ""
+                    )
+                    category = arguments.get("category") or arguments.get("cat") or "food"
+                    date = arguments.get("date") or arguments.get("when") or None
                     res_str = add_expense(amount, description, category, date)
-                    result = {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": res_str
-                            }
-                        ]
-                    }
+                    result = {"content": [{"type": "text", "text": res_str}]}
                     send_response(req_id, result=result)
                 elif tool_name == "get_expenses":
-                    category = arguments.get("category")
-                    date = arguments.get("date")
+                    category = arguments.get("category") or arguments.get("cat")
+                    date = arguments.get("date") or arguments.get("when")
                     res_str = get_expenses(category, date)
-                    result = {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": res_str
-                            }
-                        ]
-                    }
+                    result = {"content": [{"type": "text", "text": res_str}]}
                     send_response(req_id, result=result)
                 elif tool_name == "summarize_expenses":
                     res_str = summarize_expenses()
-                    result = {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": res_str
-                            }
-                        ]
-                    }
+                    result = {"content": [{"type": "text", "text": res_str}]}
                     send_response(req_id, result=result)
                 elif tool_name == "create_reminder":
-                    time_val = arguments.get("time", "")
-                    text = arguments.get("text", "")
+                    time_val = arguments.get("time") or arguments.get("when") or arguments.get("reminder_time") or ""
+                    text = arguments.get("text") or arguments.get("reminder") or arguments.get("description") or ""
                     res_str = create_reminder(time_val, text)
-                    result = {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": res_str
-                            }
-                        ]
-                    }
+                    result = {"content": [{"type": "text", "text": res_str}]}
+                    send_response(req_id, result=result)
+                elif tool_name == "get_reminders":
+                    res_str = get_reminders()
+                    result = {"content": [{"type": "text", "text": res_str}]}
                     send_response(req_id, result=result)
                 elif tool_name == "send_email":
-                    to = arguments.get("to", "")
-                    subject = arguments.get("subject", "")
-                    body = arguments.get("body", "")
+                    to = arguments.get("to") or arguments.get("recipient") or arguments.get("email") or ""
+                    subject = arguments.get("subject") or arguments.get("title") or "Notification"
+                    body = arguments.get("body") or arguments.get("message") or arguments.get("content") or ""
                     res_str = send_email(to, subject, body)
-                    result = {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": res_str
-                            }
-                        ]
-                    }
+                    result = {"content": [{"type": "text", "text": res_str}]}
                     send_response(req_id, result=result)
                 else:
                     error = {

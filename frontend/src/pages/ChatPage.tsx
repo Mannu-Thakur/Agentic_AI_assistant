@@ -566,31 +566,100 @@ function CitedContent({
 }
 
 // ─────────────────────────────────────────────────────────────
-//  Typing indicator — premium GPT-style shimmer
+//  Typing indicator — dynamic multi-stage process pipeline
 // ─────────────────────────────────────────────────────────────
-function TypingIndicator() {
+interface TypingIndicatorProps {
+  userPrompt?: string;
+  hasFiles?: boolean;
+  serverStep?: string;
+}
+
+function TypingIndicator({ userPrompt, hasFiles, serverStep }: TypingIndicatorProps) {
+  // Build dynamic process steps depending on user context & prompt intent
+  const steps = useMemo(() => {
+    if (serverStep) {
+      return [{ label: serverStep, icon: Sparkles }];
+    }
+
+    const p = (userPrompt || '').toLowerCase();
+
+    if (hasFiles || /\b(file|pdf|doc|document|resume|cv|csv|image|png|jpg|attachment|upload)\b/i.test(p)) {
+      return [
+        { label: 'Reading uploaded document...', icon: FileText },
+        { label: 'Extracting content & key details...', icon: Search },
+        { label: 'Analyzing document structure...', icon: Cpu },
+        { label: 'Synthesizing response...', icon: Sparkles },
+      ];
+    }
+
+    if (/\b(search|find|latest|news|weather|who is|what is|price|current|today|where|google)\b/i.test(p)) {
+      return [
+        { label: 'Reading query intent...', icon: Globe },
+        { label: 'Searching knowledge base...', icon: Search },
+        { label: 'Extracting relevant information...', icon: Database },
+        { label: 'Formatting response...', icon: Sparkles },
+      ];
+    }
+
+    if (/\b(code|function|python|js|typescript|react|bug|fix|html|css|sql|script|error|api|class|algorithm)\b/i.test(p)) {
+      return [
+        { label: 'Reading technical prompt...', icon: Terminal },
+        { label: 'Analyzing code structure...', icon: Cpu },
+        { label: 'Evaluating solution logic...', icon: Search },
+        { label: 'Generating code & explanation...', icon: Sparkles },
+      ];
+    }
+
+    return [
+      { label: 'Reading question...', icon: BookOpen },
+      { label: 'Understanding context & intent...', icon: Cpu },
+      { label: 'Extracting key facts...', icon: Search },
+      { label: 'Synthesizing response...', icon: Sparkles },
+    ];
+  }, [userPrompt, hasFiles, serverStep]);
+
+  const [currentStepIdx, setCurrentStepIdx] = useState(0);
+
+  useEffect(() => {
+    if (serverStep) return;
+    const timer = setInterval(() => {
+      setCurrentStepIdx((prev) => (prev < steps.length - 1 ? prev + 1 : prev));
+    }, 1600);
+    return () => clearInterval(timer);
+  }, [steps, serverStep]);
+
+  const activeStep = steps[currentStepIdx] || steps[0];
+  const StepIcon = activeStep.icon || Sparkles;
+
   return (
-    <div className="inline-flex items-center gap-2.5 px-1 py-1">
-      {/* Wave bars */}
-      <span className="flex gap-[3px] items-center h-4">
-        <span className="typing-dot" style={{ animationDelay: '0ms' }} />
-        <span className="typing-dot" style={{ animationDelay: '0.15s' }} />
-        <span className="typing-dot" style={{ animationDelay: '0.3s' }} />
-      </span>
-      {/* Shimmer "Thinking" text */}
-      <span
-        className="text-xs font-medium"
-        style={{
-          background: 'linear-gradient(90deg, hsl(var(--foreground-3)) 0%, hsl(var(--foreground)) 40%, hsl(var(--foreground-3)) 80%)',
-          backgroundSize: '200% auto',
-          WebkitBackgroundClip: 'text',
-          WebkitTextFillColor: 'transparent',
-          backgroundClip: 'text',
-          animation: 'thinking-shimmer 2s linear infinite',
-        }}
-      >
-        Thinking
-      </span>
+    <div className="inline-flex items-center gap-2 px-1 py-1">
+      {/* Pulsing step icon */}
+      <StepIcon className="w-3.5 h-3.5 text-[#BDBDBD] animate-pulse flex-shrink-0" />
+
+      {/* Process label with shimmer text effect */}
+      <div className="flex items-center gap-2 min-w-0">
+        <span
+          key={activeStep.label}
+          className="text-xs font-medium tracking-wide animate-fadeIn"
+          style={{
+            background: 'linear-gradient(90deg, hsl(var(--foreground-3)) 0%, hsl(var(--foreground)) 40%, hsl(var(--foreground-3)) 80%)',
+            backgroundSize: '200% auto',
+            WebkitBackgroundClip: 'text',
+            WebkitTextFillColor: 'transparent',
+            backgroundClip: 'text',
+            animation: 'thinking-shimmer 2.5s linear infinite',
+          }}
+        >
+          {activeStep.label}
+        </span>
+      </div>
+
+      {/* Step counter pill */}
+      {!serverStep && steps.length > 1 && (
+        <span className="text-[10px] font-mono font-medium text-[#888888] ml-0.5 opacity-80">
+          ({currentStepIdx + 1}/{steps.length})
+        </span>
+      )}
     </div>
   );
 }
@@ -792,6 +861,8 @@ export default function ChatPage() {
   const [highlightedMsgId, setHighlightedMsgId] = useState<string | null>(null);
   // ── Per-chat document list ────────────────────────────────────
   const [chatDocuments, setChatDocuments]       = useState<any[]>([]);
+  // ── Server-driven process step tracking ───────────────────────
+  const [currentServerStep, setCurrentServerStep] = useState<string | null>(null);
 
   // ── Modals & Overlays ────────────────────────────────────────
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -1466,6 +1537,8 @@ export default function ChatPage() {
             if (parsed.event === 'chunk') {
               asstText += parsed.text;
               scheduleTokenRender(asstText);
+            } else if (parsed.event === 'step') {
+              setCurrentServerStep(parsed.step);
             } else if (parsed.event === 'metrics') {
               updateMessage(asstMsgId, { developer_metrics: parsed.metrics });
             } else if (parsed.event === 'title') {
@@ -1489,6 +1562,7 @@ export default function ChatPage() {
         updateMessage(asstMsgId, { content: asstText });
       }
     } finally {
+      setCurrentServerStep(null);
       if (animFrameId !== null) {
         cancelAnimationFrame(animFrameId);
         animFrameId = null;
@@ -1792,6 +1866,8 @@ export default function ChatPage() {
             if (parsed.event === 'chunk') {
               asstText += parsed.text;
               updateMessage(asstId, { content: asstText });
+            } else if (parsed.event === 'step') {
+              setCurrentServerStep(parsed.step);
             } else if (parsed.event === 'metrics') {
               updateMessage(asstId, { developer_metrics: parsed.metrics });
             } else if (parsed.event === 'error') {
@@ -1810,6 +1886,7 @@ export default function ChatPage() {
         updateMessage(asstId, { content: asstText + `\n\n*[${formattedErr}]*` });
       }
     } finally {
+      setCurrentServerStep(null);
       setIsStreaming(false);
     }
   };
@@ -3078,7 +3155,18 @@ export default function ChatPage() {
 
                         {/* Assistant message block */}
                         {!isUser && (() => {
-                          if (isStreamingThis) return <TypingIndicator />;
+                          let prevUserMsgObj: any = null;
+                          for (let i = idx - 1; i >= 0; i--) {
+                            if (messages[i].role === 'user') {
+                              prevUserMsgObj = messages[i];
+                              break;
+                            }
+                          }
+                          if (isStreamingThis) {
+                            const userPromptText = prevUserMsgObj?.content || '';
+                            const hasFiles = (prevUserMsgObj?.files?.length > 0) || (prevUserMsgObj?.attachedFiles?.length > 0) || (chatDocuments?.length > 0);
+                            return <TypingIndicator userPrompt={userPromptText} hasFiles={hasFiles} serverStep={currentServerStep || undefined} />;
+                          }
                           const { clean, error } = parseErrorFromContent(m.content);
                           const displayContent = sanitizeAssistantContent(clean || m.content);
                           // Find the actual last user message before this assistant reply (skip system/tool)

@@ -9,6 +9,7 @@ export const resumeApi = {
     resume: ResumeData;
     parse_confidence: number;
     low_confidence_fields: string[];
+    section_confidences?: Record<string, number>;
     raw_text_length: number;
     parsing_method: string;
   }> {

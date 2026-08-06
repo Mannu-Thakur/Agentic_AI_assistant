@@ -27,8 +27,25 @@ def send_response(req_id: Any, result: Optional[Dict[str, Any]] = None, error: O
     sys.stdout.write(json.dumps(resp) + "\n")
     sys.stdout.flush()
 
+import os
+import asyncio
+
+# Ensure parent directory (backend) is on sys.path for app module imports
+backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if backend_dir not in sys.path:
+    sys.path.insert(0, backend_dir)
+
 def handle_web_search(query: str, max_results: int = 5) -> str:
-    """Fallback basic DuckDuckGo HTML web search for MCP server."""
+    """Unified multi-provider web search for MCP server with DDG fallback."""
+    try:
+        from app.services.web_search import unified_web_search, format_for_llm
+        results = asyncio.run(unified_web_search(query))
+        if results:
+            return format_for_llm(results[:max_results])
+    except Exception as exc:
+        pass
+
+    # Fallback basic DuckDuckGo HTML web search
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept-Language": "en-US,en;q=0.9",

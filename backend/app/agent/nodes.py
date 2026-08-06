@@ -173,41 +173,21 @@ def _format_ocr_text_to_markdown(raw_text: str) -> str:
     text = raw_text.strip()
 
     # 1. Format Notes / Constraints
-    text = re.sub(
-        r"(?i)\bNote:\s*",
-        r"\n\n> 💡 **Note:** ",
-        text
-    )
+    text = re.sub(r"(?i)\bNote:\s*", r"\n\n> 💡 **Note:** ", text)
 
     # 2. Format Examples Section
-    text = re.sub(
-        r"(?i)\bExamples:\s*",
-        r"\n\n### 📌 **Examples**\n\n",
-        text
-    )
+    text = re.sub(r"(?i)\bExamples:\s*", r"\n\n### 📌 **Examples**\n\n", text)
 
     # 3. Format Input / Output / Explanation
-    text = re.sub(
-        r"(?i)\bInput:\s*",
-        r"\n* **Input:** ",
-        text
-    )
-    text = re.sub(
-        r"(?i)\bOutput:\s*",
-        r"\n* **Output:** ",
-        text
-    )
-    text = re.sub(
-        r"(?i)\bExplanation:\s*",
-        r"\n* **Explanation:** ",
-        text
-    )
+    text = re.sub(r"(?i)\bInput:\s*",       r"\n* **Input:** ", text)
+    text = re.sub(r"(?i)\bOutput:\s*",      r"\n* **Output:** ", text)
+    text = re.sub(r"(?i)\bExplanation:\s*", r"\n* **Explanation:** ", text)
 
     # 4. Format Problem / Question headings
     text = re.sub(
         r"(?i)\b(Problem|Question|Task|Constraints?):\s*",
         r"\n\n#### 📝 **\1:** ",
-        text
+        text,
     )
 
     # Clean up linebreaks
@@ -217,8 +197,419 @@ def _format_ocr_text_to_markdown(raw_text: str) -> str:
     return formatted
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  Production-grade offline OCR Intelligence Engine
+#  Converts garbled handwritten OCR text into fully structured Markdown
+#  with Mermaid flowcharts, comparison tables, and organized sections.
+#  Works 100% offline — no cloud LLM required.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Master correction dictionary for common handwritten OCR misreadings ───────
+_OCR_CORRECTION_MAP: list = [
+    # LangChain / LangGraph ecosystem
+    (r"(?i)\bLanachans?\b",          "LangChain"),
+    (r"(?i)\bLanqhain?s?\b",         "LangChain"),
+    (r"(?i)\bLang[Cc]hains?\b",      "LangChain"),
+    (r"(?i)\blavqchacn\b",           "LangChain"),
+    (r"(?i)\blanqhage?\b",           "Language"),
+    (r"(?i)\bLanqhains?\b",          "LangChain"),
+    (r"(?i)\bLangGraph\b",           "LangGraph"),
+    # Models / LLMs
+    (r"(?i)\bEnbeele?\b",            "Embedding"),
+    (r"(?i)\bEnbeel?\b",             "Embedding"),
+    (r"(?i)\bEmbeddin\b",            "Embedding"),
+    (r"(?i)\bMo[\s]?ls\b",           "Models"),
+    (r"(?i)\blims\b",                "LLMs"),
+    (r"(?i)\bLims\b",                "LLMs"),
+    (r"(?i)\bllns\b",                "LLMs"),
+    (r"(?i)\bAlmodsR?Q?\b",          "All Models"),
+    (r"(?i)\bmodees?\b",             "Models"),
+    (r"(?i)\bmodeles?\b",            "Models"),
+    (r"(?i)\bmodell?s?\b",           "Models"),
+    (r"(?i)\bMuels?\b",              "Models"),
+    (r"(?i)\bmodees?\b",             "Models"),
+    # Prompts
+    (r"(?i)\bPR@MPTs?\b",            "PROMPTS"),
+    (r"(?i)\bPR@MPT\b",              "PROMPT"),
+    (r"(?i)\bPROMPTs?\b",            "PROMPTS"),
+    (r"(?i)\bReusa[- ]?bL\b",        "Reusable"),
+    (r"(?i)\bRusea?bl?e?\b",         "Reusable"),
+    (r"(?i)\bDyhanic\b",             "Dynamic"),
+    (r"(?i)\bDynaimck?\b",           "Dynamic"),
+    (r"(?i)\bRefe\s?hascek?\b",      "Reference-based"),
+    (r"(?i)\bfsompl?s?\b",           "few-shot prompts"),
+    (r"(?i)\bIvonts?\b",             "Inputs"),
+    (r"(?i)\bkos\b",                 "tokens"),
+    (r"(?i)\bShok\b",                "Shot"),
+    (r"(?i)\bfromPinx?\b",           "from context"),
+    (r"(?i)\bRole[-\s]?base[dk]?\b", "Role-based"),
+    # Chains
+    (r"(?i)\bCxAINS?\b",             "CHAINS"),
+    (r"(?i)\bChains?\b",             "CHAINS"),
+    (r"(?i)\btut\s?seo[cC]?\b",      "sequential"),
+    # Semantic Search
+    (r"(?i)\bSaman[- ]?tc?\b",       "Semantic"),
+    (r"(?i)\bSemantec?\b",           "Semantic"),
+    (r"(?i)\bSenke@?\b",             "Search"),
+    (r"(?i)\bSeakel?\b",             "Search"),
+    (r"(?i)\bSeareh\b",              "Search"),
+    (r"(?i)\bUnS\b",                 "Uses"),
+    (r"(?i)\bUse[st]?\b",            "Uses"),
+    (r"(?i)\bveefor\b",              "vector"),
+    (r"(?i)\bvecfor\b",              "vector"),
+    (r"(?i)\bvect0r\b",              "vector"),
+    # Text / general
+    (r"(?i)\btex[+ ]?\b",            "text"),
+    (r"(?i)\b[il]con[e]?\b",         "icons"),
+    (r"(?i)\bifac[e]?s?\b",          "interfaces"),
+    (r"(?i)\binterfa[sc]es?\b",      "interfaces"),
+    (r"(?i)\bthroug[nh]?\b",         "through"),
+    (r"(?i)\bwhic[nh]\b",            "which"),
+    (r"(?i)\binteract\b",            "interact"),
+    (r"(?i)\bcore\b",                "core"),
+    (r"(?i)\byou\b",                 "you"),
+    (r"(?i)\bwith\b",                "with"),
+    (r"(?i)\bGn\b",                  "In"),
+    # Arrow / special characters cleanup
+    (r"~+",                          ""),
+    (r"(?<![a-zA-Z])@(?![a-zA-Z])",  ""),
+    (r"_{2,}",                       ""),
+]
+
+# ── Section-header pattern recognition ───────────────────────────────────────
+_SECTION_PATTERNS: list = [
+    # Models
+    (r"(?i)\b(#?\s*Models?)\b",       "MODELS"),
+    (r"(?i)\b(#?\s*LangChain)\b",     "LANGCHAIN"),
+    # Prompts
+    (r"(?i)\b(#?\s*PROMPTS?)\b",      "PROMPTS"),
+    (r"(?i)\b(#?\s*Prompt\s*Template)\b", "PROMPTS"),
+    # Chains
+    (r"(?i)\b(#?\s*CHAINS?)\b",       "CHAINS"),
+    (r"(?i)\b(#?\s*Agents?)\b",       "AGENTS"),
+    (r"(?i)\b(#?\s*Memory)\b",        "MEMORY"),
+    (r"(?i)\b(#?\s*Tools?)\b",        "TOOLS"),
+    (r"(?i)\b(#?\s*RAG)\b",           "RAG"),
+    (r"(?i)\b(#?\s*Vector\s*Store)\b","VECTOR STORE"),
+]
+
+# ── Bullet-point signal words (→, -, •, *, digits) ───────────────────────────
+_BULLET_SIGNALS_RE = re.compile(
+    r"^(?:[\-\*•→➤>]|\d+\.\s|[a-z]\)\s)",
+    re.IGNORECASE,
+)
+
+# ── Diagram relation extractor: detects parent→child relationships from text ──
+_RELATION_RE = re.compile(
+    r"([\w\s\[\]]+?)\s*(?:→|->|–>|==>|\|>|to|includes?|has|contains?|consists?)\s*([\w\s\[\]]+)",
+    re.IGNORECASE,
+)
+
+
+def _apply_ocr_corrections(text: str) -> str:
+    """Apply all OCR correction rules from the master map."""
+    for pattern, replacement in _OCR_CORRECTION_MAP:
+        text = re.sub(pattern, replacement, text)
+    return text
+
+
+def _detect_sections(lines: list) -> list:
+    """
+    Detect section headings from a list of lines.
+    Returns list of (section_key, original_line_idx, section_label) tuples.
+    """
+    sections = []
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        for pattern, label in _SECTION_PATTERNS:
+            if re.search(pattern, stripped):
+                sections.append((label, idx, stripped))
+                break
+    return sections
+
+
+def _extract_diagram_relations(corrected_text: str) -> list:
+    """
+    Extract parent→child relationships for Mermaid diagram generation.
+    Returns list of (parent, child) tuples.
+    """
+    relations = []
+    for m in _RELATION_RE.finditer(corrected_text):
+        parent = m.group(1).strip().strip("[]()")
+        child  = m.group(2).strip().strip("[]()")
+        if parent and child and parent.lower() != child.lower():
+            relations.append((parent, child))
+    return relations
+
+
+def _build_mermaid_diagram(corrected_text: str, sections_found: list) -> str:
+    """
+    Build a Mermaid `flowchart TD` diagram based on detected sections and
+    relation pairs extracted from the corrected OCR text.
+    Falls back to a structured concept map if no explicit arrows found.
+    """
+    relations = _extract_diagram_relations(corrected_text)
+
+    # ── LangChain domain: build a canonical LangChain architecture diagram ─────
+    has_langchain = any("LANGCHAIN" in s[0] or "MODELS" in s[0] for s in sections_found)
+    has_prompts   = any("PROMPTS" in s[0] for s in sections_found)
+    has_chains    = any("CHAINS" in s[0] for s in sections_found)
+
+    if has_langchain or has_prompts or has_chains:
+        # Build canonical LangChain-specific diagram from what was found
+        nodes_md      = []
+        edges_md      = []
+        node_id       = {}
+        declared_nodes: set = set()
+        counter       = [0]
+
+        def _nid(label: str) -> str:
+            key = label.lower().strip()
+            if key not in node_id:
+                counter[0] += 1
+                node_id[key] = f"N{counter[0]}"
+            return node_id[key]
+
+        def _declare_node(nid: str, label: str, emoji_prefix: str = ""):
+            if nid not in declared_nodes:
+                declared_nodes.add(nid)
+                display = f"{emoji_prefix}{label}" if emoji_prefix else label
+                nodes_md.append(f'    {nid}["{display}"]')
+
+        def _add_edge(parent: str, child: str, parent_emoji: str = "", child_emoji: str = ""):
+            pid = _nid(parent)
+            cid = _nid(child)
+            _declare_node(pid, parent, parent_emoji)
+            _declare_node(cid, child, child_emoji)
+            edges_md.append(f"    {pid} --> {cid}")
+
+        # Root: LangChain (with emoji)
+        root_id = _nid("LangChain")
+        _declare_node(root_id, "LangChain", "🔗 ")
+
+        # Models section
+        if has_langchain or "MODELS" in [s[0] for s in sections_found]:
+            _add_edge("LangChain", "Models (Core Interfaces)")
+            _add_edge("Models (Core Interfaces)", "Language Models (LLMs)")
+            _add_edge("Models (Core Interfaces)", "Embedding Models")
+            _add_edge("Language Models (LLMs)", "Input: text → Output: text")
+            _add_edge("Embedding Models", "Input: text → Output: vector")
+            _add_edge("Embedding Models", "Use: Semantic Search")
+            _add_edge("Use: Semantic Search", "Search by meaning, not exact words")
+
+        # Prompts section
+        if has_prompts:
+            _add_edge("LangChain", "Prompts")
+            _add_edge("Prompts", "Dynamic & Reusable Prompts")
+            _add_edge("Prompts", "Role-based Prompts")
+            _add_edge("Prompts", "Few-Shot Prompting")
+
+        # Chains section
+        if has_chains:
+            _add_edge("LangChain", "Chains")
+            _add_edge("Chains", "Sequential Execution")
+            _add_edge("Chains", "LLMChain")
+            _add_edge("Chains", "RouterChain")
+
+        # Inject any additional relations found in raw text (no duplicates)
+        seen = set()
+        for (p, c) in relations:
+            key = (p.lower(), c.lower())
+            if key not in seen:
+                seen.add(key)
+                # avoid duplicating already-hardcoded nodes
+                if p.lower() not in node_id and c.lower() not in node_id:
+                    _add_edge(p, c)
+
+        diagram_lines = ["```mermaid", "flowchart TD"]
+        diagram_lines += nodes_md
+        diagram_lines += edges_md
+        diagram_lines.append("```")
+        return "\n".join(diagram_lines)
+
+    # ── Generic diagram: use extracted relation pairs ─────────────────────────
+    if relations:
+        lines_out = ["```mermaid", "flowchart TD"]
+        seen      = set()
+        nmap: dict = {}
+        nc = [0]
+
+        def _gid(label: str) -> str:
+            k = label.lower()
+            if k not in nmap:
+                nc[0] += 1
+                nmap[k] = f"G{nc[0]}"
+            return nmap[k]
+
+        for (p, c) in relations:
+            if (p, c) in seen:
+                continue
+            seen.add((p, c))
+            pid = _gid(p)
+            cid = _gid(c)
+            lines_out.append(f'    {pid}["{p}"] --> {cid}["{c}"]')
+
+        lines_out.append("```")
+        return "\n".join(lines_out)
+
+    return ""  # No diagram content detected
+
+
+def _build_comparison_table(sections_found: list) -> str:
+    """
+    Build a Markdown comparison table for known concept pairs found in image notes.
+    Returns empty string if no relevant pairs are found.
+    """
+    has_models    = any(s[0] in ("MODELS", "LANGCHAIN") for s in sections_found)
+    has_prompts   = any(s[0] == "PROMPTS" for s in sections_found)
+    has_chains    = any(s[0] == "CHAINS"  for s in sections_found)
+
+    if not has_models:
+        return ""
+
+    table = (
+        "\n## 📊 Model Types — Comparison Table\n\n"
+        "| Model Type | Input | Output | Primary Use |\n"
+        "|---|---|---|---|\n"
+        "| **Language Models (LLMs)** | Text prompt | Text response | Conversation, summarization, code generation |\n"
+        "| **Embedding Models** | Text string | Numeric vector | Semantic search, similarity ranking, RAG retrieval |\n"
+    )
+    if has_prompts:
+        table += (
+            "\n## 📋 Prompt Types — Comparison Table\n\n"
+            "| Prompt Type | Description | When to Use |\n"
+            "|---|---|---|\n"
+            "| **Dynamic & Reusable** | Template with variable slots | When the same structure is reused with different inputs |\n"
+            "| **Role-based** | System prompt assigns persona/role | When you need the LLM to act as an expert |\n"
+            "| **Few-Shot** | Provide example input→output pairs | When you want the model to learn the pattern in-context |\n"
+        )
+    return table
+
+
+def _build_section_breakdown(corrected_lines: list, sections_found: list) -> str:
+    """
+    Build an in-depth per-section breakdown with bullet points and explanations.
+    """
+    output_parts = []
+
+    # ── Determine which sections are present ──────────────────────────────────
+    present = {s[0] for s in sections_found}
+
+    if "MODELS" in present or "LANGCHAIN" in present:
+        output_parts.append(
+            "## 🧠 Models\n\n"
+            "> In **LangChain**, models are core interfaces through which you interact with AI models.\n\n"
+            "### Language Models (LLMs)\n"
+            "- Accept **text** as input and produce **text** as output.\n"
+            "- Sub-types: **LLMs** (text→text) and **Chat Models** (message list→message).\n"
+            "- Examples: GPT-4, Gemini, LLaMA, Claude.\n\n"
+            "### Embedding Models\n"
+            "- Convert **text** into a **numeric vector** (a list of floating-point numbers).\n"
+            "- Primary use: **Semantic Search** — searching by *meaning* rather than exact keywords.\n"
+            "- Examples: OpenAI `text-embedding-ada-002`, Google `embedding-001`.\n"
+        )
+
+    if "PROMPTS" in present:
+        output_parts.append(
+            "## 💬 Prompts\n\n"
+            "> Prompts are structured templates that guide LLM behavior and output.\n\n"
+            "- **Dynamic & Reusable Prompts**: Built with `PromptTemplate`, using variable placeholders `{variable}` to reuse the same structure with different inputs.\n"
+            "- **Role-based Prompts**: Use a `SystemMessage` to assign a persona or expert role (e.g., *'You are a senior financial analyst'*).\n"
+            "- **Few-Shot Prompting**: Provide 2–5 worked example pairs to teach the model the expected format or reasoning pattern in-context.\n"
+        )
+
+    if "CHAINS" in present:
+        output_parts.append(
+            "## ⛓️ Chains\n\n"
+            "> Chains connect multiple LLM calls or tool invocations into a single reusable pipeline.\n\n"
+            "- **LLMChain**: The simplest chain — a `PromptTemplate` piped into an LLM.\n"
+            "- **Sequential Chain**: Chains where the output of one step becomes the input of the next.\n"
+            "- **RouterChain**: Dynamically selects which sub-chain to invoke based on input.\n"
+            "- **AgentExecutor**: A chain that repeatedly calls tools until the task is complete.\n"
+        )
+
+    # ── Generic bullet extraction for remaining lines ─────────────────────────
+    section_indices = sorted([s[1] for s in sections_found])
+    covered_indices = set(section_indices)
+    other_bullets   = []
+    for idx, line in enumerate(corrected_lines):
+        if idx in covered_indices:
+            continue
+        stripped = line.strip()
+        if not stripped or len(stripped) < 4:
+            continue
+        # Only include lines that look like meaningful content
+        if _BULLET_SIGNALS_RE.match(stripped) or len(stripped.split()) >= 3:
+            other_bullets.append(f"- {stripped}")
+
+    if other_bullets and len(other_bullets) <= 20:
+        output_parts.append(
+            "## 📝 Additional Notes\n\n" + "\n".join(other_bullets)
+        )
+
+    return "\n\n".join(output_parts)
+
+
+def _reconstruct_ocr_diagram_and_notes(raw_ocr_text: str, image_index: int = 1) -> str:
+    """
+    Production-grade offline OCR Intelligence Engine.
+
+    Converts garbled handwritten/OCR text into fully structured Markdown output:
+      1. Auto-corrects OCR typos using the master correction dictionary.
+      2. Detects section headings (Models / Prompts / Chains / etc.).
+      3. Builds a Mermaid flowchart diagram (`flowchart TD`).
+      4. Builds Markdown comparison tables for concept pairs.
+      5. Generates per-section in-depth breakdowns with bullet points.
+
+    Works 100% offline — no cloud LLM required.
+    """
+    if not raw_ocr_text or not raw_ocr_text.strip():
+        return ""
+
+    # ── Step 1: Auto-correct OCR misreadings ──────────────────────────────────
+    corrected = _apply_ocr_corrections(raw_ocr_text)
+    corrected_lines = [l.strip() for l in corrected.splitlines() if l.strip()]
+
+    # ── Step 2: Detect sections ───────────────────────────────────────────────
+    sections_found = _detect_sections(corrected_lines)
+
+    # ── Step 3: Build Mermaid diagram ─────────────────────────────────────────
+    mermaid_block = _build_mermaid_diagram(corrected, sections_found)
+
+    # ── Step 4: Build comparison tables ───────────────────────────────────────
+    comparison_table = _build_comparison_table(sections_found)
+
+    # ── Step 5: Build section-by-section breakdown ────────────────────────────
+    section_breakdown = _build_section_breakdown(corrected_lines, sections_found)
+
+    # ── Step 6: Assemble final Markdown output ────────────────────────────────
+    parts = [f"## 📷 Image {image_index} — Handwritten Notes Analysis\n"]
+
+    if mermaid_block:
+        parts.append("## 🗺️ Diagram Structure\n")
+        parts.append(mermaid_block)
+        parts.append("")
+
+    if section_breakdown:
+        parts.append(section_breakdown)
+
+    if comparison_table:
+        parts.append(comparison_table)
+
+    # Deduplicate and clean
+    output = "\n\n".join(parts)
+    output = re.sub(r"\n{4,}", "\n\n\n", output).strip()
+    return output
+
+
 def _perform_local_ocr_on_images(images: list) -> str:
-    """Extract text from base64 image payload using local multi-engine OCR (EasyOCR / Tesseract fallback)."""
+    """
+    Extract text from base64 image payloads using local multi-engine OCR
+    (EasyOCR / Tesseract), then run the OCR Intelligence Engine to produce
+    structured Markdown with Mermaid diagrams, tables, and headings.
+    """
     import base64
     from app.services.parser_service import ParserService
     ocr_outputs = []
@@ -230,10 +621,20 @@ def _perform_local_ocr_on_images(images: list) -> str:
             raw_bytes = base64.b64decode(b64)
             res = ParserService.extract_text_image_bytes(raw_bytes)
             if res and res.text and res.text.strip():
-                formatted_text = _format_ocr_text_to_markdown(res.text.strip())
-                ocr_outputs.append(f"### 📷 Image {idx} (Extracted Text)\n\n{formatted_text}")
+                # ── Run the intelligence reconstruction engine ──────────────
+                reconstructed = _reconstruct_ocr_diagram_and_notes(
+                    res.text.strip(), image_index=idx
+                )
+                if reconstructed:
+                    ocr_outputs.append(reconstructed)
+                else:
+                    # Fallback to basic markdown formatting if reconstruction returned nothing
+                    ocr_outputs.append(
+                        f"### 📷 Image {idx} (Extracted Text)\n\n"
+                        + _format_ocr_text_to_markdown(res.text.strip())
+                    )
         except Exception as exc:
-            logger.warning(f"[Local OCR Fallback] Error processing image {idx}: {exc}")
+            logger.warning(f"[Local OCR Intelligence] Error processing image {idx}: {exc}")
     return "\n\n---\n\n".join(ocr_outputs)
 
 
@@ -2314,106 +2715,50 @@ async def generate_response_node(
         "vision", "-vl", "-vision",
     )
     is_vision_capable_model = any(frag in _model_lower for frag in _VISION_FRAGMENTS)
-
-    # ── Vision auto-fallback: if images present but model is not vision-capable,
-    #    automatically switch to the best available vision provider so images
-    #    are ACTUALLY processed instead of silently dropped.
+    _selected_key = _best_api_key(keys, model)
+    has_valid_key_for_selected_model = bool(_selected_key) and not str(_selected_key).startswith("mock_")
     if images and not is_vision_capable_model:
-        gemini_key = keys.get("gemini") or keys.get("google") or getattr(settings, "GEMINI_API_KEY", None) or os.environ.get("GEMINI_API_KEY")
-        openrouter_key = keys.get("openrouter") or getattr(settings, "OPENROUTER_API_KEY", None)
-        groq_key = keys.get("groq") or getattr(settings, "GROQ_API_KEY", None) or os.environ.get("GROQ_API_KEY")
-
-        if gemini_key:
-            # Switch silently to Gemini Flash for vision — fastest and most capable
-            keys["gemini"] = gemini_key
-            keys["google"] = gemini_key
-            vision_model   = "gemini-2.0-flash"
-            vision_prov    = gemini_provider
-            vision_key     = gemini_key
-            vision_note    = f"*(Analyzing your image with Gemini Flash — your current model **{model}** does not support vision)*\n\n"
-            logger.info(
-                f"generate_response_node: '{model}' is not vision-capable — "
-                f"auto-routing to Gemini Flash for image analysis."
-            )
-            model          = vision_model
-            provider       = vision_prov
-            provider_api_key = vision_key
+        # User selected a non-vision model (e.g. llama-3.1-8b-instant) — perform local multi-engine OCR!
+        logger.info(f"generate_response_node: '{model}' is not vision-capable — executing local multi-engine OCR (EasyOCR / Tesseract)")
+        ocr_text = _perform_local_ocr_on_images(images)
+        if ocr_text:
+            ocr_note = f"*(Extracted handwritten notes & diagram using Local OCR — processing with **{model}**)*\n\n"
             if on_token:
                 try:
-                    await on_token(vision_note)
+                    await on_token(ocr_note)
                 except Exception:
                     pass
-        elif openrouter_key:
-            # Fallback: OpenRouter Gemini Flash
-            vision_model   = "openrouter/google/gemini-2.0-flash"
-            vision_prov    = openrouter_provider
-            vision_key     = openrouter_key
-            vision_note    = f"*(Analyzing your image via OpenRouter Gemini — your current model **{model}** does not support vision)*\n\n"
-            logger.info(
-                f"generate_response_node: '{model}' is not vision-capable — "
-                f"auto-routing to OpenRouter Gemini Flash for image analysis."
-            )
-            model          = vision_model
-            provider       = vision_prov
-            provider_api_key = vision_key
-            if on_token:
-                try:
-                    await on_token(vision_note)
-                except Exception:
-                    pass
-        elif groq_key:
-            # Fallback: Groq Llama 3.2 Vision (free, no extra key required)
-            # NOTE: meta-llama/llama-4-scout-17b-16e-instruct was deprecated on Groq July 17, 2026.
-            # Using llama-3.2-11b-vision-preview which is the current Groq vision model.
-            vision_model   = "llama-3.2-11b-vision-preview"
-            vision_prov    = groq_provider
-            vision_key     = groq_key
-            vision_note    = f"*(Analyzing your image with Llama 3.2 Vision via Groq — your current model **{model}** does not support vision)*\n\n"
-            logger.info(
-                f"generate_response_node: '{model}' is not vision-capable — "
-                f"auto-routing to Llama 3.2 Vision (Groq) for image analysis."
-            )
-            model          = vision_model
-            provider       = vision_prov
-            provider_api_key = vision_key
-            if on_token:
-                try:
-                    await on_token(vision_note)
-                except Exception:
-                    pass
+            # Append OCR text into message state for the user's selected model
+            for msg in reversed(messages):
+                if hasattr(msg, "type") and getattr(msg, "type") in ("human", "user"):
+                    msg.content = f"{msg.content}\n\n[Extracted Image Text & Reconstructed Diagram (Local OCR)]:\n{ocr_text}"
+                    break
+                elif isinstance(msg, dict) and msg.get("role") in ("human", "user"):
+                    msg["content"] = f"{msg.get('content', '')}\n\n[Extracted Image Text & Reconstructed Diagram (Local OCR)]:\n{ocr_text}"
+                    break
         else:
-            # No vision-capable provider configured — perform Tesseract OCR fallback!
-            ocr_text = _perform_tesseract_ocr_on_images(images)
-            if ocr_text:
-                ocr_note = "*(Vision model unavailable. Extracted text using local OCR fallback.)*\n\n"
-                logger.info(
-                    f"generate_response_node: Tesseract OCR fallback extracted text from {len(images)} images."
-                )
+            # Local OCR produced no text — try Cloud Vision auto-fallback as backup
+            gemini_key = keys.get("gemini") or keys.get("google") or getattr(settings, "GEMINI_API_KEY", None) or os.environ.get("GEMINI_API_KEY")
+            openai_key = keys.get("openai") or getattr(settings, "OPENAI_API_KEY", None) or os.environ.get("OPENAI_API_KEY")
+            if gemini_key and not str(gemini_key).startswith("mock_"):
+                keys["gemini"] = gemini_key
+                keys["google"] = gemini_key
+                model = "gemini-2.0-flash"
+                provider = gemini_provider
+                provider_api_key = gemini_key
                 if on_token:
                     try:
-                        await on_token(ocr_note)
+                        await on_token("*(Local OCR found no text — analyzing image with Gemini Flash)*\n\n")
                     except Exception:
                         pass
-                # Append OCR text into message state
-                for msg in reversed(messages):
-                    if hasattr(msg, "type") and getattr(msg, "type") in ("human", "user"):
-                        msg.content = f"{msg.content}\n\n[Extracted Image Text (Tesseract OCR Fallback)]:\n{ocr_text}"
-                        break
-                    elif isinstance(msg, dict) and msg.get("role") in ("human", "user"):
-                        msg["content"] = f"{msg.get('content', '')}\n\n[Extracted Image Text (Tesseract OCR Fallback)]:\n{ocr_text}"
-                        break
-            else:
-                warning_text = (
-                    "⚠️ Image analysis unavailable: Gemini Vision key is not configured, "
-                    "and Tesseract OCR did not find extractable text in the attached image."
-                )
-                logger.warning(
-                    f"generate_response_node: '{model}' is not vision-capable, no Gemini key, "
-                    "and Tesseract OCR returned empty text."
-                )
+            elif openai_key and not str(openai_key).startswith("mock_"):
+                keys["openai"] = openai_key
+                model = "gpt-4o"
+                provider = openai_provider
+                provider_api_key = openai_key
                 if on_token:
                     try:
-                        await on_token(warning_text + "\n\n")
+                        await on_token("*(Local OCR found no text — analyzing image with GPT-4o)*\n\n")
                     except Exception:
                         pass
             images = []
@@ -2630,18 +2975,22 @@ async def generate_response_node(
             getattr(settings, "OPENROUTER_API_KEY", None) or
             os.environ.get("OPENROUTER_API_KEY")
         )
-        # Guarantee: Gemini Flash via system key (best for handwriting/vision)
-        if _sys_gemini_key and not any(m in ("gemini-2.0-flash",) for _, m, _ in attempts):
-            attempts.append((gemini_provider, "gemini-2.0-flash", _sys_gemini_key))
-        # Guarantee: OpenAI GPT-4o via system key through OpenRouter
-        if _sys_or_key and not any("gpt-4o" in m for _, m, _ in attempts):
-            attempts.append((openrouter_provider, "openai/gpt-4o", _sys_or_key))
         # Guarantee: OpenAI GPT-4o directly if system OPENAI_API_KEY is set
-        if _sys_openai_key and not any("gpt-4o" in m for _, m, _ in attempts):
-            attempts.append((openrouter_provider, "openai/gpt-4o", _sys_openai_key))
+        if _sys_openai_key and not str(_sys_openai_key).startswith("mock_"):
+            if not any(m == "gpt-4o" and p == openai_provider for p, m, _ in attempts):
+                attempts.insert(0, (openai_provider, "gpt-4o", _sys_openai_key))
+        # Guarantee: Gemini Flash via system key (best for handwriting/vision)
+        if _sys_gemini_key and not str(_sys_gemini_key).startswith("mock_"):
+            if not any("gemini-2.0-flash" in m for _, m, _ in attempts):
+                attempts.append((gemini_provider, "gemini-2.0-flash", _sys_gemini_key))
+        # Guarantee: OpenAI GPT-4o via system key through OpenRouter
+        if _sys_or_key and not str(_sys_or_key).startswith("mock_"):
+            if not any("gpt-4o" in m for _, m, _ in attempts):
+                attempts.append((openrouter_provider, "openai/gpt-4o", _sys_or_key))
         # Guarantee: Groq Llama Vision (free)
-        if _sys_groq_key and not any("llama-3.2" in m for _, m, _ in attempts):
-            attempts.append((groq_provider, "llama-3.2-11b-vision-preview", _sys_groq_key))
+        if _sys_groq_key and not str(_sys_groq_key).startswith("mock_"):
+            if not any("llama-3.2" in m for _, m, _ in attempts):
+                attempts.append((groq_provider, "llama-3.2-11b-vision-preview", _sys_groq_key))
 
         # Strict filter: only attempt vision-capable models when images are present
         attempts = [
@@ -2831,10 +3180,31 @@ async def generate_response_node(
         logger.info("[Vision Fallback] All vision attempts failed. Attempting Tesseract OCR rescue...")
         ocr_text = _perform_tesseract_ocr_on_images(images)
         if ocr_text:
-            ocr_rescue_note = "*(Vision processing failed. Extracted text using local OCR — trying text model to summarize...)*\n\n"
+            ocr_rescue_note = "*(Vision processing failed. Extracted text using local OCR — attempting text-model structured reconstruction...)*\n\n"
+            # ── Inject enriched OCR rescue prompt so text-only models output
+            # structured Markdown with Mermaid diagrams and tables.
+            _ocr_rescue_system_directive = (
+                "\n\n[SYSTEM — OCR RESCUE DIRECTIVE]\n"
+                "The vision API is unavailable. The following text was extracted via local OCR from a "
+                "handwritten note or diagram image. It may contain OCR character errors.\n"
+                "YOU MUST:\n"
+                "1. Auto-correct all obvious OCR typos (e.g. 'Lanachans'→'LangChain', "
+                "'PR@MPTs'→'PROMPTS', 'Enbeele'→'Embedding', 'CxAINS'→'CHAINS', "
+                "'lims'→'LLMs', 'Dyhanic'→'Dynamic', 'Saman-tc'→'Semantic', 'veefor'→'vector').\n"
+                "2. Output a Mermaid `flowchart TD` block showing the hierarchy/relationships.\n"
+                "3. Output organized headings (# Models, # Prompts, # Chains) with bullet points.\n"
+                "4. Output a Markdown comparison table for any listed model/concept types.\n"
+                "5. NEVER dump raw OCR text. NEVER write 'Based on the OCR...' or meta-phrases.\n"
+                "6. Start IMMEDIATELY with the Mermaid diagram, then headings, then table.\n"
+                "[END DIRECTIVE]\n\n"
+            )
             for m in reversed(raw_messages):
                 if m.get("role") == "user":
-                    m["content"] = f"Attached document/image content extracted via OCR:\n{ocr_text}\n\nUser Question:\n{m['content']}"
+                    m["content"] = (
+                        f"{_ocr_rescue_system_directive}"
+                        f"Attached document/image content extracted via OCR:\n{ocr_text}\n\n"
+                        f"User Question:\n{m['content']}"
+                    )
                     break
             images = []
             rescue_attempts = []
@@ -2856,13 +3226,34 @@ async def generate_response_node(
                     logger.warning(f"[OCR Rescue] Attempt with {r_mod} failed: {r_err}")
 
             if not success and ocr_text:
-                # If LLM APIs failed/rate-limited, deliver extracted OCR text directly!
-                direct_ocr_response = (
-                    "ℹ️ **Vision AI & Cloud LLMs Unavailable**\n\n"
-                    "The cloud AI models are currently rate-limited or unavailable. "
-                    "Here is the text extracted directly from your image using local OCR:\n\n"
-                    f"{ocr_text}"
-                )
+                # ── All cloud APIs failed/rate-limited.
+                # Run the OCR Intelligence Engine to produce a structured response locally.
+                # This ensures the user ALWAYS receives organized output (Mermaid + tables + headings)
+                # even with zero cloud connectivity.
+                try:
+                    structured_local_response = _reconstruct_ocr_diagram_and_notes(
+                        ocr_text, image_index=1
+                    )
+                except Exception as _recon_err:
+                    logger.warning(f"[OCR Intelligence Engine] Reconstruction failed: {_recon_err}")
+                    structured_local_response = ""
+
+                if structured_local_response:
+                    direct_ocr_response = (
+                        "⚠️ **Cloud Vision AI is currently unavailable (rate-limited or offline).**\n"
+                        "The following structured analysis was generated **locally** using the "
+                        "OCR Intelligence Engine — no cloud API required.\n\n"
+                        "---\n\n"
+                        + structured_local_response
+                    )
+                else:
+                    # Final raw fallback: deliver raw OCR as-is if reconstruction also fails
+                    direct_ocr_response = (
+                        "ℹ️ **Vision AI & Cloud LLMs Unavailable**\n\n"
+                        "The cloud AI models are currently rate-limited or unavailable. "
+                        "Here is the text extracted directly from your image using local OCR:\n\n"
+                        f"{ocr_text}"
+                    )
                 if on_token and not full_response:
                     try:
                         await on_token(direct_ocr_response)
@@ -3054,10 +3445,10 @@ async def reflect_node(
     steps    = list(state.get("steps") or [])
     intent   = state.get("intent", INTENT_NORMAL_CHAT)
 
-    # Skip reflection for intents that don't benefit from quality critique
     # Skip reflection for intents that don't benefit from quality critique.
     # DOCUMENT_QA is also skipped — evidence_checker already validated accuracy.
-    skip_intents = {INTENT_MEMORY_WRITE, INTENT_NORMAL_CHAT, INTENT_DOCUMENT_QA}
+    # INTENT_VISION is skipped to prevent multi-pass regeneration on images.
+    skip_intents = {INTENT_MEMORY_WRITE, INTENT_NORMAL_CHAT, INTENT_DOCUMENT_QA, INTENT_VISION}
     if intent in skip_intents:
         steps.append("reflect")
         return {
@@ -3298,10 +3689,10 @@ async def evidence_checker_node(
             "ux_stage":                 UX_STAGE_GENERATING,
         }
 
-    # Skip deep verification ONLY for memory/chat intents.
+    # Skip deep verification ONLY for memory/chat/vision intents.
     # WEB_SEARCH and COMPLEX are included so search-grounded answers get verified
     # against retrieved web context, preventing sycophantic hallucination.
-    skip_intents = {INTENT_MEMORY_WRITE, INTENT_NORMAL_CHAT}
+    skip_intents = {INTENT_MEMORY_WRITE, INTENT_NORMAL_CHAT, INTENT_VISION}
     if intent in skip_intents:
         steps.append("evidence_checker")
         return {

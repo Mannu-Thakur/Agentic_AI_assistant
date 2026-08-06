@@ -74,6 +74,7 @@ class AnalyzeResumeResponse(BaseModel):
     resume: ResumeData
     parse_confidence: float = Field(ge=0.0, le=1.0)
     low_confidence_fields: List[str] = Field(default_factory=list)
+    section_confidences: dict[str, float] = Field(default_factory=dict)
     raw_text_length: int = 0
     parsing_method: str = ""    # "pdf_native", "pdf_ocr", "docx"
 

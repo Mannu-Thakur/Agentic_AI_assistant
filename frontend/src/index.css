@@ -2193,3 +2193,56 @@ input:-webkit-autofill:active {
   -webkit-box-shadow: 0 0 0px 1000px #0b0e14 inset !important;
   transition: background-color 5000s ease-in-out 0s !important;
 }
+
+/* ============================================================
+   PREMIUM SLEEK UI UTILITIES
+   ============================================================ */
+.bg-dot-grid {
+  background-image: radial-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+.light .bg-dot-grid {
+  background-image: radial-gradient(rgba(0, 0, 0, 0.04) 1px, transparent 1px);
+}
+
+.glass-card-premium {
+  background: rgba(18, 20, 29, 0.75);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+}
+
+.light .glass-card-premium {
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.05);
+}
+
+.glow-orb-violet {
+  position: absolute;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(124, 58, 237, 0.12) 0%, rgba(124, 58, 237, 0) 70%);
+  filter: blur(80px);
+  pointer-events: none;
+}
+
+.glow-orb-indigo {
+  position: absolute;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(99, 102, 241, 0.10) 0%, rgba(99, 102, 241, 0) 70%);
+  filter: blur(80px);
+  pointer-events: none;
+}
+
+.glow-button {
+  position: relative;
+  overflow: hidden;
+  transition: all 0.2s ease;
+}
+
+.glow-button:hover {
+  box-shadow: 0 0 20px rgba(99, 102, 241, 0.35);
+  transform: translateY(-1px);
+}

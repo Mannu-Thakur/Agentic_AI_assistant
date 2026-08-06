@@ -51,11 +51,14 @@ interface ResumeState {
   isApplyingSuggestion: boolean;
   parseConfidence: number;
   lowConfidenceFields: string[];
+  sectionConfidences: Record<string, number>;
+  showReviewModal: boolean;
 
   // Actions
   setStep: (step: 1 | 2 | 3) => void;
   setActiveTab: (tab: ResumeState['activeTab']) => void;
   setTemplate: (template: TemplateType) => void;
+  setShowReviewModal: (show: boolean) => void;
   updateResume: (updater: (prev: ResumeData) => ResumeData) => void;
   setResumeData: (data: ResumeData) => void;
 
@@ -89,10 +92,13 @@ export const useResumeStore = create<ResumeState>((set, get) => ({
   isApplyingSuggestion: false,
   parseConfidence: 1.0,
   lowConfidenceFields: [],
+  sectionConfidences: {},
+  showReviewModal: false,
 
   setStep: (step) => set({ step }),
   setActiveTab: (tab) => set({ activeTab: tab }),
   setTemplate: (template) => set({ selectedTemplate: template }),
+  setShowReviewModal: (show) => set({ showReviewModal: show }),
 
   updateResume: (updater) => {
     const next = updater(get().currentResume);
@@ -115,7 +121,8 @@ export const useResumeStore = create<ResumeState>((set, get) => ({
         originalResume: res.resume,
         parseConfidence: res.parse_confidence,
         lowConfidenceFields: res.low_confidence_fields,
-        step: 2,
+        sectionConfidences: res.section_confidences || {},
+        showReviewModal: true,
       });
 
       // Initial version push
@@ -242,6 +249,8 @@ export const useResumeStore = create<ResumeState>((set, get) => ({
       versions: [],
       parseConfidence: 1.0,
       lowConfidenceFields: [],
+      sectionConfidences: {},
+      showReviewModal: false,
     });
   },
 }));

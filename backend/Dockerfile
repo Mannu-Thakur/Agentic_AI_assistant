@@ -13,6 +13,7 @@ RUN apt-get update -o Acquire::Retries=3 && apt-get install -y -o Acquire::Retri
     build-essential \
     libpq-dev \
     tesseract-ocr \
+    poppler-utils \
     curl \
     && rm -rf /var/lib/apt/lists/*
 

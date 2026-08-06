@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { apiRequest } from '../services/api';
-import { KeyRound, Lock, CheckCircle2, AlertCircle, Eye, EyeOff, Loader2, ShieldAlert, Check, X, Bug } from 'lucide-react';
+import { KeyRound, Lock, CheckCircle2, AlertCircle, Eye, EyeOff, Loader2, ShieldAlert, Check, X } from 'lucide-react';
 
 export default function ResetPasswordPage() {
   const [searchParams] = useSearchParams();
@@ -120,14 +120,14 @@ export default function ResetPasswordPage() {
       {/* Top Logo Badge */}
       <div className="flex justify-center">
         <div className="w-12 h-12 rounded-xl bg-[#232731] border border-white/10 flex items-center justify-center shadow-md">
-          <Bug className="w-6 h-6 text-white" />
+          <KeyRound className="w-6 h-6 text-white" />
         </div>
       </div>
 
       {/* Header Title & Subtitle */}
       <div className="text-center">
         <h2 className="text-xl font-bold text-white tracking-tight">
-          reset password for bug<span className="text-[#2563eb]">X</span>
+          Reset your password
         </h2>
         <p className="text-gray-400 text-xs mt-1 font-normal">
           Remember your password?{' '}

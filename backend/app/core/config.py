@@ -30,7 +30,11 @@ _TESSERACT_SEARCH_PATHS = [
 
 
 def _find_tesseract() -> Optional[str]:
-    """Search well-known Windows paths for tesseract.exe."""
+    """Search system PATH and well-known Windows paths for tesseract binary."""
+    import shutil
+    system_path = shutil.which("tesseract")
+    if system_path:
+        return system_path
     for path in _TESSERACT_SEARCH_PATHS:
         resolved = path.format(username=os.environ.get("USERNAME", ""))
         if os.path.isfile(resolved):
