@@ -26,6 +26,7 @@ from app.resume.schemas import (
     DiffRequest, DiffResponse,
     ExportRequest, ApplySuggestionRequest, SuggestionResult,
     LatexPreviewRequest, LatexPreviewResponse,
+    ParseLatexRequest, CompileLatexRequest, ParseLatexResponse,
     HealthResponse,
 )
 from app.resume.parser import parse_resume_file
@@ -33,7 +34,8 @@ from app.resume.jd_analyzer import analyze_job_description
 from app.resume.ats import compute_ats_score
 from app.resume.services import ResumeService
 from app.resume.diff import compute_resume_diff
-from app.resume.renderer import export_resume, generate_latex
+from app.resume.renderer import export_resume, generate_latex, generate_pdf
+from app.resume.latex_parser import parse_latex_to_resume
 
 
 logger = logging.getLogger("app.resume.routes")
@@ -263,4 +265,50 @@ async def preview_latex_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to generate LaTeX preview: {str(exc)}",
         )
+
+
+@router.post("/parse-latex", response_model=ParseLatexResponse)
+async def parse_latex_endpoint(
+    req: ParseLatexRequest,
+    current_user: Optional[UserOut] = Depends(get_current_user_optional),
+):
+    """
+    Parse arbitrary custom LaTeX resume code string into canonical ResumeData JSON structure.
+    Enables instant bidirectional syncing between custom LaTeX code and structured resume editor/ATS scoring.
+    """
+    try:
+        parsed_resume = parse_latex_to_resume(req.latex_code)
+        return ParseLatexResponse(resume=parsed_resume)
+    except Exception as exc:
+        logger.error(f"[ResumeRoutes] LaTeX parsing failed: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to parse LaTeX code: {str(exc)}",
+        )
+
+
+@router.post("/compile-latex")
+async def compile_latex_endpoint(
+    req: CompileLatexRequest,
+    current_user: Optional[UserOut] = Depends(get_current_user_optional),
+):
+    """
+    Compile LaTeX code string into a downloadable formatted PDF stream.
+    """
+    try:
+        # Parse LaTeX structure to ResumeData and generate high-fidelity PDF
+        parsed_resume = parse_latex_to_resume(req.latex_code)
+        pdf_bytes = generate_pdf(parsed_resume, template=req.template or "modern")
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": 'attachment; filename="latex_resume.pdf"'},
+        )
+    except Exception as exc:
+        logger.error(f"[ResumeRoutes] LaTeX compilation failed: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to compile LaTeX code: {str(exc)}",
+        )
+
 

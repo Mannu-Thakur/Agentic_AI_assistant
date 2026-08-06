@@ -103,14 +103,30 @@ export const UploadStep: React.FC = () => {
         )}
       </div>
 
-      {/* Minimalist Secondary Link */}
-      <button
-        onClick={startFromScratch}
-        className="inline-flex items-center space-x-1.5 text-xs text-zinc-400 hover:text-zinc-200 transition-colors pt-2"
-      >
-        <span>Don't have a resume? Start with a blank template</span>
-        <ArrowRight className="w-3.5 h-3.5 text-indigo-400" />
-      </button>
+      {/* Secondary Options */}
+      <div className="flex flex-wrap items-center justify-center gap-4 pt-2">
+        <button
+          onClick={startFromScratch}
+          className="inline-flex items-center space-x-1.5 text-xs text-zinc-400 hover:text-zinc-200 transition-colors"
+        >
+          <span>Start with a blank template</span>
+          <ArrowRight className="w-3.5 h-3.5 text-indigo-400" />
+        </button>
+
+        <span className="text-zinc-600 text-xs">•</span>
+
+        <button
+          onClick={() => {
+            setResumeData(createEmptyResume());
+            setStep(3);
+            useResumeStore.getState().setActiveTab('latex');
+          }}
+          className="inline-flex items-center space-x-1.5 text-xs font-semibold text-violet-400 hover:text-violet-300 transition-colors"
+        >
+          <span>Use LaTeX Code Studio</span>
+          <ArrowRight className="w-3.5 h-3.5 text-violet-400" />
+        </button>
+      </div>
     </div>
   );
 };

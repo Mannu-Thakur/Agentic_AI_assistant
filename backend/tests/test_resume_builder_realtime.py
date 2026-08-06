@@ -203,3 +203,36 @@ def test_full_resume_pipeline():
     _run_suggest(resume_data, jd_analysis)
     _run_export(tailored)
 
+
+def test_tailor_empty_resume_populates_all_sections():
+    empty_resume = ResumeData().model_dump()
+    jd_analysis = {
+        "role": "Senior Full Stack AI Engineer",
+        "company": "CloudInnovate AI",
+        "experience_level": "Senior",
+        "required_skills": ["Python", "FastAPI", "React", "LangChain", "Kubernetes"],
+        "technologies": ["PostgreSQL", "Redis", "Docker", "Terraform", "Pinecone"],
+        "keywords": ["RAG", "Vector Search", "LLMs", "Microservices"]
+    }
+
+    res = client.post(
+        "/api/v1/resume/tailor",
+        json={
+            "resume": empty_resume,
+            "jd_analysis": jd_analysis,
+            "section": "all",
+            "style": "rewrite"
+        }
+    )
+    assert res.status_code == 200
+    data = res.json()
+    tailored = data["tailored_resume"]
+
+    assert tailored["headline"] != ""
+    assert len(tailored["summary"]) > 20
+    assert len(tailored["skills"]) >= 2
+    assert len(tailored["experience"]) >= 1
+    assert len(tailored["projects"]) >= 1
+    assert len(tailored["education"]) >= 1
+
+

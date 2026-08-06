@@ -32,7 +32,7 @@ export const createEmptyResume = (): ResumeData => ({
 interface ResumeState {
   // Step & Tab management
   step: 1 | 2 | 3;
-  activeTab: 'editor' | 'preview' | 'diff' | 'ats' | 'suggestions' | 'versions' | 'templates' | 'export';
+  activeTab: 'editor' | 'preview' | 'diff' | 'ats' | 'suggestions' | 'versions' | 'templates' | 'export' | 'latex';
   
   // Data
   currentResume: ResumeData;
@@ -137,8 +137,12 @@ export const useResumeStore = create<ResumeState>((set, get) => ({
     set({ isAnalyzingJD: true });
     try {
       const res = await resumeApi.analyzeJD(jdText);
-      set({ jdAnalysis: res.jd_analysis, step: 3 });
-      get().recomputeATS();
+      set({ jdAnalysis: res.jd_analysis });
+      await get().tailorResume('all', 'rewrite');
+      set({ step: 3, activeTab: 'preview' });
+    } catch (err) {
+      console.error('JD analysis / tailoring failed:', err);
+      throw err;
     } finally {
       set({ isAnalyzingJD: false });
     }

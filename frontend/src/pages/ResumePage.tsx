@@ -2,7 +2,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Sparkles, ArrowLeft, FileText,
   ShieldCheck, GitCompare, Layout, Lightbulb, History,
-  Download, RefreshCw, Wand2
+  Download, RefreshCw, Wand2, Code
 } from 'lucide-react';
 import { useResumeStore } from '../store/resumeStore';
 import { UploadStep } from '../components/resume/UploadStep';
@@ -16,6 +16,7 @@ import { VersionHistory } from '../components/resume/VersionHistory';
 import { SuggestionsPanel } from '../components/resume/SuggestionsPanel';
 import { ReviewStep } from '../components/resume/ReviewStep';
 import { ExportPanel } from '../components/resume/ExportPanel';
+import { LatexStudio } from '../components/resume/LatexStudio';
 
 export default function ResumePage() {
   const navigate = useNavigate();
@@ -200,6 +201,17 @@ export default function ResumePage() {
                   <Download className="w-3.5 h-3.5" />
                   <span>Export</span>
                 </button>
+                <button
+                  onClick={() => setActiveTab('latex')}
+                  className={`flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                    activeTab === 'latex'
+                      ? 'bg-gradient-to-r from-violet-600 to-indigo-600 text-white shadow-md shadow-violet-900/40 ring-1 ring-violet-400/40'
+                      : 'text-violet-300 hover:text-white hover:bg-violet-500/10'
+                  }`}
+                >
+                  <Code className="w-3.5 h-3.5 text-violet-400" />
+                  <span>LaTeX Studio</span>
+                </button>
               </div>
 
               {/* AI Tailor Action Button */}
@@ -225,7 +237,7 @@ export default function ResumePage() {
             </div>
 
             {/* Step 3 Active Tab View */}
-            <div className="flex-1 min-h-0 overflow-y-auto">
+            <div className="flex-1 min-h-0 overflow-y-auto flex flex-col">
               {activeTab === 'editor' && <ResumeEditor />}
               {activeTab === 'preview' && <LivePreview />}
               {activeTab === 'ats' && <ATSDashboard />}
@@ -234,6 +246,7 @@ export default function ResumePage() {
               {activeTab === 'suggestions' && <SuggestionsPanel />}
               {activeTab === 'versions' && <VersionHistory />}
               {activeTab === 'export' && <ExportPanel />}
+              {activeTab === 'latex' && <LatexStudio />}
             </div>
           </div>
         )}

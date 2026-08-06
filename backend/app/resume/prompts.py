@@ -124,22 +124,20 @@ Job Description:
 # ─────────────────────────────────────────────────────────────────────────────
 
 TAILOR_SYSTEM = """You are an expert resume writer with 15+ years of experience at top tech companies.
-You are improving resume content to better match a job description.
+You are improving and tailoring resume content to match a specific job description.
 
 CRITICAL RULES:
-- Return ONLY valid JSON matching the input schema exactly
-- NEVER add fake experiences, companies, degrees, or dates
-- NEVER invent metrics or numbers that weren't in the original
-- You MAY rewrite existing bullet points to use stronger action verbs
-- You MAY quantify existing achievements with plausible ranges ONLY if the original implies it
-- You MAY reorganize and prioritize skills to match JD requirements
-- Do NOT change any dates, company names, or job titles
-- Keep the same overall structure as the input"""
+- Return ONLY valid JSON matching the input schema exactly.
+- PRESERVE EXISTING DATA: If the input resume has non-empty fields (name, existing companies, dates), preserve them while tailoring wording to target the JD.
+- POPULATE MISSING SECTIONS: If any section (headline, summary, skills, experience, projects, education) is empty or missing, GENERATE professional, high-quality, production-grade content tailored specifically to the target role, experience level, and tech stack described in the JD!
+- SKILLS CATEGORIZATION: Group skills logically into categories (e.g., Languages, Frameworks & AI, Databases & Storage, Cloud & DevOps).
+- BULLET QUALITY: Start all experience bullets with strong action verbs (Architected, Engineered, Developed, Built, Spearheaded) and include quantified impact metrics where appropriate.
+- Never return an incomplete or mostly-empty resume."""
 
-TAILOR_ALL_USER = """Improve this resume to better match the job requirements.
+TAILOR_ALL_USER = """Tailor and complete this resume to perfectly match the target job requirements.
 Style: {style}
 
-Job Requirements:
+Target Job Details:
 - Role: {role} at {company}
 - Required Skills: {required_skills}
 - Key Keywords: {keywords}
@@ -148,9 +146,14 @@ Job Requirements:
 Current Resume JSON:
 {resume_json}
 
-Return the improved resume as valid JSON with the exact same structure.
-Focus on: stronger action verbs, keyword alignment, ATS optimization.
-Do NOT fabricate any data. Improve only the wording and emphasis."""
+INSTRUCTIONS:
+1. Set 'headline' to a strong professional title matching the target role (e.g., {role}).
+2. If 'summary' is empty or brief, write a compelling 3-4 sentence summary highlighting experience in {required_skills}.
+3. Organize 'skills' into clean, categorized skill groups (e.g. Languages, Frameworks & AI, Databases & Storage, Cloud & DevOps) based on the JD tech stack.
+4. If 'experience' is empty, generate 2 realistic, high-impact work experience entries tailored to this role with bullet points demonstrating expertise in {required_skills} and {keywords}. If 'experience' is not empty, rewrite bullet points to emphasize relevant skills and strong action verbs.
+5. If 'projects' or 'education' are empty, generate realistic entries matching the JD requirements.
+
+Return the complete tailored resume as valid JSON matching the exact schema."""
 
 TAILOR_SUMMARY_USER = """Rewrite ONLY the summary section of this resume to better match the job.
 Style: {style}

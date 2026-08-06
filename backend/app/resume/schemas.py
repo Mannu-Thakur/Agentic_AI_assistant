@@ -61,6 +61,16 @@ class LatexPreviewRequest(BaseModel):
     ] = "modern"
 
 
+class ParseLatexRequest(BaseModel):
+    latex_code: str = Field(..., min_length=10, description="Raw LaTeX resume code string")
+
+
+class CompileLatexRequest(BaseModel):
+    latex_code: str = Field(..., min_length=10, description="Raw LaTeX code string to compile")
+    template: Optional[Literal[
+        "classic_ats", "modern", "minimal", "executive", "developer", "academic"
+    ]] = "modern"
+
 
 class ApplySuggestionRequest(BaseModel):
     resume: ResumeData
@@ -72,6 +82,7 @@ class ApplySuggestionRequest(BaseModel):
     jd_analysis: Optional[JDAnalysis] = None
     model: Optional[str] = None
     api_key: Optional[str] = None
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -131,7 +142,13 @@ class LatexPreviewResponse(BaseModel):
     latex_code: str
 
 
+class ParseLatexResponse(BaseModel):
+    resume: ResumeData
+    message: str = "Successfully parsed LaTeX code into structured resume data."
+
+
 class HealthResponse(BaseModel):
+
     status: str = "ok"
     module: str = "resume_builder"
 
