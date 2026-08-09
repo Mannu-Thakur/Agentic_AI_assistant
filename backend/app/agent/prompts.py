@@ -74,7 +74,7 @@ INTENT_TOOL_WHITELIST: Dict[str, List[str]] = {
     INTENT_DATABASE:       [],
     INTENT_SUMMARIZATION:  [],
     INTENT_TRANSLATION:    [],
-    INTENT_REASONING:      ["python_sandbox", "calculate"],
+    INTENT_REASONING:      ["tavily_search", "python_sandbox", "calculate"],
     INTENT_LONG_CONTEXT:   [],
     INTENT_MULTI_STEP:     ["tavily_search", "python_sandbox", "calculate"],
 }

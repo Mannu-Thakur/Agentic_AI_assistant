@@ -352,84 +352,7 @@ def _build_mermaid_diagram(corrected_text: str, sections_found: list) -> str:
     """
     relations = _extract_diagram_relations(corrected_text)
 
-    # ── LangChain domain: build a canonical LangChain architecture diagram ─────
-    has_langchain = any("LANGCHAIN" in s[0] or "MODELS" in s[0] for s in sections_found)
-    has_prompts   = any("PROMPTS" in s[0] for s in sections_found)
-    has_chains    = any("CHAINS" in s[0] for s in sections_found)
-
-    if has_langchain or has_prompts or has_chains:
-        # Build canonical LangChain-specific diagram from what was found
-        nodes_md      = []
-        edges_md      = []
-        node_id       = {}
-        declared_nodes: set = set()
-        counter       = [0]
-
-        def _nid(label: str) -> str:
-            key = label.lower().strip()
-            if key not in node_id:
-                counter[0] += 1
-                node_id[key] = f"N{counter[0]}"
-            return node_id[key]
-
-        def _declare_node(nid: str, label: str, emoji_prefix: str = ""):
-            if nid not in declared_nodes:
-                declared_nodes.add(nid)
-                display = f"{emoji_prefix}{label}" if emoji_prefix else label
-                nodes_md.append(f'    {nid}["{display}"]')
-
-        def _add_edge(parent: str, child: str, parent_emoji: str = "", child_emoji: str = ""):
-            pid = _nid(parent)
-            cid = _nid(child)
-            _declare_node(pid, parent, parent_emoji)
-            _declare_node(cid, child, child_emoji)
-            edges_md.append(f"    {pid} --> {cid}")
-
-        # Root: LangChain (with emoji)
-        root_id = _nid("LangChain")
-        _declare_node(root_id, "LangChain", "🔗 ")
-
-        # Models section
-        if has_langchain or "MODELS" in [s[0] for s in sections_found]:
-            _add_edge("LangChain", "Models (Core Interfaces)")
-            _add_edge("Models (Core Interfaces)", "Language Models (LLMs)")
-            _add_edge("Models (Core Interfaces)", "Embedding Models")
-            _add_edge("Language Models (LLMs)", "Input: text → Output: text")
-            _add_edge("Embedding Models", "Input: text → Output: vector")
-            _add_edge("Embedding Models", "Use: Semantic Search")
-            _add_edge("Use: Semantic Search", "Search by meaning, not exact words")
-
-        # Prompts section
-        if has_prompts:
-            _add_edge("LangChain", "Prompts")
-            _add_edge("Prompts", "Dynamic & Reusable Prompts")
-            _add_edge("Prompts", "Role-based Prompts")
-            _add_edge("Prompts", "Few-Shot Prompting")
-
-        # Chains section
-        if has_chains:
-            _add_edge("LangChain", "Chains")
-            _add_edge("Chains", "Sequential Execution")
-            _add_edge("Chains", "LLMChain")
-            _add_edge("Chains", "RouterChain")
-
-        # Inject any additional relations found in raw text (no duplicates)
-        seen = set()
-        for (p, c) in relations:
-            key = (p.lower(), c.lower())
-            if key not in seen:
-                seen.add(key)
-                # avoid duplicating already-hardcoded nodes
-                if p.lower() not in node_id and c.lower() not in node_id:
-                    _add_edge(p, c)
-
-        diagram_lines = ["```mermaid", "flowchart TD"]
-        diagram_lines += nodes_md
-        diagram_lines += edges_md
-        diagram_lines.append("```")
-        return "\n".join(diagram_lines)
-
-    # ── Generic diagram: use extracted relation pairs ─────────────────────────
+    # ── Generic diagram: use extracted relation pairs from OCR image text ──────
     if relations:
         lines_out = ["```mermaid", "flowchart TD"]
         seen      = set()
@@ -788,24 +711,60 @@ def _sanitize_response(text: str) -> str:
 def validate_citations(text: str, valid_sources: List[Dict[str, Any]]) -> str:
     """
     Validates citation markers in response text against actual valid_sources.
-    Strips or neutralizes citations that reference non-existent source indices.
+    Strips or neutralizes citations that reference non-existent source indices/names.
     """
-    if not text or not valid_sources:
-        # If no sources were provided, remove any hallucinated numeric bracket citations like [1], [2]
+    if not text:
+        return ""
+    if not valid_sources:
+        # If no sources were provided, remove any hallucinated bracket citations like [1], [2], [Source 1]
         return re.sub(r"\[(?:Doc|Web|Source|\d+)\s*\d*\]", "", text)
 
-    valid_indices = {s.get("index") for s in valid_sources if s.get("index") is not None}
+    valid_indices: set = set()
+    valid_names: set = set()
+
+    for s in valid_sources:
+        if not isinstance(s, dict):
+            continue
+        idx = s.get("index")
+        if idx is not None:
+            try:
+                i_val = int(idx)
+                valid_indices.add(i_val)
+                # Support both 0-based and 1-based index matching
+                valid_indices.add(i_val + 1)
+                valid_indices.add(i_val - 1)
+            except (ValueError, TypeError):
+                pass
+        for field in ("title", "source", "name", "id", "url"):
+            val = str(s.get(field) or "").strip().lower()
+            if val:
+                valid_names.add(val)
+                valid_names.add(os.path.basename(val))
 
     def check_tag(match: re.Match) -> str:
         tag = match.group(0)
-        digits = re.findall(r"\d+", tag)
+        inner = tag.strip("[]").strip()
+        inner_lower = inner.lower()
+
+        # Check numeric digits in tag first
+        digits = re.findall(r"\d+", inner)
         if digits:
             num = int(digits[0])
-            if num in valid_indices:
+            if num in valid_indices or (num - 1) in valid_indices:
                 return tag
+            # If numerical index is invalid, strip hallucinated tag
+            return ""
+
+        # Check title / source name matching for non-numeric tags
+        if any(name and (name in inner_lower or inner_lower in name) for name in valid_names):
+            return tag
+        if any(w in inner_lower for w in ("tavily", "google", "serpapi", "exa", "duckduckgo")):
+            if valid_sources:
+                return tag
+
         return ""  # Strip hallucinated tag
 
-    cleaned = re.sub(r"\[(?:Doc|Web|Source)\s*\d+\]", check_tag, text)
+    cleaned = re.sub(r"\[(?:Doc|Web|Source|[A-Za-z0-9_\-\.\s]+)\s*\d*\]", check_tag, text)
     cleaned = re.sub(r"\[\d+\]", check_tag, cleaned)
     return re.sub(r"  +", " ", cleaned).strip()
 
@@ -822,21 +781,33 @@ _PROVIDER_RL_COOLDOWN: float = 15.0  # seconds to skip a rate-limited provider
 _provider_rate_limited_at: dict = {}  # key_name → time.monotonic()
 
 
+def _normalize_provider_key(key_name: str) -> str:
+    if not key_name:
+        return "unknown"
+    k = str(key_name).strip().lower()
+    for canonical in ("groq", "gemini", "openai", "openrouter", "anthropic", "cohere", "tavily"):
+        if canonical in k:
+            return canonical
+    return k
+
+
 def _is_provider_rate_limited(key_name: str) -> bool:
-    last_rl = _provider_rate_limited_at.get(key_name)
+    c_key = _normalize_provider_key(key_name)
+    last_rl = _provider_rate_limited_at.get(c_key)
     if last_rl is None:
         return False
     if time.monotonic() - last_rl < _PROVIDER_RL_COOLDOWN:
         return True
     # Cooldown expired — clear it
-    _provider_rate_limited_at.pop(key_name, None)
+    _provider_rate_limited_at.pop(c_key, None)
     return False
 
 
 def _mark_provider_rate_limited(key_name: str) -> None:
-    _provider_rate_limited_at[key_name] = time.monotonic()
+    c_key = _normalize_provider_key(key_name)
+    _provider_rate_limited_at[c_key] = time.monotonic()
     logger.warning(
-        f"[RateLimit] Provider '{key_name}' marked rate-limited for "
+        f"[RateLimit] Provider '{c_key}' marked rate-limited for "
         f"{_PROVIDER_RL_COOLDOWN}s — will be skipped in fallback calls."
     )
 
@@ -1352,13 +1323,22 @@ async def classify_intent_node(
         except Exception as init_exc:
             logger.warning(f"ToolRegistry initialization warning in classify_intent_node: {init_exc}")
 
+    _q_low_tools = last_query_clean.lower()
+    has_multi_tool_request = (
+        len(sub_questions) >= 2 or
+        ("python" in _q_low_tools or "code" in _q_low_tools or "script" in _q_low_tools or "execute" in _q_low_tools) and
+        ("search" in _q_low_tools or "find" in _q_low_tools or "news" in _q_low_tools or "latest" in _q_low_tools or "price" in _q_low_tools)
+    )
+    if has_multi_tool_request and intent not in (INTENT_MEMORY_WRITE, INTENT_VISION):
+        intent = INTENT_COMPLEX
+        logger.info(f"classify_intent_node: Multi-tool request detected → promoted to INTENT_COMPLEX")
+
     allowed_tools = list(INTENT_TOOL_WHITELIST.get(intent, []))
-    if intent in (INTENT_MCP_TOOL, INTENT_COMPLEX, INTENT_FINANCE, INTENT_MATH):
+    if intent in (INTENT_MCP_TOOL, INTENT_COMPLEX, INTENT_FINANCE, INTENT_MATH, "MULTI_STEP", "REASONING"):
         all_registered = set(registry.local_tools.keys()).union(set(registry.mcp_tools_schemas.keys()))
         allowed_tools = list(set(allowed_tools).union(all_registered))
         # Disambiguate: if query asks about expenses/money and does NOT explicitly request code execution,
         # omit python_sandbox so LLMs don't write python scripts instead of calling MCP expense tools.
-        _q_low_tools = last_query_clean.lower()
         if "python_sandbox" in allowed_tools and any(w in _q_low_tools for w in ("expense", "spent", "lunch", "food", "dinner", "budget", "amount")):
             if not any(cw in _q_low_tools for cw in ("python", "script", "execute code", "run code", "plot", "code execution")):
                 allowed_tools.remove("python_sandbox")
@@ -2038,7 +2018,12 @@ async def retrieve_context_node(
                     logger.error(f"VectorStore query failed for sub-query '{q}': {ex}")
                     return []
 
-            results_lists = await asyncio.gather(*[retrieve_for_query(q) for q in queries])
+            tasks = [retrieve_for_query(q) for q in queries]
+            if tasks:
+                raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+                results_lists = [r if isinstance(r, list) else [] for r in raw_results]
+            else:
+                results_lists = []
 
             # Merge and deduplicate chunks (by document_id, chunk_index, and content snippet)
             seen = set()
@@ -2452,6 +2437,7 @@ async def grade_documents_node(
 
     # No relevant chunks for a NON-private query → fall back to model knowledge
     if not relevant_chunks:
+        has_doc_chunks = len(doc_chunks) > 0
         logger.info("CRAG: 0 relevant chunks for public query → model knowledge mode.")
         _log_rag_audit(
             stage="grade_documents",
@@ -2468,7 +2454,7 @@ async def grade_documents_node(
         steps.append("grade_documents")
         return {
             "document_relevance":  "irrelevant",
-            "no_doc_answer":       False,
+            "no_doc_answer":       has_doc_chunks,  # If candidate doc chunks existed but failed grade, enforce no-doc guard
             "retrieved_documents": memory_items,   # only memories, no chunks
             "source_documents":    [],              # ← authoritative: no sources
             "retrieval_confidence": confidence_score,

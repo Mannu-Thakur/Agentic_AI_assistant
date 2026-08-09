@@ -63,9 +63,11 @@ def compute_resume_diff(
     additions = 0
     removals = 0
     modifications = 0
+    evaluated_fields = 0
 
     def add_diff(sec: str, field: str, orig: str, new: str):
-        nonlocal additions, removals, modifications
+        nonlocal additions, removals, modifications, evaluated_fields
+        evaluated_fields += 1
         diff_type, chunks = _classify_diff(orig, new)
         if diff_type == "unchanged":
             return
@@ -112,10 +114,14 @@ def compute_resume_diff(
                 continue
             for i, (ob, nb) in enumerate(zip(orig_e.bullets, exp.bullets)):
                 add_diff(f"experience", f"{exp.company} — bullet {i+1}", ob, nb)
-            # Extra bullets
+            # Extra bullets added
             if len(exp.bullets) > len(orig_e.bullets):
                 for nb in exp.bullets[len(orig_e.bullets):]:
                     add_diff(f"experience", f"{exp.company} — new bullet", "", nb)
+            # Bullets removed
+            elif len(orig_e.bullets) > len(exp.bullets):
+                for ob in orig_e.bullets[len(exp.bullets):]:
+                    add_diff(f"experience", f"{exp.company} — removed bullet", ob, "")
 
     # Projects
     if not section or section == "projects":
@@ -128,10 +134,15 @@ def compute_resume_diff(
             add_diff("projects", f"{proj.name} — description", orig_p.description, proj.description)
             for i, (ob, nb) in enumerate(zip(orig_p.bullets, proj.bullets)):
                 add_diff("projects", f"{proj.name} — bullet {i+1}", ob, nb)
+            if len(proj.bullets) > len(orig_p.bullets):
+                for nb in proj.bullets[len(orig_p.bullets):]:
+                    add_diff("projects", f"{proj.name} — new bullet", "", nb)
+            elif len(orig_p.bullets) > len(proj.bullets):
+                for ob in orig_p.bullets[len(proj.bullets):]:
+                    add_diff("projects", f"{proj.name} — removed bullet", ob, "")
 
     total = additions + removals + modifications
-    total_fields = len(diffs) + 1
-    change_pct = round((total / total_fields) * 100, 1) if total_fields > 0 else 0.0
+    change_pct = round((total / max(evaluated_fields, 1)) * 100, 1)
 
     return DiffResponse(
         sections=diffs,

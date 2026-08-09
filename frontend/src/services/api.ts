@@ -132,13 +132,18 @@ export async function apiRequest<T = any>(
   // 204 No Content (and similar) responses have no body — avoid JSON parse error
   const contentLength = response.headers.get('content-length');
   const contentType = response.headers.get('content-type') || '';
-  if (
-    response.status === 204 ||
-    contentLength === '0' ||
-    !contentType.includes('application/json')
-  ) {
+  
+  if (response.status === 204 || contentLength === '0') {
     return null as T;
   }
 
-  return response.json();
+  if (contentType.includes('application/json')) {
+    return response.json();
+  }
+
+  if (contentType.includes('text/')) {
+    return response.text() as unknown as T;
+  }
+
+  return response.blob() as unknown as T;
 }

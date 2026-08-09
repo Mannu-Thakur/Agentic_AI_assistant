@@ -156,6 +156,7 @@ async def login(
 async def refresh_token(request: Request, response: Response, db: AsyncSession = Depends(get_db)):
     refresh_token = request.cookies.get("refresh_token")
     if not refresh_token:
+        response.delete_cookie("refresh_token")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing refresh token"
@@ -182,6 +183,7 @@ async def refresh_token(request: Request, response: Response, db: AsyncSession =
         except Exception:
             pass
 
+        response.delete_cookie("refresh_token")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Refresh token has been revoked"
@@ -189,6 +191,7 @@ async def refresh_token(request: Request, response: Response, db: AsyncSession =
 
     user_id = verify_token(refresh_token, "refresh")
     if not user_id:
+        response.delete_cookie("refresh_token")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired refresh token"
@@ -196,9 +199,10 @@ async def refresh_token(request: Request, response: Response, db: AsyncSession =
         
     # Check if the user session has been globally revoked
     if await is_token_blacklisted(f"user_revoked:{user_id}"):
+        response.delete_cookie("refresh_token")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User session has been revoked due to security incident"
+            detail="Session has been revoked"
         )
         
     user = await AuthService.get_user_by_id(db, user_id)
@@ -340,10 +344,23 @@ async def google_callback(
             detail="Google OAuth is not configured on this server. Please set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env."
         )
 
+    is_mock_enabled = bool(getattr(settings, "ENABLE_MOCK_OAUTH", False))
+
     if code.startswith("mock_"):
+        if not is_mock_enabled:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Mock OAuth authorization codes are disabled in production environment."
+            )
+        import logging as _auth_log
+        _auth_log.getLogger(__name__).warning(
+            "[SECURITY] Mock Google OAuth bypass activated — environment=%s. "
+            "This MUST be disabled in staging/production (set ENABLE_MOCK_OAUTH=false).",
+            getattr(settings, "ENVIRONMENT", "unknown")
+        )
         profile = {
-            "email": "mockuser@example.com",
-            "name": "Mock User",
+            "email": "mockuser@mock.invalid",
+            "name": "Mock User (Dev Only)",
             "email_verified": True,
             "picture": "https://example.com/avatar.png"
         }
@@ -525,10 +542,23 @@ async def github_callback(
             detail="GitHub OAuth is not configured on this server. Please set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET in .env."
         )
 
+    is_mock_enabled = bool(getattr(settings, "ENABLE_MOCK_OAUTH", False))
+
     if code.startswith("mock_"):
+        if not is_mock_enabled:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Mock OAuth authorization codes are disabled in production environment."
+            )
+        import logging as _auth_log
+        _auth_log.getLogger(__name__).warning(
+            "[SECURITY] Mock GitHub OAuth bypass activated — environment=%s. "
+            "This MUST be disabled in staging/production (set ENABLE_MOCK_OAUTH=false).",
+            getattr(settings, "ENVIRONMENT", "unknown")
+        )
         profile = {
-            "email": "mockgithub@example.com",
-            "name": "Mock GitHub User",
+            "email": "mockgithub@mock.invalid",
+            "name": "Mock GitHub User (Dev Only)",
             "login": "mockuser",
             "avatar_url": "https://example.com/avatar.png"
         }

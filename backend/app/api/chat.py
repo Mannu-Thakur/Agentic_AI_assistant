@@ -101,6 +101,7 @@ async def get_shared_chat(
         created_at=m["created_at"]
       )
       for m in (shared_link.snapshot_messages or [])
+      if isinstance(m, dict) and m.get("role") not in ("system", "tool")
     ]
 
   return {
@@ -547,7 +548,10 @@ async def stream_agent_message(
         logger.info(f"FINAL STATE KEYS: {list(final_state.keys()) if isinstance(final_state, dict) else final_state}")
         response_content = final_state.get("response_text", "").strip() if isinstance(final_state, dict) else ""
         if not response_content:
-          response_content = "*[No response generated — please try again]*"
+          logger.warning(f"No response content generated for chat_id={chat_id} — omitting DB persistence.")
+          yield f"data: {json.dumps({'event': 'error', 'detail': 'Generation failed — no output produced.'})}\n\n"
+          yield "data: [DONE]\n\n"
+          return
 
         # BUG-5d FIX: Finalize telemetry — attaches cache hit/miss stats
         # and emits the structured JSON "agent_request" log line.

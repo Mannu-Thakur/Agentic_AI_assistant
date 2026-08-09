@@ -228,9 +228,17 @@ class McpStdioClient:
 
         if self.proc:
             try:
-                self.proc.terminate()
-                # Wait briefly for process to exit
-                await asyncio.wait_for(self.proc.wait(), timeout=2.0)
+                pid = self.proc.pid
+                if os.name == "nt" and pid:
+                    import subprocess
+                    subprocess.run(
+                        ["taskkill", "/F", "/T", "/PID", str(pid)],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                else:
+                    self.proc.terminate()
+                    await asyncio.wait_for(self.proc.wait(), timeout=2.0)
             except Exception:
                 try:
                     self.proc.kill()

@@ -78,10 +78,10 @@ class DocumentService:
             except Exception as e:
                 logger.error(f"Failed to delete file {doc.storage_path} from disk: {str(e)}")
 
-        # 2. Clean up vectorized chunks in ChromaDB
+        # 2. Clean up vectorized chunks in ChromaDB and invalidate user BM25 index
         try:
             vector_store = VectorStore()
-            await vector_store.delete_document_chunks(doc.id)
+            await vector_store.delete_document_chunks(doc.id, user_id=user_id)
         except Exception as e:
             logger.error(f"Failed to delete ChromaDB chunks for document {doc.id}: {str(e)}")
 

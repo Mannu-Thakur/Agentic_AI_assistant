@@ -555,50 +555,6 @@ class ParserService:
             )
 
     @classmethod
-    def extract_text_image_bytes(cls, image_bytes: bytes) -> OcrResult:
-        """
-        Extract text from raw image bytes (PNG/JPEG/WEBP/BMP/TIFF) using pytesseract/EasyOCR
-        with image preprocessing. Used as a fallback when vision API is unavailable.
-        """
-        try:
-            import io
-            from PIL import Image
-            raw_img = Image.open(io.BytesIO(image_bytes))
-        except Exception as exc:
-            return OcrResult(
-                text=f"[OCR unavailable: failed to open image bytes ({exc})]",
-                confidence=0.0,
-                has_tables=False,
-                layout_type="text",
-            )
-
-        # Attempt Tesseract multi-pass OCR if pytesseract is installed
-        candidates = []
-        try:
-            import pytesseract
-            preproc_img = cls._preprocess_image_for_ocr(raw_img)
-            passes = [
-                (preproc_img, "--oem 3 --psm 6"),
-                (preproc_img, "--oem 3 --psm 11"),
-                (preproc_img, "--oem 3 --psm 3"),
-                (raw_img.convert("RGB"), "--oem 3 --psm 6"),
-                (raw_img.convert("RGB"), "--oem 3 --psm 11"),
-            ]
-            for img_target, config_str in passes:
-                try:
-                    t = pytesseract.image_to_string(img_target, config=config_str).strip()
-                    if t:
-                        data = pytesseract.image_to_data(img_target, output_type=pytesseract.Output.DICT)
-                        confs = [c for c in data.get("conf", []) if isinstance(c, (int, float)) and int(c) >= 0]
-                        conf = round(sum(confs) / (len(confs) * 100), 3) if confs else 0.5
-                        word_count = len(t.split())
-                        candidates.append((word_count, conf, t))
-                except Exception:
-                    continue
-        except ImportError:
-            pass
-
-    @classmethod
     def _clean_ocr_noise(cls, text: str) -> str:
         """Filter garbled OCR noise and join short fragment lines into readable paragraphs."""
         if not text:
@@ -1005,18 +961,17 @@ class ParserService:
                             f"(confidence={ocr_result.confidence:.2f})"
                         )
                     else:
-                        # OCR itself unavailable or failed — fallback gracefully instead of failing
                         logger.warning(
-                            f"[Parser] OCR not available for '{filename}': {ocr_result.text}. Falling back to placeholder."
+                            f"[Parser] OCR not available for '{filename}': {ocr_result.text}."
                         )
-                        raw_text = f"[Scanned Document: '{filename}' - Text content is not extractable because Tesseract-OCR/poppler is not installed on the server. Document metadata, name, and size have been successfully indexed.]"
+                        raise ValueError(f"Text content is not extractable from '{filename}'. Please ensure OCR dependencies (Tesseract/Poppler) are installed.")
                 text = raw_text
             else:
                 text = cls.extract_text(file_path, file_type)
 
             # ── Chunk with page metadata ──────────────────────────────────────
             if not text or not text.strip():
-                text = f"[Empty Document: '{filename}' - No extractable text content found. Ingested filename and metadata only.]"
+                raise ValueError(f"Document '{filename}' contains no extractable text content.")
 
             chunk_dicts = cls.split_text(
                 text,

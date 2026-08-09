@@ -44,7 +44,13 @@ def fix_json():
 
             if changed:
                 conn.execute(
-                    text("UPDATE messages SET tool_calls = :tc, developer_metrics = :dm, images = :img WHERE id = :id"),
+                    text(
+                        "UPDATE messages SET "
+                        "tool_calls = CAST(:tc AS jsonb), "
+                        "developer_metrics = CAST(:dm AS jsonb), "
+                        "images = CAST(:img AS jsonb) "
+                        "WHERE id = :id"
+                    ),
                     {
                         "tc": json.dumps(new_tc) if new_tc is not None else None,
                         "dm": json.dumps(new_dm) if new_dm is not None else None,

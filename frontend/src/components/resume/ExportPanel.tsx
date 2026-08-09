@@ -12,10 +12,11 @@ export const ExportPanel: React.FC = () => {
   const [latexCode, setLatexCode] = useState<string>('');
   const [loadingLatex, setLoadingLatex] = useState<boolean>(false);
   const [copied, setCopied] = useState<boolean>(false);
-  const [showLatexViewer, setShowLatexViewer] = useState<boolean>(true);
+  const [showLatexViewer, setShowLatexViewer] = useState<boolean>(false);
 
-  // Fetch LaTeX Preview whenever currentResume or selectedTemplate changes
+  // Fetch LaTeX Preview lazily — only when the viewer panel is open
   useEffect(() => {
+    if (!showLatexViewer) return;
     let isMounted = true;
     const fetchLatex = async () => {
       setLoadingLatex(true);
@@ -35,7 +36,7 @@ export const ExportPanel: React.FC = () => {
     };
     fetchLatex();
     return () => { isMounted = false; };
-  }, [currentResume, selectedTemplate]);
+  }, [showLatexViewer, currentResume, selectedTemplate]);
 
   const handleExport = async (format: ExportFormat) => {
     setDownloading(format);

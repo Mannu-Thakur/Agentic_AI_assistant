@@ -1452,7 +1452,7 @@ export default function ChatPage() {
       let payloadContent = language && language !== 'Auto-detect' ? `${trimmed}\n\n(Note: Please reply in ${language})` : trimmed;
       const isLocationOn = localStorage.getItem('omni_location_enabled') !== 'false';
       const userLoc = localStorage.getItem('omni_user_location');
-      if (isLocationOn && userLoc) {
+      if (isLocationOn && userLoc && userLoc !== 'Your Location' && userLoc.trim().length > 0) {
         payloadContent = `[User Location Context: ${userLoc}]\n${payloadContent}`;
       }
       const _now = new Date();

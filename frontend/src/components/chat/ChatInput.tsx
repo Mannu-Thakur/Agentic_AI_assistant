@@ -335,7 +335,13 @@ export const ChatInput = React.memo(function ChatInput({
   };
 
   const removeAttachment = (id: string) => {
-    setAttachments((prev) => prev.filter((a) => a.id !== id));
+    setAttachments((prev) => {
+      const item = prev.find((a) => a.id === id);
+      if (item?.previewUrl) {
+        URL.revokeObjectURL(item.previewUrl);
+      }
+      return prev.filter((a) => a.id !== id);
+    });
   };
 
   // Web Speech API / Voice Dictation
@@ -345,34 +351,49 @@ export const ChatInput = React.memo(function ChatInput({
       recognitionRef.current?.stop();
       return;
     }
-    const SR: any = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    const recognition = new SR();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = 'en-US';
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SR) {
+      alert('Voice dictation is not supported in this browser. Please try Google Chrome or Edge.');
+      return;
+    }
 
-    interimTextRef.current = text;
+    try {
+      const recognition = new SR();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = 'en-US';
 
-    recognition.onstart = () => setIsListening(true);
-    recognition.onresult = (event: any) => {
-      let interim = '';
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const t = event.results[i][0].transcript;
-        if (event.results[i].isFinal) {
-          const base = interimTextRef.current;
-          interimTextRef.current = (base ? base + ' ' : '') + t.trim();
-        } else {
-          interim += t;
+      interimTextRef.current = text;
+
+      recognition.onstart = () => setIsListening(true);
+      recognition.onresult = (event: any) => {
+        let interim = '';
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const t = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            const base = interimTextRef.current;
+            interimTextRef.current = (base ? base + ' ' : '') + t.trim();
+          } else {
+            interim += t;
+          }
         }
-      }
-      setText(interimTextRef.current + (interim ? ' ' + interim : ''));
-    };
-    recognition.onend = () => {
+        setText(interimTextRef.current + (interim ? ' ' + interim : ''));
+      };
+      recognition.onerror = (err: any) => {
+        console.warn('[SpeechRecognition] Error event:', err);
+        setIsListening(false);
+        try { recognition.abort(); } catch (_) {}
+      };
+      recognition.onend = () => {
+        setIsListening(false);
+        setText(interimTextRef.current.trim());
+      };
+      recognitionRef.current = recognition;
+      recognition.start();
+    } catch (err) {
+      console.error('[SpeechRecognition] Failed to initialize mic:', err);
       setIsListening(false);
-      setText(interimTextRef.current.trim());
-    };
-    recognitionRef.current = recognition;
-    recognition.start();
+    }
   };
 
   // Separate attachments by type for display

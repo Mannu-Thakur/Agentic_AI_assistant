@@ -205,7 +205,9 @@ async def test_self_rag():
 
         # Conversational query -> needs_retrieval = False
         state_chat = make_state(intent="NORMAL_CHAT", resolved_query="Hello how are you?")
-        res_chat = await check_retrieval_node(state_chat, {})
+        with patch("app.agent.nodes._call_llm_judge", new_callable=AsyncMock) as mock_judge:
+            mock_judge.return_value = {"needs_retrieval": False}
+            res_chat = await check_retrieval_node(state_chat, {})
         assert res_chat["needs_retrieval"] is False, "NORMAL_CHAT should set needs_retrieval=False"
 
         results.append(("Self-RAG Retrieval Decision (check_retrieval)", True, "Document QA triggers retrieval, Chat bypasses retrieval"))
@@ -303,7 +305,8 @@ async def test_self_rag():
             res_complex = await reflect_node(state_complex_reflect, {})
 
         assert res_complex["reflection_passed"] is False, "COMPLEX should fail reflection on bad response"
-        assert route_after_reflection(res_complex) == "generate_response"
+        merged_state = {**state_complex_reflect, **res_complex}
+        assert route_after_reflection(merged_state) == "generate_response"
 
         results.append((
             "Self-RAG Reflection & Regeneration Loop",
@@ -311,7 +314,8 @@ async def test_self_rag():
             "DOCUMENT_QA skips reflection (fast-path), COMPLEX intent runs LLM reflection and triggers regeneration",
         ))
     except Exception as e:
-        results.append(("Self-RAG Reflection & Regeneration Loop", False, str(e)))
+        import traceback
+        results.append(("Self-RAG Reflection & Regeneration Loop", False, f"{e}\n{traceback.format_exc()}"))
 
     for name, success, msg in results:
         status = "[PASS]" if success else "[FAIL]"

@@ -199,23 +199,22 @@ class VectorStore:
             return cached
 
         # ── Dense retrieval ────────────────────────────────────────────────────
-        query_embedding = await self._get_query_embedding(query, api_key=api_key)
-        collection = self.get_collection()
-
-        # Build ChromaDB filter combining user_id with any optional metadata filters
-        chroma_filter: Dict[str, Any] = {"user_id": user_id}
-        if where_filter:
-            # Combine where_filter keys with user_id
-            # NOTE: Use fk/fv to avoid shadowing the function parameter `k` (retrieval depth)
-            for fk, fv in where_filter.items():
-                if fk != "user_id" and fv is not None:
-                    chroma_filter[fk] = fv
-
-        filter_clause = chroma_filter if len(chroma_filter) == 1 else {"$and": [{fk: fv} for fk, fv in chroma_filter.items()]}
-
-        # 1. Fetch dense vector query candidates
         dense_docs, dense_metas, dense_dists = [], [], []
         try:
+            query_embedding = await self._get_query_embedding(query, api_key=api_key)
+            collection = self.get_collection()
+
+            # Build ChromaDB filter combining user_id with any optional metadata filters
+            chroma_filter: Dict[str, Any] = {"user_id": user_id}
+            if where_filter:
+                # Combine where_filter keys with user_id
+                # NOTE: Use fk/fv to avoid shadowing the function parameter `k` (retrieval depth)
+                for fk, fv in where_filter.items():
+                    if fk != "user_id" and fv is not None:
+                        chroma_filter[fk] = fv
+
+            filter_clause = chroma_filter if len(chroma_filter) == 1 else {"$and": [{fk: fv} for fk, fv in chroma_filter.items()]}
+
             results = await _run_sync(
                 collection.query,
                 query_embeddings=[query_embedding],
@@ -227,7 +226,7 @@ class VectorStore:
                 dense_metas = results["metadatas"][0] if results.get("metadatas") else [{}] * len(dense_docs)
                 dense_dists = results["distances"][0] if results.get("distances") else [0.0] * len(dense_docs)
         except Exception as exc:
-            logger.error(f"[VectorStore] ChromaDB dense query failed: {exc}")
+            logger.warning(f"[VectorStore] Dense embedding or ChromaDB query skipped: {exc}")
 
         # 2. BM25 keyword search via persistent per-user index (Fix 2: no full corpus scan)
         bm25_results: List[Dict[str, Any]] = []
@@ -270,10 +269,13 @@ class VectorStore:
             if matched_key:
                 candidate_map[matched_key]["bm25_rank"] = bm25_rank
             else:
-                # BM25-only hit: use metadata to construct a sparse entry
-                key = (str(meta.get("document_id")), int(meta.get("chunk_index", 0)), str(doc_idx)[:100])
+                # BM25-only hit: populate entry with real chunk text from persistent BM25 index
+                real_text = bm25_res.get("text", "")
+                if not real_text:
+                    continue
+                key = (str(meta.get("document_id")), int(meta.get("chunk_index", 0)), real_text[:100])
                 candidate_map[key] = {
-                    "doc": f"[BM25 hit doc_id={meta.get('document_id')} chunk={meta.get('chunk_index')}]",
+                    "doc": real_text,
                     "meta": meta,
                     "dist": 0.5,
                     "dense_rank": 999,

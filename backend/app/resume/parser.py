@@ -271,21 +271,22 @@ def _regex_fallback_parser(text: str, deterministic_findings: Dict[str, Any]) ->
         dates_match = re.search(r"\b20\d{2}\s*(?:–|-|to)\s*20\d{2}\b", edu_block)
         gpa_match = re.search(r"(?:CGPA|GPA)[:\s\(\)]*([0-9]\.[0-9]{1,2})", edu_block, re.I)
 
-        inst = inst_match.group(0).strip() if inst_match else "IIIT Bhubaneswar"
-        raw_deg = deg_match.group(0).strip() if deg_match else "B.Tech in Computer Engineering"
+        inst = inst_match.group(0).strip() if inst_match else ""
+        raw_deg = deg_match.group(0).strip() if deg_match else ""
         deg = re.sub(r"(?:CGPA|GPA)[:\s\(\)]*[0-9]\.[0-9]{1,2}.*", "", raw_deg, flags=re.I).strip()
         gpa = gpa_match.group(1).strip() if gpa_match else deterministic_findings.get("gpa", "")
         start_d = dates_match.group(0).split("–")[0].split("-")[0].strip() if dates_match else ""
         end_d = dates_match.group(0).split("–")[-1].split("-")[-1].strip() if dates_match else ""
 
-        resume.education.append(EducationEntry(
-            id="edu_1",
-            institution=inst,
-            degree=deg,
-            gpa=gpa,
-            start_date=start_d,
-            end_date=end_d
-        ))
+        if inst or deg:
+            resume.education.append(EducationEntry(
+                id="edu_1",
+                institution=inst,
+                degree=deg,
+                gpa=gpa,
+                start_date=start_d,
+                end_date=end_d
+            ))
 
     # 5. Experience Section Parsing
     if sections.get("experience"):
@@ -300,7 +301,6 @@ def _regex_fallback_parser(text: str, deterministic_findings: Dict[str, Any]) ->
             # Clean dates/months prepended to company name (e.g. 'Jul 2026Nemhans' -> 'Nemhans')
             comp = re.sub(r"^(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s*\d{4}\s*", "", raw_comp, flags=re.I).strip()
             comp = re.sub(r"^\d{4}\s*", "", comp).strip()
-            comp = comp or "Nemhans Solutions Pvt. Ltd."
 
             # Filter lines for valid bullet points (exclude role titles, dates, company names, locations, and 'Technologies:' headers)
             bullets = []
@@ -316,17 +316,19 @@ def _regex_fallback_parser(text: str, deterministic_findings: Dict[str, Any]) ->
                     continue
                 bullets.append(clean_l)
 
-            start_d = dates_m.group(0).split("–")[0].split("-")[0].strip() if dates_m else "May 2026"
-            end_d = dates_m.group(0).split("–")[-1].split("-")[-1].strip() if dates_m else "Jul 2026"
+            start_d = dates_m.group(0).split("–")[0].split("-")[0].strip() if dates_m else ""
+            end_d = dates_m.group(0).split("–")[-1].split("-")[-1].strip() if dates_m else ""
+            role_str = role_m.group(0).strip() if role_m else ""
 
-            resume.experience.append(ExperienceEntry(
-                id="exp_1",
-                company=comp,
-                role=role_m.group(0).strip() if role_m else "Frontend Developer Intern",
-                start_date=start_d,
-                end_date=end_d,
-                bullets=bullets[:6]
-            ))
+            if comp or role_str or bullets:
+                resume.experience.append(ExperienceEntry(
+                    id="exp_1",
+                    company=comp,
+                    role=role_str,
+                    start_date=start_d,
+                    end_date=end_d,
+                    bullets=bullets[:6]
+                ))
 
     # 6. Projects Section Parsing
     if sections.get("projects"):

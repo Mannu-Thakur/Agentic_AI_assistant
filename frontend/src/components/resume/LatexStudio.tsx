@@ -118,7 +118,7 @@ export const LatexStudio: React.FC = () => {
 
     fetchInitialLatex();
     return () => { isMounted = false; };
-  }, [selectedTemplate]);
+  }, [selectedTemplate, currentResume]);
 
   // Sync from current Resume Store data
   const handleSyncFromResume = async () => {

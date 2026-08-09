@@ -99,7 +99,8 @@ def _get_all_bullets(resume: ResumeData) -> List[str]:
 
 
 def _starts_with_action_verb(bullet: str) -> bool:
-    first_word = bullet.strip().split()[0].lower().rstrip(".,;:") if bullet.strip() else ""
+    clean_b = bullet.strip().lstrip("•-–—·* ").strip()
+    first_word = clean_b.split()[0].lower().rstrip(".,;:") if clean_b else ""
     return first_word in _STRONG_ACTION_VERBS
 
 
@@ -140,7 +141,8 @@ def _score_keyword_match(
     missing = []
     for kw in all_keywords:
         kw_lower = kw.lower()
-        if kw_lower in resume_text:
+        pattern = r"\b" + re.escape(kw_lower) + r"\b"
+        if re.search(pattern, resume_text):
             matched.append(kw)
         else:
             missing.append(kw)
@@ -331,14 +333,17 @@ def compute_ats_score(
         "resume_length_score": 0.05,
     }
     if not jd:
-        # Redistribute JD-dependent weights
-        weights["section_completeness"] = 0.25
-        weights["formatting_quality"] = 0.15
+        # Redistribute JD-dependent weights — must sum to 1.00
+        # keyword_match=0.05, technical_skills_coverage=0.05 (from base dict, unchanged)
+        # Remaining 0.90 distributed across quality metrics:
+        weights["section_completeness"] = 0.20   # was 0.25 → fixed
+        weights["formatting_quality"] = 0.10    # was 0.15 → fixed
         weights["action_verbs"] = 0.15
         weights["quantified_achievements"] = 0.15
         weights["resume_length_score"] = 0.10
         weights["contact_info"] = 0.10
         weights["readability"] = 0.10
+        # Total: 0.05+0.20+0.10+0.15+0.15+0.10+0.10+0.10+0.05 = 1.00
 
     raw_scores = {
         "keyword_match": kw_score,

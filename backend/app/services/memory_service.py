@@ -414,38 +414,48 @@ class MemoryService:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _rule_based_extraction(user_content: str) -> List[dict]:
-    """Rule-based memory extraction for mock/test mode."""
+    """Rule-based memory extraction for fallback mode (strict, high-precision patterns only)."""
     results = []
-    text = user_content.lower()
+    text = user_content.strip()
+
+    # Filter out questions, commands, or generic conversational filler
+    if any(text.startswith(w) for w in ("what", "how", "why", "when", "where", "can you", "please", "help")):
+        return []
+
+    # Exclude common transient states and negative clauses
+    _transient_states = (
+        "bit", "little", "few", "tired", "hungry", "busy", "sure", "happy",
+        "sad", "afraid", "fan", "huge", "big", "student", "human", "bot",
+        "don't", "do not", "not", "never", "no", "nothing"
+    )
 
     _rules = [
-        (r"my name is ([A-Za-z][A-Za-z\-']{0,30}(?:\s[A-Za-z][A-Za-z\-']{0,30})?)", "user_profile", 9,
-         lambda m: f"User's name is {m.group(1).title()}"),
-        (r"i work (?:as a?|for) (.{3,80}?)(?:\.|,|$)", "user_profile", 8,
-         lambda m: f"Works as a {m.group(1).strip()}"),
-        (r"i(?:'m| am) a (.{3,80}?)(?:\.|,|$)", "user_profile", 8,
-         lambda m: f"Works as a {m.group(1).strip()}"),
-        (r"i prefer (.{5,150}?)(?:\.|,|because|$)", "preference", 5,
+        (r"\bmy name is ([A-Za-z][A-Za-z\-']{1,25}(?:\s[A-Za-z][A-Za-z\-']{1,25})?)\b", "user_profile", 9,
+         lambda m: f"User's name is {m.group(1).strip().title()}"),
+        (r"\bi work as (?:a|an) ([A-Za-z0-9_\-\s]{3,35}?)(?:\.|\,|$)", "user_profile", 8,
+         lambda m: f"Works as {m.group(1).strip()}"),
+        (r"\bi work for ([A-Za-z0-9_\-\s]{2,35}?)(?:\.|\,|$)", "user_profile", 8,
+         lambda m: f"Works for {m.group(1).strip()}"),
+        (r"\bi prefer ([A-Za-z0-9_\-\s]{5,60}?)(?:\.|\,|because|$)", "preference", 6,
          lambda m: f"Prefers {m.group(1).strip()}"),
-        (r"i want to (.{5,150}?)(?:\.|,|$)", "goal", 6,
-         lambda m: f"Wants to {m.group(1).strip()}"),
-        (r"my goal is to (.{5,150}?)(?:\.|,|$)", "goal", 7,
+        (r"\bmy goal is to ([A-Za-z0-9_\-\s]{5,60}?)(?:\.|\,|$)", "goal", 7,
          lambda m: f"Goal: {m.group(1).strip()}"),
-        (r"interested in (.{5,100}?)(?:\.|,|$)", "topic", 4,
-         lambda m: f"Interested in {m.group(1).strip()}"),
-        (r"i(?:'m| am) working on (.{5,120}?)(?:\.|,|$)", "project", 7,
+        (r"\b(?:i am|i'm)\s+working on ([A-Za-z0-9_\-\s]{5,60}?)(?:\.|\,|$)", "project", 7,
          lambda m: f"Currently working on: {m.group(1).strip()}"),
     ]
 
     for pattern, category, score, formatter in _rules:
         for match in re.finditer(pattern, text, re.IGNORECASE):
+            extracted = match.group(1).strip() if match.groups() else ""
+            if not extracted or any(neg in extracted.lower() for neg in ("not", "never", "don't", "no")):
+                continue
             content = formatter(match)
-            if len(content) < 150:
+            if 10 <= len(content) <= 100 and not any(ts in content.lower() for ts in _transient_states):
                 results.append({
                     "category": category,
                     "content": content,
                     "importance_score": score,
-                    "confidence": 0.85,
+                    "confidence": 0.60,
                 })
     return results
 

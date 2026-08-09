@@ -17,6 +17,7 @@ python_sandbox():
 import os
 import re
 import sys
+import json
 import asyncio
 import logging
 import tempfile
@@ -42,14 +43,40 @@ def _strip_ansi(text: str) -> str:
     return _ANSI_RE.sub("", text)
 
 
+import ast
+
+
 def _check_dangerous(code: str) -> Optional[str]:
-    """Return a warning string if the code imports risky modules, else None."""
-    hits = [m for m in _DANGEROUS_MODULES if m in code]
+    """AST-level analysis to detect obfuscated dynamic imports, dangerous reflection, and system calls."""
+    hits = set()
+    for m in _DANGEROUS_MODULES:
+        if m in code:
+            hits.add(m)
+    try:
+        parsed = ast.parse(code)
+        for node in ast.walk(parsed):
+            # Detect dynamic imports & dangerous calls like getattr/eval/exec
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Name):
+                    if node.func.id in ("eval", "exec", "__import__", "getattr", "compile", "globals", "locals"):
+                        hits.add(f"reflection:{node.func.id}")
+            elif isinstance(node, ast.Attribute):
+                if node.attr in ("__subclasses__", "__bases__", "__mro__", "__globals__", "__builtins__"):
+                    hits.add(f"dunder:{node.attr}")
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if any(d in alias.name for d in ("os", "subprocess", "sys", "shutil", "socket", "ctypes", "pty")):
+                        hits.add(f"import:{alias.name}")
+            elif isinstance(node, ast.ImportFrom):
+                if node.module and any(d in node.module for d in ("os", "subprocess", "sys", "shutil", "socket", "ctypes", "pty")):
+                    hits.add(f"import:{node.module}")
+    except Exception:
+        pass
+
     if hits:
         return (
-            f"⚠️  Security notice: the following potentially unsafe identifiers "
-            f"were detected: {', '.join(hits)}. "
-            f"Output is shown but network access and filesystem writes are not isolated.\n\n"
+            f"⚠️ Security notice: potentially unsafe operations or identifiers detected: {', '.join(sorted(hits))}. "
+            f"Execution is monitored and output is controlled.\n\n"
         )
     return None
 
@@ -81,24 +108,27 @@ async def tavily_search(query: str, api_keys: Optional[dict] = None) -> str:
         A formatted markdown string ready for LLM consumption.
     """
     from app.services.web_search import unified_web_search, format_for_llm
-
-    # Cache check (same TTL as before)
-    cached = await web_search_cache.get(query)
-    if cached is not None:
-        logger.debug(f"[tavily_search] Cache HIT for query='{query[:60]}'")
-        return cached
+    import hashlib
+    import json
 
     keys = dict(api_keys or {})
+    key_sig = hashlib.md5(json.dumps(sorted(keys.items()), default=str).encode()).hexdigest()[:12]
+    cache_key = f"{query}:{key_sig}"
+
+    # Cache check (query + provider keys signature)
+    cached = await web_search_cache.get(cache_key)
+    if cached is not None:
+        logger.debug(f"[tavily_search] Cache HIT for key='{cache_key[:60]}'")
+        return cached
 
     try:
         results = await unified_web_search(query, keys)
         result_text = format_for_llm(results)
+        await web_search_cache.set(cache_key, result_text)
+        return result_text
     except Exception as exc:
         logger.error(f"[tavily_search] unified_web_search failed: {exc}")
-        result_text = f"[System Notice: Web search unavailable. Error: {exc}]"
-
-    await web_search_cache.set(query, result_text)
-    return result_text
+        return f"Live web search is currently unavailable for this query (error: {exc}). Please inform the user that live internet search could not be completed."
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -109,14 +139,11 @@ async def python_sandbox(code: str) -> str:
     """
     Execute arbitrary Python code in a subprocess with:
       • 10-second hard timeout.
-      • 64 KB output size cap (stdout + stderr combined).
+      • 64 KB text output cap + 512 KB plot output cap.
       • Automatic subprocess kill on timeout or overflow.
-      • Security notice for dangerous identifiers.
+      • Security notice for dangerous identifiers and AST structures.
       • ANSI escape-code stripping.
-
-    NOTE: This is NOT an OS-level sandbox.  For production deployments that
-    accept untrusted code, wrap this subprocess in a Docker container with
-    --network=none --memory=256m --cpus=0.5 (see docker-compose.yml).
+      • Matplotlib plot capture with output overflow cap.
     """
     warning = _check_dangerous(code)
 
@@ -128,8 +155,15 @@ async def python_sandbox(code: str) -> str:
                 "import sys as _sys\n"
                 "_orig_write = _sys.stdout.write\n"
                 "_bytes_written = 0\n"
+                "_plot_bytes_written = 0\n"
                 "def _guarded_write(s):\n"
-                "    global _bytes_written\n"
+                "    global _bytes_written, _plot_bytes_written\n"
+                "    if '[PLOT_BASE64:' in s or s.startswith('[PLOT_BASE64:'):\n"
+                "        _plot_bytes_written += len(s.encode('utf-8', errors='replace'))\n"
+                "        if _plot_bytes_written > 524288:\n"
+                "            _sys.stdout = _sys.__stdout__\n"
+                "            raise RuntimeError('Plot output size limit exceeded (512 KB cap).')\n"
+                "        return _orig_write(s)\n"
                 "    _bytes_written += len(s.encode('utf-8', errors='replace'))\n"
                 f"    if _bytes_written > {_MAX_OUTPUT_BYTES}:\n"
                 "        _sys.stdout = _sys.__stdout__\n"
@@ -145,10 +179,10 @@ async def python_sandbox(code: str) -> str:
                 "    _orig_show = _plt.show\n"
                 "    def _capture_show(*args, **kwargs):\n"
                 "        buf = _io.BytesIO()\n"
-                "        _plt.savefig(buf, format='png', bbox_inches='tight')\n"
+                "        _plt.savefig(buf, format='png', dpi=80, bbox_inches='tight')\n"
                 "        buf.seek(0)\n"
                 "        encoded = _b64.b64encode(buf.read()).decode('utf-8')\n"
-                "        print(f'[PLOT_BASE64:{encoded}]')\n"
+                "        _orig_write(f'[PLOT_BASE64:{encoded}]\\n')\n"
                 "        _plt.close('all')\n"
                 "    _plt.show = _capture_show\n"
                 "except ImportError:\n"
@@ -182,11 +216,12 @@ async def python_sandbox(code: str) -> str:
         stdout_str = _strip_ansi(stdout_bytes.decode("utf-8", errors="replace").strip())
         stderr_str = _strip_ansi(stderr_bytes.decode("utf-8", errors="replace").strip())
 
-        # Trim combined output to MAX_OUTPUT_BYTES
-        combined = (stdout_str + "\n" + stderr_str).strip()
-        if len(combined.encode()) > _MAX_OUTPUT_BYTES:
-            combined = combined.encode()[:_MAX_OUTPUT_BYTES].decode(errors="replace")
-            combined += "\n… [output truncated at 64 KB]"
+        # Cap stdout and stderr cleanly to _MAX_OUTPUT_BYTES
+        if len(stdout_str.encode("utf-8")) > _MAX_OUTPUT_BYTES:
+            stdout_str = stdout_str.encode("utf-8")[:_MAX_OUTPUT_BYTES].decode("utf-8", errors="replace") + "\n… [Truncated: stdout exceeded 64 KB cap]"
+
+        if len(stderr_str.encode("utf-8")) > _MAX_OUTPUT_BYTES:
+            stderr_str = stderr_str.encode("utf-8")[:_MAX_OUTPUT_BYTES].decode("utf-8", errors="replace") + "\n… [Truncated: stderr exceeded 64 KB cap]"
 
         prefix = warning or ""
         if proc.returncode == 0:
@@ -202,8 +237,16 @@ async def python_sandbox(code: str) -> str:
         logger.error(f"Python sandbox exception: {e}")
         return f"Sandbox execution failed: {e}"
     finally:
+        if 'proc' in locals() and proc is not None:
+            try:
+                if proc.returncode is None:
+                    proc.kill()
+                    await proc.wait()
+            except Exception:
+                pass
         if os.path.exists(temp_path):
             try:
                 os.remove(temp_path)
             except Exception:
                 pass
+

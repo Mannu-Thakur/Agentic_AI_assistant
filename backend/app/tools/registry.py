@@ -308,12 +308,17 @@ class ToolRegistry:
             try:
                 result_str = await client.call_tool(name, arguments or {})
             except Exception as e:
-                status_label = "error"
-                err_msg = str(e)
-                logger.error(
-                    f"Error calling MCP tool '{name}' on server '{server_name}': {str(e)}"
-                )
-                result_str = f"Tool execution failed. Server returned: {str(e)}"
+                logger.warning(f"Initial call to MCP tool '{name}' on '{server_name}' failed ({e}). Attempting client reconnection...")
+                try:
+                    await client.connect()
+                    result_str = await client.call_tool(name, arguments or {})
+                except Exception as retry_err:
+                    status_label = "error"
+                    err_msg = str(retry_err)
+                    logger.error(
+                        f"Error calling MCP tool '{name}' on server '{server_name}' after reconnect: {str(retry_err)}"
+                    )
+                    result_str = f"Tool execution failed. Server returned: {str(retry_err)}"
 
         else:
             status_label = "error"

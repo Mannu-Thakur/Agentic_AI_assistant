@@ -1,6 +1,14 @@
 import { create } from 'zustand';
 import { ChatSession, Message } from '../types/chat';
 
+function safeSetItem(key: string, val: string) {
+  try {
+    localStorage.setItem(key, val);
+  } catch (e) {
+    console.warn(`[chatStore] Failed to write ${key} to localStorage:`, e);
+  }
+}
+
 export interface Provider {
   id: string;
   status: 'VERIFIED' | 'INVALID' | 'UNCONFIGURED' | 'VERIFYING' | 'ERROR' | string;
@@ -124,10 +132,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   setMessagesForChat: (chatId, messages) => {
-    set((state) => ({
-      messageCache: { ...state.messageCache, [chatId]: messages },
-      messages: state.activeChatId === chatId ? messages : state.messages,
-    }));
+    set((state) => {
+      return {
+        messageCache: { ...state.messageCache, [chatId]: messages },
+        messages: state.activeChatId === chatId ? messages : state.messages,
+      };
+    });
   },
 
   hasCachedMessages: (chatId) => {
@@ -136,14 +146,24 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   setActiveModel: (model) => {
-    localStorage.setItem('active_model', model);
+    safeSetItem('active_model', model);
     set({ activeModel: model });
   },
 
   setIsStreaming: (streaming) => set({ isStreaming: streaming }),
 
   setProviders: (providers) => {
-    try { localStorage.setItem('omni_providers_cache', JSON.stringify(providers)); } catch { /* storage full */ }
+    // Security hardening: sanitize sensitive credentials before writing to localStorage
+    const sanitized = providers.map((p: any) => {
+      const copy = { ...p };
+      delete copy.api_key;
+      delete copy.apiKey;
+      delete copy.secret;
+      delete copy.token;
+      delete copy.credentials;
+      return copy;
+    });
+    safeSetItem('omni_providers_cache', JSON.stringify(sanitized));
     set({
       providers,
       verifiedProviders: providers.filter(p => p.verified || p.status === 'VERIFIED').map(p => p.id),
@@ -173,12 +193,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
   }),
 
   removeChat: (chatId) => set((state) => {
+    const isDeletingActive = state.activeChatId === chatId;
     const newCache = { ...state.messageCache };
     delete newCache[chatId];
+    if (isDeletingActive) {
+      try { localStorage.removeItem('omni_active_chat_id'); } catch { /* ignore */ }
+    }
     return {
       chats: state.chats.filter((c) => c.id !== chatId),
-      activeChatId: state.activeChatId === chatId ? null : state.activeChatId,
-      messages: state.activeChatId === chatId ? [] : state.messages,
+      activeChatId: isDeletingActive ? null : state.activeChatId,
+      messages: isDeletingActive ? [] : state.messages,
+      isStreaming: isDeletingActive ? false : state.isStreaming,
       messageCache: newCache,
     };
   }),

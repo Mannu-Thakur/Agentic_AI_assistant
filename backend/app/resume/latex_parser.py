@@ -197,10 +197,10 @@ def parse_latex_to_resume(latex_code: str) -> ResumeData:
                         if role_name or comp_name:
                             experience.append(ExperienceEntry(
                                 id=f"exp_{uuid.uuid4().hex[:6]}",
-                                company=comp_name or "Company",
-                                role=role_name or "Position",
+                                company=comp_name or "",
+                                role=role_name or "",
                                 location="",
-                                start_date=date_str or "2023",
+                                start_date=date_str,
                                 end_date="Present" if "present" in date_str.lower() else "",
                                 is_current="present" in date_str.lower(),
                                 bullets=bullets,
@@ -227,7 +227,7 @@ def parse_latex_to_resume(latex_code: str) -> ResumeData:
                             projects.append(ProjectEntry(
                                 id=f"proj_{uuid.uuid4().hex[:6]}",
                                 name=proj_title,
-                                description=bullets[0] if bullets else "",
+                                description="",
                                 technologies=techs,
                                 url="",
                                 github_url="",
@@ -245,7 +245,7 @@ def parse_latex_to_resume(latex_code: str) -> ResumeData:
                         block_body = blocks[b_idx+1] if b_idx+1 < len(blocks) else ""
                         
                         deg_match = re.search(r'\\textit\{([^}]+)\}', block_body)
-                        deg_name = unescape_latex_text(deg_match.group(1)) if deg_match else "Degree"
+                        deg_name = unescape_latex_text(deg_match.group(1)) if deg_match else ""
                         
                         date_match = re.search(r'\\hfill\s*\{?[^}]*?([A-Za-z0-9\s–\--]+)\}?', block_body)
                         date_str = unescape_latex_text(date_match.group(1)) if date_match else ""
@@ -295,10 +295,7 @@ def parse_latex_to_resume(latex_code: str) -> ResumeData:
                             date=""
                         ))
 
-    # If parsing produced minimal results, supply sensible defaults from extracted text
-    if not personal.name:
-        personal.name = "Resume Contact"
-
+    # Return ResumeData built from parsed contents
     return ResumeData(
         personal=personal,
         headline=headline,

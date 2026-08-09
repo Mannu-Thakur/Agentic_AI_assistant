@@ -128,6 +128,10 @@ export const useResumeStore = create<ResumeState>((set, get) => ({
       // Initial version push
       get().pushVersion('Original Resume', `Parsed from ${file.name}`);
       get().recomputeATS();
+    } catch (err: any) {
+      const message = err?.message || 'Failed to parse resume. Please try again.';
+      console.error('[Store] uploadAndParseResume failed:', err);
+      throw new Error(message);
     } finally {
       set({ isAnalyzingResume: false });
     }
@@ -138,11 +142,13 @@ export const useResumeStore = create<ResumeState>((set, get) => ({
     try {
       const res = await resumeApi.analyzeJD(jdText);
       set({ jdAnalysis: res.jd_analysis });
-      await get().tailorResume('all', 'rewrite');
-      set({ step: 3, activeTab: 'preview' });
-    } catch (err) {
-      console.error('JD analysis / tailoring failed:', err);
-      throw err;
+      // Navigate to step 3 so the user can review extracted keywords
+      // and choose tailoring options themselves — do NOT auto-trigger tailorResume.
+      set({ step: 3, activeTab: 'editor' });
+    } catch (err: any) {
+      const message = err?.message || 'Failed to analyze job description. Please try again.';
+      console.error('[Store] analyzeJD failed:', err);
+      throw new Error(message);
     } finally {
       set({ isAnalyzingJD: false });
     }
@@ -167,6 +173,10 @@ export const useResumeStore = create<ResumeState>((set, get) => ({
       await get().recomputeATS();
       await get().computeDiff();
       set({ activeTab: 'preview' });
+    } catch (err: any) {
+      const message = err?.message || 'Failed to tailor resume. Please try again.';
+      console.error('[Store] tailorResume failed:', err);
+      throw new Error(message);
     } finally {
       set({ isTailoring: false });
     }
@@ -215,6 +225,10 @@ export const useResumeStore = create<ResumeState>((set, get) => ({
       set({ currentResume: res.updated_resume });
       get().pushVersion(`Suggestion: ${type}`, res.changes.join(', '));
       await get().recomputeATS();
+    } catch (err: any) {
+      const message = err?.message || 'Failed to apply suggestion. Please try again.';
+      console.error('[Store] applySuggestion failed:', err);
+      throw new Error(message);
     } finally {
       set({ isApplyingSuggestion: false });
     }

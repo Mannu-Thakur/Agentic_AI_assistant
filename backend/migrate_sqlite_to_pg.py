@@ -23,18 +23,23 @@ def parse_dt(val):
             return None
 
 def parse_json(val):
-    if not val or val in ('null', '"null"'):
+    if val is None or val in ('null', '"null"', ''):
         return None
     if isinstance(val, (dict, list)):
         return val
     if isinstance(val, str):
-        try:
-            res = json.loads(val)
-            if res in ('null', '"null"'):
-                return None
-            return res
-        except Exception:
+        curr = val
+        for _ in range(3):
+            if isinstance(curr, str):
+                try:
+                    curr = json.loads(curr)
+                except Exception:
+                    break
+            else:
+                break
+        if curr in ('null', '"null"', '', None):
             return None
+        return curr
     return None
 
 def migrate():

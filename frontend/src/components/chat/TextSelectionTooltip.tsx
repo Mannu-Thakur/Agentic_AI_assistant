@@ -53,8 +53,8 @@ export const TextSelectionTooltip: React.FC<TextSelectionTooltipProps> = ({
     <div
       style={{
         position: 'fixed',
-        top: `${Math.max(8, position.top)}px`,
-        left: `${position.left}px`,
+        top: `${Math.max(12, Math.min(window.innerHeight - 60, position.top))}px`,
+        left: `${Math.max(80, Math.min(window.innerWidth - 80, position.left))}px`,
         transform: 'translateX(-50%)',
       }}
       className="z-50 flex items-center gap-1 p-1 bg-[#212121] border border-[#2B2B2B] rounded-xl shadow-[0_8px_32px_rgba(0,0,0,0.6)] animate-fade-in"

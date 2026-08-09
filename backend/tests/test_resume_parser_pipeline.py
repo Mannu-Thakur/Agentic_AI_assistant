@@ -46,16 +46,11 @@ client = TestClient(app)
 
 
 def test_email_icon_artifact_removal():
-    """Verify font-icon characters preceding email addresses are cleanly stripped."""
-    bad_email = "pemannumay15@gmail.com"
-    raw_context = "Contact: pemannumay15@gmail.com | Phone: +1 555-0199"
-    fixed = fix_email_artifacts(bad_email, raw_context)
-    assert fixed == "mannumay15@gmail.com"
-
-    # Test standalone prefixed email with 'pe', 'p', or 'e' icon glyph
-    assert fix_email_artifacts("pemannumay15@gmail.com") == "mannumay15@gmail.com"
-    assert fix_email_artifacts("pjohn.doe@gmail.com") == "john.doe@gmail.com"
-    assert fix_email_artifacts("ejane_smith@company.org") == "jane_smith@company.org"
+    """Verify explicit font-icon artifact prefixes are cleanly stripped while preserving valid email addresses."""
+    assert fix_email_artifacts("icon_mannumay15@gmail.com") == "mannumay15@gmail.com"
+    assert fix_email_artifacts("fa_john.doe@gmail.com") == "john.doe@gmail.com"
+    assert fix_email_artifacts("peter.parker@gmail.com") == "peter.parker@gmail.com"
+    assert fix_email_artifacts("eric_smith@company.org") == "eric_smith@company.org"
 
 
 def test_text_normalization():
@@ -110,7 +105,7 @@ def test_validator_layer():
     resume = ResumeData(
         personal=PersonalInfo(
             name="  Mannu Thakur  ",
-            email="pmannumay15@gmail.com",
+            email="icon_mannumay15@gmail.com",
             linkedin="linkedin.com/in/mannuthakur",
             github="github.com/mannuthakur"
         ),

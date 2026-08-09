@@ -460,7 +460,7 @@ class ResumeService:
                 model=model,
             )
 
-            updated_resume = ResumeData(**result)
+            updated_resume = ResumeData(**_unwrap_resume_json(result))
             changes = [f"Applied AI suggestion: {suggestion_type.replace('_', ' ').title()}"]
         except Exception as exc:
             logger.warning(f"[ResumeService] LLM suggestion unavailable ({exc}). Using deterministic fallback.")

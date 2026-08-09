@@ -330,40 +330,63 @@ async def search_duckduckgo(query: str, max_results: int = 8) -> List[SearchResu
                 headers=headers,
             )
             if resp.status_code == 200:
-                html = resp.text
+                html_text = resp.text
                 results = []
-                # Extract results using regex parser
-                blocks = re.findall(r'<div class="result[^"]*">(.*?)</div>\s*</div>', html, re.DOTALL)
-                if not blocks:
-                    blocks = re.findall(r'<a class="result__url"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', html, re.DOTALL)
 
-                for block in blocks:
-                    if len(results) >= max_results:
-                        break
-                    if isinstance(block, tuple):
-                        href, title = block
-                        snippet = ""
-                    else:
-                        t_match = re.search(r'<a class="result__a"[^>]*>(.*?)</a>', block, re.DOTALL)
-                        u_match = re.search(r'<a class="result__url"[^>]*href="([^"]+)"', block, re.DOTALL)
-                        s_match = re.search(r'<a class="result__snippet"[^>]*>(.*?)</a>', block, re.DOTALL)
-                        title = t_match.group(1) if t_match else ""
-                        href = u_match.group(1) if u_match else ""
-                        snippet = s_match.group(1) if s_match else ""
+                # 2a. Try BeautifulSoup DOM parsing if available
+                try:
+                    from bs4 import BeautifulSoup
+                    soup = BeautifulSoup(html_text, "html.parser")
+                    for res_div in soup.find_all("div", class_=re.compile(r"result")):
+                        a_tag = res_div.find("a", class_=re.compile(r"result__a")) or res_div.find("a")
+                        s_tag = res_div.find("a", class_=re.compile(r"result__snippet")) or res_div.find("td", class_=re.compile(r"result-snippet"))
+                        if a_tag and a_tag.get("href"):
+                            href = a_tag["href"]
+                            title = a_tag.get_text(strip=True)
+                            snippet = s_tag.get_text(strip=True) if s_tag else ""
+                            if href.startswith("//duckduckgo.com/l/?uddg="):
+                                href = urllib.parse.unquote(href.split("uddg=")[-1].split("&")[0])
+                            if title and href and not href.startswith("javascript:"):
+                                results.append(SearchResult(
+                                    title=title,
+                                    url=href,
+                                    snippet=snippet,
+                                    source="duckduckgo",
+                                ))
+                            if len(results) >= max_results:
+                                break
+                    if results:
+                        return results
+                except Exception as bs_exc:
+                    logger.debug(f"BS4 parsing skipped: {bs_exc}")
 
-                    # Clean HTML tags from extracted strings
-                    title = re.sub(r"<[^>]+>", "", title).strip()
-                    snippet = re.sub(r"<[^>]+>", "", snippet).strip()
-                    if href.startswith("//duckduckgo.com/l/?uddg="):
-                        href = urllib.parse.unquote(href.split("uddg=")[-1].split("&")[0])
+                # 2b. Multi-pattern regex fallback for raw HTML
+                patterns = [
+                    r'<a[^>]+class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>(.*?)</a>.*?(?:<a[^>]+class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>)?',
+                    r'<a[^>]+href="([^"]+)"[^>]*class="[^"]*result__url[^"]*"[^>]*>(.*?)</a>',
+                ]
+                for pat in patterns:
+                    for match in re.finditer(pat, html_text, re.DOTALL | re.IGNORECASE):
+                        if len(results) >= max_results:
+                            break
+                        groups = match.groups()
+                        href = groups[0] if len(groups) > 0 else ""
+                        title = groups[1] if len(groups) > 1 else ""
+                        snippet = groups[2] if len(groups) > 2 else ""
 
-                    if title and href:
-                        results.append(SearchResult(
-                            title=title,
-                            url=href,
-                            snippet=snippet,
-                            source="duckduckgo",
-                        ))
+                        title = re.sub(r"<[^>]+>", "", title or "").strip()
+                        snippet = re.sub(r"<[^>]+>", "", snippet or "").strip()
+
+                        if href.startswith("//duckduckgo.com/l/?uddg="):
+                            href = urllib.parse.unquote(href.split("uddg=")[-1].split("&")[0])
+
+                        if title and href and not href.startswith("javascript:"):
+                            results.append(SearchResult(
+                                title=title,
+                                url=href,
+                                snippet=snippet,
+                                source="duckduckgo",
+                            ))
                 if results:
                     return results
     except Exception as exc:
@@ -399,22 +422,19 @@ async def unified_web_search(
     Returns:
         Ranked list of SearchResult objects.
     """
-    # BUG-6 FIX: Check cache first — covers the CRAG direct-call path that
-    # previously bypassed the cache in local_tools.py::tavily_search().
-    # Cache stores formatted text strings; convert back to a synthetic SearchResult
-    # list so callers always get the same type.
-    cached_text = await web_search_cache.get(query)
-    if cached_text is not None:
+    cached = await web_search_cache.get(query)
+    if cached is not None:
         logger.debug(f"[unified_web_search] Cache HIT for query='{query[:60]}'")
-        # Return a single synthetic SearchResult so format_for_llm / format_as_source_documents
-        # work correctly on the cached string.
-        return [SearchResult(
-            title="Cached Web Results",
-            url="",
-            snippet=cached_text,
-            source="cache",
-            score=1.0,
-        )]
+        if isinstance(cached, list):
+            return cached
+        if isinstance(cached, str):
+            return [SearchResult(
+                title="Web Search Result",
+                url="",
+                snippet=cached,
+                source="cache",
+                score=1.0,
+            )]
 
     n = max_results or settings.WEB_SEARCH_MAX_RESULTS
     provider_order = [p.strip() for p in settings.WEB_SEARCH_PROVIDER_ORDER.split(",") if p.strip()]
@@ -521,7 +541,7 @@ def format_for_llm(results: List[Any]) -> str:
     """Format ranked results as a clean markdown block for LLM consumption."""
     results_list = _ensure_search_results(results)
     if not results_list:
-        return "[Web search returned no results for this query.]"
+        return "[Web search returned no results for this query. Do NOT fabricate real-time news, current events, or recent information out of memory. Explicitly state to the user that no live search results were found for this query.]"
 
     lines = [f"Web Search Results ({results_list[0].source if results_list else 'unknown'}):\n"]
     for i, r in enumerate(results_list, start=1):

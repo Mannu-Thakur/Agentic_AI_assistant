@@ -63,9 +63,23 @@ export async function detectUserLocation(): Promise<string> {
     }
   }
 
+  // Helper for fetch with timeout
+  const fetchWithTimeout = async (url: string, timeoutMs: number = 4000): Promise<Response | null> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, { signal: controller.signal });
+      clearTimeout(timer);
+      return res;
+    } catch {
+      clearTimeout(timer);
+      return null;
+    }
+  };
+
   // 2. IP Geolocation Provider 1: ipwho.is (no CORS issue, HTTPS, free)
   try {
-    const ipwhoRes = await fetch('https://ipwho.is/').catch(() => null);
+    const ipwhoRes = await fetchWithTimeout('https://ipwho.is/');
     if (ipwhoRes && ipwhoRes.ok) {
       const data = await ipwhoRes.json();
       if (data.success) {
@@ -82,7 +96,7 @@ export async function detectUserLocation(): Promise<string> {
 
   // 3. IP Geolocation Provider 2: BigDataCloud IP Geocode
   try {
-    const bdcIpRes = await fetch('https://api.bigdatacloud.net/data/client-info').catch(() => null);
+    const bdcIpRes = await fetchWithTimeout('https://api.bigdatacloud.net/data/client-info');
     if (bdcIpRes && bdcIpRes.ok) {
       const bdcIpData = await bdcIpRes.json();
       const loc = bdcIpData.location || {};
@@ -98,7 +112,7 @@ export async function detectUserLocation(): Promise<string> {
 
   // 4. IP Geolocation Provider 3: ipapi.co
   try {
-    const ipRes = await fetch('https://ipapi.co/json/').catch(() => null);
+    const ipRes = await fetchWithTimeout('https://ipapi.co/json/');
     if (ipRes && ipRes.ok) {
       const ipData = await ipRes.json();
       const parts = [ipData.city, ipData.region, ipData.country_name].filter(Boolean);
@@ -111,5 +125,9 @@ export async function detectUserLocation(): Promise<string> {
     }
   } catch (_) {}
 
-  return 'Your Location';
+  const cached = localStorage.getItem('omni_user_location');
+  if (cached) return cached;
+
+  localStorage.removeItem('omni_user_location');
+  return '';
 }

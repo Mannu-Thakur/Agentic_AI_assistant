@@ -2,25 +2,75 @@ import sys
 import json
 import math
 import os
+import ast
 
 # Database file in the same folder
 STORE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp_store.json")
 
-def load_store():
+def load_root_store():
     if not os.path.exists(STORE_FILE):
-        return {"expenses": [], "reminders": [], "emails": []}
+        return {"users": {}}
     try:
         with open(STORE_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {"expenses": [], "reminders": [], "emails": []}
+            data = json.load(f)
+            if not isinstance(data, dict):
+                return {"users": {}}
+            # Legacy format migration (if root file has top-level "expenses")
+            if "expenses" in data or "reminders" in data:
+                return {
+                    "users": {
+                        "default": {
+                            "expenses": data.get("expenses", []),
+                            "reminders": data.get("reminders", []),
+                            "emails": data.get("emails", [])
+                        }
+                    }
+                }
+            if "users" not in data:
+                data["users"] = {}
+            return data
+    except Exception as exc:
+        sys.stderr.write(f"Failed to load mcp_store.json: {exc}\n")
+        return None
 
-def save_store(store):
+def load_store(user_id: str = "default") -> dict:
+    user_id = str(user_id or "default").strip()
+    root = load_root_store()
+    if root is None:
+        root = {"users": {}}
+    users = root.get("users", {})
+    user_data = users.get(user_id)
+    if not isinstance(user_data, dict):
+        return {"expenses": [], "reminders": [], "emails": []}
+    return {
+        "expenses": list(user_data.get("expenses", [])),
+        "reminders": list(user_data.get("reminders", [])),
+        "emails": list(user_data.get("emails", []))
+    }
+
+def save_store(user_store: dict, user_id: str = "default"):
+    user_id = str(user_id or "default").strip()
+    root = load_root_store()
+    if root is None:
+        sys.stderr.write("Aborting save_store: failed to read root store safely\n")
+        return
+    root.setdefault("users", {})[user_id] = {
+        "expenses": user_store.get("expenses", []),
+        "reminders": user_store.get("reminders", []),
+        "emails": user_store.get("emails", [])
+    }
+    tmp_file = f"{STORE_FILE}.tmp"
     try:
-        with open(STORE_FILE, "w", encoding="utf-8") as f:
-            json.dump(store, f, indent=2)
-    except Exception:
-        pass
+        with open(tmp_file, "w", encoding="utf-8") as f:
+            json.dump(root, f, indent=2)
+        os.replace(tmp_file, STORE_FILE)
+    except Exception as exc:
+        sys.stderr.write(f"Failed to save mcp_store.json: {exc}\n")
+        if os.path.exists(tmp_file):
+            try:
+                os.remove(tmp_file)
+            except Exception:
+                pass
 
 
 # Category aliases: map informal names to canonical categories
@@ -71,53 +121,84 @@ def normalize_category(category: str) -> str:
     return CATEGORY_ALIASES.get(key, key)
 
 
+SAFE_MATH_FUNCS = {
+    "sin": math.sin, "cos": math.cos, "tan": math.tan,
+    "log": math.log, "exp": math.exp, "sqrt": math.sqrt,
+    "pi": math.pi, "e": math.e, "abs": abs, "round": round,
+    "min": min, "max": max
+}
+
+def _eval_ast_node(node):
+    if isinstance(node, ast.Expression):
+        return _eval_ast_node(node.body)
+    elif isinstance(node, (ast.Num, ast.Constant)):
+        val = getattr(node, 'n', getattr(node, 'value', None))
+        if type(val) in (int, float):
+            return val
+        raise ValueError("Only numeric constants allowed (booleans forbidden)")
+    elif isinstance(node, ast.BinOp):
+        left = _eval_ast_node(node.left)
+        right = _eval_ast_node(node.right)
+        if isinstance(node.op, ast.Add): return left + right
+        elif isinstance(node.op, ast.Sub): return left - right
+        elif isinstance(node.op, ast.Mult): return left * right
+        elif isinstance(node.op, ast.Div): return left / right
+        elif isinstance(node.op, ast.FloorDiv): return left // right
+        elif isinstance(node.op, ast.Mod): return left % right
+        elif isinstance(node.op, ast.Pow):
+            if abs(right) > 100 or abs(left) > 10000:
+                raise ValueError("Exponentiation power limits exceeded (max base 10000, max exp 100)")
+            return left ** right
+    elif isinstance(node, ast.UnaryOp):
+        operand = _eval_ast_node(node.operand)
+        if isinstance(node.op, ast.USub): return -operand
+        elif isinstance(node.op, ast.UAdd): return +operand
+    elif isinstance(node, ast.Call):
+        if not isinstance(node.func, ast.Name):
+            raise ValueError("Attribute access or indirect function calls are strictly forbidden.")
+        func_name = node.func.id
+        if func_name not in SAFE_MATH_FUNCS:
+            raise ValueError(f"Function '{func_name}' is not permitted.")
+        args = [_eval_ast_node(arg) for arg in node.args]
+        return SAFE_MATH_FUNCS[func_name](*args)
+    elif isinstance(node, ast.Name):
+        if node.id in SAFE_MATH_FUNCS:
+            return SAFE_MATH_FUNCS[node.id]
+        raise ValueError(f"Unknown variable or constant: '{node.id}'")
+    raise ValueError(f"Operation or syntax '{type(node).__name__}' is forbidden in math expressions.")
+
+
 def calculate(expression: str) -> str:
     """
-    Safely evaluate basic mathematical expressions.
+    Safely evaluate basic mathematical expressions using AST parsing.
     """
-    allowed_chars = set("0123456789+-*/(). \t")
-    safe_dict = {
-        "sin": math.sin,
-        "cos": math.cos,
-        "tan": math.tan,
-        "log": math.log,
-        "exp": math.exp,
-        "sqrt": math.sqrt,
-        "pi": math.pi,
-        "e": math.e
-    }
-    
-    # Strip known safe math function names before character validation
-    temp_expr = expression
-    for k in safe_dict.keys():
-        temp_expr = temp_expr.replace(k, "")
-        
-    if not all(c in allowed_chars for c in temp_expr):
-        return "Error: Expression contains forbidden characters or dangerous operations."
-        
+    if not expression or not expression.strip():
+        return "Error: Expression is empty."
     try:
-        # Evaluate math expression safely without builtins
-        val = eval(expression, {"__builtins__": None}, safe_dict)
+        parsed = ast.parse(expression.strip(), mode="eval")
+        val = _eval_ast_node(parsed)
         return str(val)
     except Exception as e:
         return f"Error evaluating expression: {str(e)}"
 
-def add_expense(amount: float, description: str, category: str = "food", date: str = None) -> str:
-    store = load_store()
+def add_expense(amount: float, description: str, category: str = "food", date: str = None, currency: str = "₹", user_id: str = "default") -> str:
+    store = load_store(user_id=user_id)
     canonical_cat = normalize_category(category)
+    curr_sym = (currency or "₹").strip()
     expense = {
         "amount": amount,
         "description": description,
         "category": canonical_cat,
         "date": date or "",          # ISO date string e.g. "2026-07-02", or empty
+        "currency": curr_sym,
     }
     store["expenses"].append(expense)
-    save_store(store)
+    save_store(store, user_id=user_id)
     date_str = f" on {date}" if date else ""
-    return f"✅ Added expense: ₹{amount} for '{description}' (Category: {canonical_cat}{date_str})."
+    return f"✅ Added expense: {curr_sym}{amount} for '{description}' (Category: {canonical_cat}{date_str})."
 
-def get_expenses(category: str = None, date: str = None) -> str:
-    store = load_store()
+def get_expenses(category: str = None, date: str = None, user_id: str = "default") -> str:
+    store = load_store(user_id=user_id)
     expenses = store["expenses"]
 
     # Category filter with alias normalization
@@ -139,8 +220,9 @@ def get_expenses(category: str = None, date: str = None) -> str:
         return f"No expenses found{' for ' + ' and '.join(filter_desc) if filter_desc else ''}."
     
     total = sum(float(e["amount"]) for e in expenses)
+    first_curr = expenses[0].get("currency", "₹") if expenses else "₹"
     details = "\n".join(
-        f"  • ₹{e['amount']} — {e['description']} [{e['category']}]"
+        f"  • {e.get('currency', '₹')}{e['amount']} — {e['description']} [{e['category']}]"
         + (f" on {e['date']}" if e.get("date") else "")
         for e in expenses
     )
@@ -150,11 +232,11 @@ def get_expenses(category: str = None, date: str = None) -> str:
     if date:
         filter_desc.append(f"date '{date}'")
     header = f"Expenses{' (' + ', '.join(filter_desc) + ')' if filter_desc else ''}:"
-    return f"{header}\n{details}\n\n💰 Total spent: ₹{total:.2f}"
+    return f"{header}\n{details}\n\n💰 Total spent: {first_curr}{total:.2f}"
 
-def summarize_expenses() -> str:
+def summarize_expenses(user_id: str = "default") -> str:
     """Return a summary of all expenses grouped by category with per-category totals."""
-    store = load_store()
+    store = load_store(user_id=user_id)
     expenses = store["expenses"]
     if not expenses:
         return "No expenses tracked yet."
@@ -167,37 +249,40 @@ def summarize_expenses() -> str:
 
     lines = []
     grand_total = 0.0
+    first_curr = expenses[0].get("currency", "₹") if expenses else "₹"
     for cat, items in sorted(groups.items()):
         cat_total = sum(float(x["amount"]) for x in items)
         grand_total += cat_total
-        lines.append(f"\n📂 {cat.upper()} — ₹{cat_total:.2f}")
+        cat_curr = items[0].get("currency", first_curr) if items else first_curr
+        lines.append(f"\n📂 {cat.upper()} — {cat_curr}{cat_total:.2f}")
         for x in items:
             date_str = f" ({x['date']})" if x.get("date") else ""
-            lines.append(f"    • ₹{x['amount']} — {x['description']}{date_str}")
+            c_sym = x.get("currency", cat_curr)
+            lines.append(f"    • {c_sym}{x['amount']} — {x['description']}{date_str}")
 
-    return "📊 Expense Summary:\n" + "\n".join(lines) + f"\n\n💰 Grand Total: ₹{grand_total:.2f}"
+    return "📊 Expense Summary:\n" + "\n".join(lines) + f"\n\n💰 Grand Total: {first_curr}{grand_total:.2f}"
 
-def create_reminder(time: str, text: str) -> str:
-    store = load_store()
+def create_reminder(time: str, text: str, user_id: str = "default") -> str:
+    store = load_store(user_id=user_id)
     reminder = {
         "time": time,
         "text": text,
         "created_at": str(os.getenv("CURRENT_TIME", ""))
     }
     store["reminders"].append(reminder)
-    save_store(store)
+    save_store(store, user_id=user_id)
     return f"✅ Reminder set for {time}: '{text}'."
 
-def get_reminders() -> str:
-    store = load_store()
+def get_reminders(user_id: str = "default") -> str:
+    store = load_store(user_id=user_id)
     reminders = store.get("reminders", [])
     if not reminders:
         return "No reminders found."
     lines = [f"  • [{r.get('time', 'N/A')}] {r.get('text', '')}" for r in reminders]
     return "⏰ Active Reminders:\n" + "\n".join(lines)
 
-def send_email(to: str, subject: str, body: str) -> str:
-    store = load_store()
+def send_email(to: str, subject: str, body: str, user_id: str = "default") -> str:
+    store = load_store(user_id=user_id)
     email_entry = {
         "to": to,
         "subject": subject,
@@ -205,7 +290,7 @@ def send_email(to: str, subject: str, body: str) -> str:
         "timestamp": str(os.getenv("CURRENT_TIME", ""))
     }
     store["emails"].append(email_entry)
-    save_store(store)
+    save_store(store, user_id=user_id)
 
     smtp_user = os.getenv("SMTP_USER")
     smtp_password = os.getenv("SMTP_PASSWORD")
@@ -234,9 +319,13 @@ def send_email(to: str, subject: str, body: str) -> str:
                     server.send_message(msg)
             return f"📧 Real Email successfully dispatched via SMTP to {to} with subject '{subject}'."
         except Exception as exc:
-            return f"⚠️ Email saved to store, but SMTP dispatch failed: {exc}"
+            return f"❌ Email dispatch failed via SMTP: {exc} (Saved to local store for recovery)."
 
-    return f"✅ Email logged to local store for {to} with subject '{subject}' (Notice: Set SMTP_USER and SMTP_PASSWORD in .env for real SMTP transmission)."
+    return (
+        f"❌ Email NOT sent — SMTP credentials (SMTP_USER/SMTP_PASSWORD) are not configured in environment. "
+        f"The email to {to} was logged to local store (mcp_store.json) for debugging, but NO email was sent over the network. "
+        f"Please configure SMTP settings in .env to enable live email delivery."
+    )
 
 
 
@@ -419,6 +508,9 @@ def main():
                 if not isinstance(arguments, dict):
                     arguments = {}
 
+                user_id = arguments.get("user_id") or params.get("user_id") or "default"
+                currency = arguments.get("currency") or arguments.get("curr") or "₹"
+
                 if tool_name == "calculate":
                     expr = (
                         arguments.get("expression") or
@@ -430,12 +522,12 @@ def main():
                     result = {"content": [{"type": "text", "text": calc_result}]}
                     send_response(req_id, result=result)
                 elif tool_name == "add_expense":
-                    amount_val = (
-                        arguments.get("amount") or
-                        arguments.get("cost") or
-                        arguments.get("price") or 0
-                    )
-                    amount = float(amount_val)
+                    amount_val = None
+                    for key in ("amount", "cost", "price"):
+                        if key in arguments:
+                            amount_val = arguments[key]
+                            break
+                    amount = float(amount_val if amount_val is not None else 0)
                     description = (
                         arguments.get("description") or
                         arguments.get("desc") or
@@ -444,34 +536,34 @@ def main():
                     )
                     category = arguments.get("category") or arguments.get("cat") or "food"
                     date = arguments.get("date") or arguments.get("when") or None
-                    res_str = add_expense(amount, description, category, date)
+                    res_str = add_expense(amount, description, category, date, currency=currency, user_id=user_id)
                     result = {"content": [{"type": "text", "text": res_str}]}
                     send_response(req_id, result=result)
                 elif tool_name == "get_expenses":
                     category = arguments.get("category") or arguments.get("cat")
                     date = arguments.get("date") or arguments.get("when")
-                    res_str = get_expenses(category, date)
+                    res_str = get_expenses(category, date, user_id=user_id)
                     result = {"content": [{"type": "text", "text": res_str}]}
                     send_response(req_id, result=result)
                 elif tool_name == "summarize_expenses":
-                    res_str = summarize_expenses()
+                    res_str = summarize_expenses(user_id=user_id)
                     result = {"content": [{"type": "text", "text": res_str}]}
                     send_response(req_id, result=result)
                 elif tool_name == "create_reminder":
                     time_val = arguments.get("time") or arguments.get("when") or arguments.get("reminder_time") or ""
                     text = arguments.get("text") or arguments.get("reminder") or arguments.get("description") or ""
-                    res_str = create_reminder(time_val, text)
+                    res_str = create_reminder(time_val, text, user_id=user_id)
                     result = {"content": [{"type": "text", "text": res_str}]}
                     send_response(req_id, result=result)
                 elif tool_name == "get_reminders":
-                    res_str = get_reminders()
+                    res_str = get_reminders(user_id=user_id)
                     result = {"content": [{"type": "text", "text": res_str}]}
                     send_response(req_id, result=result)
                 elif tool_name == "send_email":
                     to = arguments.get("to") or arguments.get("recipient") or arguments.get("email") or ""
                     subject = arguments.get("subject") or arguments.get("title") or "Notification"
                     body = arguments.get("body") or arguments.get("message") or arguments.get("content") or ""
-                    res_str = send_email(to, subject, body)
+                    res_str = send_email(to, subject, body, user_id=user_id)
                     result = {"content": [{"type": "text", "text": res_str}]}
                     send_response(req_id, result=result)
                 else:
@@ -489,7 +581,10 @@ def main():
         except Exception as e:
             sys.stderr.write(f"Exception in calculator server main loop: {str(e)}\n")
             sys.stderr.flush()
-            break
+            if req_id is not None:
+                error = {"code": -32603, "message": f"Internal server error: {str(e)}"}
+                send_response(req_id, error=error)
+            continue
 
 if __name__ == "__main__":
     main()

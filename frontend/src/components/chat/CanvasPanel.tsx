@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { apiRequest } from '../../services/api';
 import {
   Pencil, Copy, Download, Maximize2, Minimize2, X,
   Bold, Italic, Link2, ChevronDown, Check, MessageSquarePlus,
@@ -73,8 +74,14 @@ export const CanvasPanel: React.FC<CanvasPanelProps> = ({
   const linkInputRef  = useRef<HTMLInputElement>(null);
   const askInputRef   = useRef<HTMLInputElement>(null);
 
-  /* sync content when prop changes */
-  useEffect(() => { setText(content); }, [content, messageId]);
+  const [isUserEditing, setIsUserEditing] = useState(false);
+
+  /* sync content when prop changes if user is not actively editing */
+  useEffect(() => {
+    if (!isUserEditing) {
+      setText(content);
+    }
+  }, [content, messageId, isUserEditing]);
 
   /* auto-resize textarea */
   useEffect(() => {
@@ -159,10 +166,19 @@ export const CanvasPanel: React.FC<CanvasPanelProps> = ({
     ta.focus();
   };
 
+  const copyTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+    };
+  }, []);
+
   const handleCopy = async () => {
     await navigator.clipboard.writeText(text);
     setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+    copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
   };
 
   const handleDownload = () => {
@@ -173,23 +189,22 @@ export const CanvasPanel: React.FC<CanvasPanelProps> = ({
     URL.revokeObjectURL(url);
   };
 
-  const handleAsk = () => {
+  const handleAsk = async () => {
     if (!askQuery.trim()) return;
-    // Simulate simple text transformation based on query
-    const q = askQuery.toLowerCase();
-    let result = text;
-    if (q.includes('shorter') || q.includes('concise') || q.includes('brief')) {
-      const sentences = text.split('. ');
-      result = sentences.slice(0, Math.max(2, Math.ceil(sentences.length / 2))).join('. ') + (sentences.length > 2 ? '.' : '');
-    } else if (q.includes('bullet') || q.includes('list')) {
-      const lines = text.split('\n').filter(l => l.trim());
-      result = lines.map(l => `- ${l.replace(/^[-*•]\s*/, '')}`).join('\n');
-    } else if (q.includes('formal')) {
-      result = text.replace(/\bI'm\b/g, 'I am').replace(/\bdon't\b/g, 'do not').replace(/\bcan't\b/g, 'cannot').replace(/\bwon't\b/g, 'will not');
-    }
-    setText(result);
+    const promptText = `Refine the following text according to this instruction: "${askQuery}". Text:\n\n${text}`;
     setAskQuery('');
     setShowAskBar(false);
+    try {
+      const res = await apiRequest<{ response?: string }>('/api/v1/chat', {
+        method: 'POST',
+        body: JSON.stringify({ message: promptText, stream: false }),
+      });
+      if (res && res.response) {
+        setText(res.response);
+      }
+    } catch (err) {
+      console.error('Failed to transform canvas text via AI:', err);
+    }
   };
 
   if (!isOpen) return null;
@@ -366,7 +381,8 @@ export const CanvasPanel: React.FC<CanvasPanelProps> = ({
         <textarea
           ref={textareaRef}
           value={text}
-          onChange={e => setText(e.target.value)}
+          onFocus={() => setIsUserEditing(true)}
+          onChange={e => { setText(e.target.value); setIsUserEditing(true); }}
           onKeyDown={e => {
             if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
               e.preventDefault();

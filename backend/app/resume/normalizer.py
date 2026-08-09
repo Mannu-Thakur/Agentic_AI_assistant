@@ -149,9 +149,11 @@ def fix_email_artifacts(email: str, raw_context: str = "") -> str:
     matched_email = match.group(0)
     user_part, domain_part = matched_email.split("@", 1)
 
-    # Check font-icon artifact prefixes ('pe', 'em', 'el', 'icon', 'p', 'e', 'i')
+    # Check explicit multi-character font-icon artifact prefixes ('icon_', 'fa_')
+    # Single letter prefixes ('p', 'e', 'i') are removed to avoid corrupting valid emails like peter/eric/ian
     user_lower = user_part.lower()
-    for prefix in ICON_PREFIXES:
+    explicit_icon_prefixes = ["icon_", "fa_", "envelope_"]
+    for prefix in explicit_icon_prefixes:
         if user_lower.startswith(prefix) and len(user_part) > len(prefix) + 2:
             sub_user = user_part[len(prefix):]
             sub_email = f"{sub_user}@{domain_part}"

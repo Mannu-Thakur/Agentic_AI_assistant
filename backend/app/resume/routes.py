@@ -7,6 +7,7 @@ Reuses existing auth (get_current_user) and provider ecosystem.
 
 from __future__ import annotations
 
+import io
 import os
 import tempfile
 import uuid
@@ -34,7 +35,7 @@ from app.resume.jd_analyzer import analyze_job_description
 from app.resume.ats import compute_ats_score
 from app.resume.services import ResumeService
 from app.resume.diff import compute_resume_diff
-from app.resume.renderer import export_resume, generate_latex, generate_pdf
+from app.resume.renderer import export_resume, generate_latex, generate_pdf, PDFDependencyError
 from app.resume.latex_parser import parse_latex_to_resume
 
 
@@ -227,6 +228,12 @@ async def export_resume_endpoint(
             media_type=media_type,
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
+    except PDFDependencyError as pdf_err:
+        logger.error(f"[ResumeRoutes] PDF dependency missing: {pdf_err}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(pdf_err),
+        )
     except Exception as exc:
         logger.error(f"[ResumeRoutes] Export failed: {exc}")
         raise HTTPException(
@@ -303,6 +310,12 @@ async def compile_latex_endpoint(
             content=pdf_bytes,
             media_type="application/pdf",
             headers={"Content-Disposition": 'attachment; filename="latex_resume.pdf"'},
+        )
+    except PDFDependencyError as pdf_err:
+        logger.error(f"[ResumeRoutes] PDF dependency missing during LaTeX compile: {pdf_err}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(pdf_err),
         )
     except Exception as exc:
         logger.error(f"[ResumeRoutes] LaTeX compilation failed: {exc}")

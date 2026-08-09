@@ -574,8 +574,8 @@ async def refresh_providers(
                 k.last_checked = now
             except Exception as e:
                 now = datetime.now(timezone.utc)
-                # Network or transient server error: preserve prior status & models
-                k.status = prev_status if prev_status in ("VERIFIED", "INVALID") else "VERIFIED"
+                # Network or transient server error: preserve prior status if valid, else set UNCHECKED
+                k.status = prev_status if prev_status in ("VERIFIED", "INVALID") else "UNCHECKED"
                 k.available_models = prev_models or []
                 k.last_error = f"Transient check warning: {str(e)[:800]}"
                 k.last_checked = now

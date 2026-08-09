@@ -1,5 +1,5 @@
-import { Navigate } from 'react-router-dom';
+import { WorkspaceDashboard } from '../components/workspace/WorkspaceDashboard';
 
 export default function WorkspacePage() {
-  return <Navigate to="/settings?tab=documents" replace />;
+  return <WorkspaceDashboard />;
 }

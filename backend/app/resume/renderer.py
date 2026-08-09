@@ -14,18 +14,20 @@ Templates:
   - academic  (traditional, citations)
 """
 
-from __future__ import annotations
-
+import html
 import io
-import json
-import logging
-from typing import Literal, Optional
+from typing import Literal, Optional, List
 
 from app.resume.models import ResumeData, ExperienceEntry, EducationEntry
 
-logger = logging.getLogger("app.resume.renderer")
-
 TemplateType = Literal["classic_ats", "modern", "minimal", "executive", "developer", "academic"]
+
+
+def _esc(text: Optional[str]) -> str:
+    """Safely escape text for ReportLab Paragraph XML parser."""
+    if not text:
+        return ""
+    return html.escape(text, quote=False)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -44,6 +46,11 @@ def _get_template_colors(template: TemplateType) -> dict:
     return colors.get(template, colors["modern"])
 
 
+class PDFDependencyError(Exception):
+    """Raised when reportlab dependency is missing on the server for PDF export."""
+    pass
+
+
 def generate_pdf(resume: ResumeData, template: TemplateType = "modern") -> bytes:
     """Generate a beautiful PDF from ResumeData. Returns bytes."""
     try:
@@ -57,8 +64,8 @@ def generate_pdf(resume: ResumeData, template: TemplateType = "modern") -> bytes
         )
         from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
     except ImportError:
-        raise RuntimeError(
-            "reportlab is required for PDF export. Install it: pip install reportlab"
+        raise PDFDependencyError(
+            "PDF generation library (reportlab) is not installed on the server. Please install reportlab or export in JSON, LaTeX, or Markdown format."
         )
 
     buffer = io.BytesIO()
@@ -147,7 +154,7 @@ def generate_pdf(resume: ResumeData, template: TemplateType = "modern") -> bytes
         contact_parts.append(p.website.replace("https://", ""))
 
     if contact_parts:
-        contact_text = "  •  ".join(contact_parts)
+        contact_text = "  •  ".join(_esc(cp) for cp in contact_parts)
         story.append(Paragraph(contact_text, contact_style))
 
     story.append(Spacer(1, 6))
@@ -155,7 +162,7 @@ def generate_pdf(resume: ResumeData, template: TemplateType = "modern") -> bytes
     # ── Summary ───────────────────────────────────────────────────────────────
     if resume.summary:
         section_header("Professional Summary")
-        story.append(Paragraph(resume.summary, body_style))
+        story.append(Paragraph(_esc(resume.summary), body_style))
 
     # ── Skills ───────────────────────────────────────────────────────────────
     if resume.skills:
@@ -164,8 +171,8 @@ def generate_pdf(resume: ResumeData, template: TemplateType = "modern") -> bytes
         for sg in resume.skills:
             if not sg.skills:
                 continue
-            cat_para = Paragraph(f"<b>{sg.category}</b>", skill_tag_style)
-            skills_para = Paragraph(", ".join(sg.skills), skill_tag_style)
+            cat_para = Paragraph(f"<b>{_esc(sg.category)}</b>", skill_tag_style)
+            skills_para = Paragraph(", ".join(_esc(s) for s in sg.skills), skill_tag_style)
             skill_rows.append([cat_para, skills_para])
 
         if skill_rows:
@@ -181,9 +188,9 @@ def generate_pdf(resume: ResumeData, template: TemplateType = "modern") -> bytes
     if resume.experience:
         section_header("Experience")
         for exp in resume.experience:
-            date_str = f"{exp.start_date} – {exp.end_date or 'Present'}"
+            date_str = f"{_esc(exp.start_date)} – {_esc(exp.end_date) or 'Present'}"
             # Role + Company row with date on right
-            role_para = Paragraph(f"<b>{exp.role}</b>", subhead_style)
+            role_para = Paragraph(f"<b>{_esc(exp.role)}</b>", subhead_style)
             date_para = Paragraph(date_str, ParagraphStyle(
                 "DateRight", fontSize=8.5, fontName="Helvetica",
                 textColor=colors.Color(0.4, 0.4, 0.4), alignment=TA_RIGHT, leading=12,
@@ -198,25 +205,25 @@ def generate_pdf(resume: ResumeData, template: TemplateType = "modern") -> bytes
                 ("TOPPADDING", (0, 0), (-1, -1), 0),
             ]))
             story.append(row)
-            story.append(Paragraph(f"{exp.company}" + (f" — {exp.location}" if exp.location else ""), sub2_style))
+            story.append(Paragraph(f"{_esc(exp.company)}" + (f" — {_esc(exp.location)}" if exp.location else ""), sub2_style))
             for bullet in exp.bullets:
-                story.append(Paragraph(f"• {bullet}", bullet_style))
+                story.append(Paragraph(f"• {_esc(bullet)}", bullet_style))
             story.append(Spacer(1, 4))
 
     # ── Projects ─────────────────────────────────────────────────────────────
     if resume.projects:
         section_header("Projects")
         for proj in resume.projects:
-            tech_str = ", ".join(proj.technologies[:8]) if proj.technologies else ""
+            tech_str = ", ".join(_esc(t) for t in proj.technologies[:8]) if proj.technologies else ""
             title_para = Paragraph(
-                f"<b>{proj.name}</b>" + (f" | <i>{tech_str}</i>" if tech_str else ""),
+                f"<b>{_esc(proj.name)}</b>" + (f" | <i>{tech_str}</i>" if tech_str else ""),
                 subhead_style
             )
             story.append(title_para)
             if proj.description:
-                story.append(Paragraph(proj.description, body_style))
+                story.append(Paragraph(_esc(proj.description), body_style))
             for bullet in proj.bullets:
-                story.append(Paragraph(f"• {bullet}", bullet_style))
+                story.append(Paragraph(f"• {_esc(bullet)}", bullet_style))
             story.append(Spacer(1, 4))
 
     # ── Education ─────────────────────────────────────────────────────────────
@@ -425,7 +432,10 @@ def generate_markdown(resume: ResumeData) -> str:
             lines.append(f"### {edu.institution}")
             deg = f"{edu.degree}" + (f" in {edu.field_of_study}" if edu.field_of_study else "")
             lines.append(deg + (f" | GPA: {edu.gpa}" if edu.gpa else ""))
-            lines.append(f"_{edu.start_date} – {edu.end_date}_")
+            if edu.start_date or edu.end_date:
+                start = edu.start_date or ''
+                end = edu.end_date or ''
+                lines.append(f"_{start} – {end}_")
             lines.append("")
 
     if resume.certifications:
@@ -481,7 +491,9 @@ def escape_latex(text: str) -> str:
 def escape_latex_url(url: str) -> str:
     """
     Escape URLs for hyperref \\href{url}{text}.
-    URL target should keep standard characters (_ and #) for hyperref, but escape % and &.
+    Only escape % (to \\%) since it is a LaTeX comment delimiter.
+    Leave & as-is: it is a valid URL query-parameter separator and
+    hyperref handles it correctly inside \\href{} argument.
     Ensures absolute URL protocol (https://) is present for web targets.
     """
     if not url:
@@ -491,7 +503,7 @@ def escape_latex_url(url: str) -> str:
         res = "https://" + res
     res = res.replace('\\', '%5C')
     res = res.replace('%', r'\%')
-    res = res.replace('&', r'\%26')
+    # Do NOT escape & — hyperref accepts raw & inside \href{} URL argument
     return res
 
 

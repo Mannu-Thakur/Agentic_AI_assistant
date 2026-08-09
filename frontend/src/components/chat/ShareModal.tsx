@@ -17,6 +17,13 @@ export const ShareModal: React.FC<ShareModalProps> = ({
   shareUrl,
 }) => {
   const [copied, setCopied] = useState(false);
+  const timerRef = React.useRef<NodeJS.Timeout | null>(null);
+
+  React.useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, []);
 
   if (!isOpen) return null;
 
@@ -27,7 +34,8 @@ export const ShareModal: React.FC<ShareModalProps> = ({
   const handleCopyLink = () => {
     navigator.clipboard.writeText(currentUrl);
     setCopied(true);
-    setTimeout(() => setCopied(false), 2500);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => setCopied(false), 2500);
   };
 
   const socialLinks = [

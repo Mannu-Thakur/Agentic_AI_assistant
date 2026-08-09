@@ -45,9 +45,27 @@ def handle_web_search(query: str, max_results: int = 5) -> str:
     except Exception as exc:
         pass
 
-    # Fallback basic DuckDuckGo HTML web search
+    # Fallback to DDGS SDK or robust HTML parsing
+    try:
+        from duckduckgo_search import DDGS
+        with DDGS() as ddgs:
+            raw = list(ddgs.text(query, max_results=max_results))
+            if raw:
+                formatted = []
+                for item in raw:
+                    t = item.get("title", "")
+                    u = item.get("href", item.get("link", ""))
+                    s = item.get("body", item.get("snippet", ""))
+                    if t and u:
+                        formatted.append(f"Title: {t}\nURL: {u}\nSnippet: {s}\n")
+                if formatted:
+                    return "\n".join(formatted)
+    except Exception:
+        pass
+
+    # HTML fallback with flexible anchor & snippet match patterns
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept-Language": "en-US,en;q=0.9",
     }
     encoded_query = urllib.parse.urlencode({"q": query})
@@ -59,22 +77,52 @@ def handle_web_search(query: str, max_results: int = 5) -> str:
             raw_html = resp.read().decode("utf-8", errors="ignore")
             
         results = []
-        blocks = re.findall(r'<div class="result[^"]*">(.*?)</div>\s*</div>', raw_html, re.DOTALL)
-        for b in blocks[:max_results]:
-            t_match = re.search(r'<a class="result__a"[^>]*>(.*?)</a>', b, re.DOTALL)
-            u_match = re.search(r'<a class="result__url"[^>]*href="([^"]+)"', b, re.DOTALL)
-            s_match = re.search(r'<a class="result__snippet"[^>]*>(.*?)</a>', b, re.DOTALL)
-            
-            title = re.sub(r"<[^>]+>", "", t_match.group(1)).strip() if t_match else ""
-            href = u_match.group(1).strip() if u_match else ""
-            snippet = re.sub(r"<[^>]+>", "", s_match.group(1)).strip() if s_match else ""
-            
-            if href.startswith("//duckduckgo.com/l/?uddg="):
-                href = urllib.parse.unquote(href.split("uddg=")[-1].split("&")[0])
-                
-            if title and href:
-                results.append(f"Title: {title}\nURL: {href}\nSnippet: {snippet}\n")
-                
+
+        try:
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(raw_html, "html.parser")
+            for res_div in soup.find_all("div", class_=re.compile(r"result")):
+                a_tag = res_div.find("a", class_=re.compile(r"result__a")) or res_div.find("a")
+                s_tag = res_div.find("a", class_=re.compile(r"result__snippet")) or res_div.find("td", class_=re.compile(r"result-snippet"))
+                if a_tag and a_tag.get("href"):
+                    href = a_tag["href"]
+                    title = a_tag.get_text(strip=True)
+                    snippet = s_tag.get_text(strip=True) if s_tag else ""
+                    if href.startswith("//duckduckgo.com/l/?uddg="):
+                        href = urllib.parse.unquote(href.split("uddg=")[-1].split("&")[0])
+                    if title and href and not href.startswith("javascript:"):
+                        results.append(f"Title: {title}\nURL: {href}\nSnippet: {snippet}\n")
+                    if len(results) >= max_results:
+                        break
+        except Exception:
+            pass
+
+        if not results:
+            # Multi-pattern regex fallback for raw HTML
+            patterns = [
+                r'<a[^>]+class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>(.*?)</a>.*?(?:<a[^>]+class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>)?',
+                r'<a[^>]+href="([^"]+)"[^>]*class="[^"]*result__url[^"]*"[^>]*>(.*?)</a>',
+            ]
+            for pat in patterns:
+                for match in re.finditer(pat, raw_html, re.DOTALL | re.IGNORECASE):
+                    if len(results) >= max_results:
+                        break
+                    groups = match.groups()
+                    href = groups[0] if len(groups) > 0 else ""
+                    title = groups[1] if len(groups) > 1 else ""
+                    snippet = groups[2] if len(groups) > 2 else ""
+
+                    title = re.sub(r"<[^>]+>", "", title or "").strip()
+                    snippet = re.sub(r"<[^>]+>", "", snippet or "").strip()
+
+                    if href.startswith("//duckduckgo.com/l/?uddg="):
+                        href = urllib.parse.unquote(href.split("uddg=")[-1].split("&")[0])
+
+                    if title and href and not href.startswith("javascript:"):
+                        results.append(f"Title: {title}\nURL: {href}\nSnippet: {snippet}\n")
+                if results:
+                    break
+                    
         if results:
             return "\n".join(results)
         return "No web search results found."

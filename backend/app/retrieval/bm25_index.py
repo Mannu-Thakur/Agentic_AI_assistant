@@ -110,6 +110,7 @@ class _BM25Index:
     • average document length (for BM25 normalization)
     """
     corpus_tokens: List[List[str]]      = field(default_factory=list)
+    corpus_texts:  List[str]            = field(default_factory=list)
     corpus_metas:  List[Dict[str, Any]] = field(default_factory=list)
     df:            Dict[str, int]       = field(default_factory=lambda: defaultdict(int))
     doc_lengths:   List[int]            = field(default_factory=list)
@@ -139,6 +140,7 @@ class _BM25Index:
         avg_dl = sum(doc_lengths) / max(len(doc_lengths), 1)
         return cls(
             corpus_tokens=corpus_tokens,
+            corpus_texts=list(texts),
             corpus_metas=corpus_metas,
             df=dict(df),
             doc_lengths=doc_lengths,
@@ -338,13 +340,13 @@ class BM25IndexManager:
             if doc_idx >= len(index.corpus_metas):
                 continue
             meta = index.corpus_metas[doc_idx]
-            content = " ".join(index.corpus_tokens[doc_idx])  # raw tokens sufficient for ranking
-            # Fetch actual content from corpus_tokens is lossy; we store full text below
+            raw_text = index.corpus_texts[doc_idx] if doc_idx < len(index.corpus_texts) else ""
             results.append({
                 "doc_idx":    doc_idx,
                 "bm25_rank":  bm25_rank,
                 "bm25_score": round(bm25_score, 4),
                 "meta":       meta,
+                "text":       raw_text,
             })
         return results
 
