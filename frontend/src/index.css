@@ -767,15 +767,34 @@
 }
 
 /* ── Links ── */
-.prose-chat a {
-  color: #FFFFFF;
+.prose-chat a,
+.prose-chat-link {
+  color: #60a5fa;
   text-decoration: underline;
   text-underline-offset: 3px;
-  text-decoration-color: #6B7280;
+  text-decoration-color: rgba(96, 165, 250, 0.4);
   text-decoration-thickness: 1px;
   transition: color 0.15s, text-decoration-color 0.15s;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.2em;
+  word-break: break-all;
 }
-.prose-chat a:hover { color: #FFFFFF; text-decoration-color: #9CA3AF; }
+.prose-chat a:hover,
+.prose-chat-link:hover {
+  color: #93c5fd;
+  text-decoration-color: rgba(147, 197, 253, 0.7);
+}
+.prose-chat-link-icon {
+  width: 0.65em;
+  height: 0.65em;
+  flex-shrink: 0;
+  opacity: 0.6;
+  vertical-align: middle;
+  position: relative;
+  top: -0.05em;
+}
 
 /* ── Inline emphasis ── */
 .prose-chat strong { font-weight: 700; color: #FFFFFF; }

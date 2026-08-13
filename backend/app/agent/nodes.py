@@ -873,12 +873,14 @@ def validate_citations(text: str, valid_sources: List[Dict[str, Any]]) -> str:
     """
     Validates citation markers in response text against actual valid_sources.
     Strips or neutralizes citations that reference non-existent source indices/names.
+    NEVER strips or alters standard Markdown hyperlinks `[Anchor Text](URL)`.
     """
     if not text:
         return ""
     if not valid_sources:
-        # If no sources were provided, remove any hallucinated bracket citations like [1], [2], [Source 1]
-        return re.sub(r"\[(?:Doc|Web|Source|\d+)\s*\d*\]", "", text)
+        # If no sources were provided, remove only standalone bracket citations like [1], [2], [Source 1]
+        # preserving markdown links [text](url) via negative lookahead (?!\()
+        return re.sub(r"\[(?:Doc|Web|Source|\d+)\s*\d*\](?!\()", "", text)
 
     valid_indices: set = set()
     valid_names: set = set()
@@ -904,6 +906,14 @@ def validate_citations(text: str, valid_sources: List[Dict[str, Any]]) -> str:
 
     def check_tag(match: re.Match) -> str:
         tag = match.group(0)
+        # CRITICAL FIX: If this bracket is part of a markdown hyperlink [anchor](url), preserve it completely!
+        start_pos = match.start()
+        end_pos = match.end()
+        if end_pos < len(text) and text[end_pos] == '(':
+            return tag
+        if start_pos > 0 and text[start_pos - 1] == ']':
+            return tag
+
         inner = tag.strip("[]").strip()
         inner_lower = inner.lower()
 
@@ -925,8 +935,8 @@ def validate_citations(text: str, valid_sources: List[Dict[str, Any]]) -> str:
 
         return ""  # Strip hallucinated tag
 
-    cleaned = re.sub(r"\[(?:Doc|Web|Source|[A-Za-z0-9_\-\.\s]+)\s*\d*\]", check_tag, text)
-    cleaned = re.sub(r"\[\d+\]", check_tag, cleaned)
+    cleaned = re.sub(r"\[(?:Doc|Web|Source|[A-Za-z0-9_\-\.\s]+)\s*\d*\](?!\()", check_tag, text)
+    cleaned = re.sub(r"\[\d+\](?!\()", check_tag, cleaned)
     return re.sub(r"  +", " ", cleaned).strip()
 
 

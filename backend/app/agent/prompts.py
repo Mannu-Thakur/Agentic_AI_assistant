@@ -352,14 +352,18 @@ def compile_system_prompt(
             "   • Use clean bullet points with regional icons/flags (e.g., 🇮🇳 for India, 🟢 for Bihar/states).\n"
             "   • BOLD the exact official title and current name: e.g., **Union Education Minister of India: Pralhad Joshi**.\n"
             "   • State exact appointment dates or tenure context when available in search results.\n"
-            "4. QUICK SUMMARY / INTERVIEW TAKEAWAYS BLOCK:\n"
+            "4. MANDATORY INLINE HYPERLINKS FOR SOURCES & ENTITIES:\n"
+            "   • You MUST include clickable Markdown hyperlinks `[Anchor Text](URL)` throughout your response using the URLs provided in the Web Search Results above.\n"
+            "   • Convert key names, organizations, teams, awards, titles, and topics directly into clickable links using their respective URLs from the search results (e.g. `[Sachin Tendulkar](https://en.wikipedia.org/wiki/Sachin_Tendulkar)`, `[ESPNcricinfo](https://www.espncricinfo.com/...)`).\n"
+            "   • EVERY section of your response MUST contain clickable `[Text](URL)` links for key entities and references.\n"
+            "5. QUICK SUMMARY / INTERVIEW TAKEAWAYS BLOCK:\n"
             "   • Append a clean blockquote Q&A summary for quick reference / placement interviews:\n"
             "     > **Q: Who is the current Education Minister of India?**\n"
             "     > **A: Pralhad Joshi.**\n"
             "     >\n"
             "     > **Q: Who is the current Education Minister of Bihar?**\n"
             "     > **A: Mithlesh Tiwari.**\n"
-            "5. State exact current facts, data, or status naturally and confidently without disclaimers like 'according to evidence chunks'.\n"
+            "6. State exact current facts, data, or status naturally and confidently without disclaimers like 'according to evidence chunks'.\n"
         )
 
     if rag_chunks:

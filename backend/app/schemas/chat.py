@@ -12,7 +12,7 @@ class ToolCallSchema(BaseModel):
 
 class DeveloperMetricsSchema(BaseModel):
   model_used: Optional[str] = None
-  latency_ms: Optional[int] = 0
+  latency_ms: Optional[float] = 0.0
   tokens_input: Optional[int] = 0
   tokens_output: Optional[int] = 0
   cost_estimate: Optional[float] = 0.0

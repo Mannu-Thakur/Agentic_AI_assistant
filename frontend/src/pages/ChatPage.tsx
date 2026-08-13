@@ -354,6 +354,19 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
 }
 
 // ─────────────────────────────────────────────────────────────
+//  Auto-link bare URLs that are not already wrapped in []()
+// ─────────────────────────────────────────────────────────────
+function autoLinkBareUrls(text: string): string {
+  // Matches http(s):// URLs not already inside []() markdown link syntax
+  // Negative lookbehind: not preceded by ]( (already a link target)
+  // Negative lookahead: not followed by ) immediately (already a link target)
+  return text.replace(
+    /(?<![\]\(])\b(https?:\/\/[^\s<>"'`()[\]{}|\\^]*[^\s<>"'`()[\]{}|\\^.,;:!?])/g,
+    (url) => `[${url}](${url})`
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
 //  Base Markdown renderer — full component override
 // ─────────────────────────────────────────────────────────────
 function MarkdownContent({ content, isStreaming }: { content: string; isStreaming?: boolean }) {
@@ -400,11 +413,18 @@ function MarkdownContent({ content, isStreaming }: { content: string; isStreamin
     hr() { return <hr />; },
     // Blockquote
     blockquote({ children }: any) { return <blockquote>{children}</blockquote>; },
-    // Links
+    // Links — open in new tab with external link indicator
     a({ href, children }: any) {
+      const isExternal = href?.startsWith('http');
       return (
-        <a href={href} target="_blank" rel="noopener noreferrer">
+        <a
+          href={href}
+          target={isExternal ? '_blank' : undefined}
+          rel={isExternal ? 'noopener noreferrer' : undefined}
+          className="prose-chat-link"
+        >
           {children}
+          {isExternal && <ExternalLink className="prose-chat-link-icon" aria-hidden />}
         </a>
       );
     },
@@ -421,6 +441,9 @@ function MarkdownContent({ content, isStreaming }: { content: string; isStreamin
     em({ children }: any) { return <em>{children}</em>; },
   }), []);
 
+  // Pre-process: convert bare URLs in text to markdown links so ReactMarkdown renders them as <a>
+  const processedContent = useMemo(() => autoLinkBareUrls(content), [content]);
+
   return (
     <div className={`prose-chat ${isStreaming ? 'streaming-cursor' : ''}`}>
       <ReactMarkdown
@@ -428,7 +451,7 @@ function MarkdownContent({ content, isStreaming }: { content: string; isStreamin
         rehypePlugins={[rehypeKatex]}
         components={markdownComponents}
       >
-        {content}
+        {processedContent}
       </ReactMarkdown>
     </div>
   );
