@@ -68,6 +68,7 @@ from app.agent.prompts import (
     INTENT_NEWS,
     INTENT_CURRENT_EVENTS,
     INTENT_MATH,
+    INTENT_PROGRAMMING,
     AMBIGUITY_DETECTOR_PROMPT,
     CLARIFICATION_QUESTION_PROMPT,
     QUERY_RECONSTRUCTOR_PROMPT,
@@ -99,6 +100,21 @@ from app.services.web_search import (
     format_as_source_documents,
 )
 
+
+async def _notify_step(config: Optional[RunnableConfig], step_message: str) -> None:
+    """Send live progress step message to frontend via config on_step callback."""
+    if not config:
+        return
+    on_step = config.get("configurable", {}).get("on_step")
+    if on_step and callable(on_step):
+        try:
+            if asyncio.iscoroutinefunction(on_step):
+                await on_step(step_message)
+            else:
+                on_step(step_message)
+        except Exception as err:
+            logger.debug(f"_notify_step error (non-fatal): {err}")
+
 logger = logging.getLogger("agent.nodes")
 
 # ── Singleton provider instances ──────────────────────────────────────────────
@@ -106,6 +122,151 @@ gemini_provider     = GeminiProvider()
 groq_provider       = GroqProvider()
 openrouter_provider = OpenRouterProvider()
 openai_provider     = OpenAIProvider()
+
+
+# ── Execution Trace & Dev HUD Observability Helpers ───────────────────────────
+
+def init_execution_trace(state: AgentState) -> None:
+    """Reset execution trace and status structures at the beginning of a request."""
+    state["execution_trace"] = []
+    state["inconsistencies"] = []
+    state["semantic_status"] = {
+        "retrieval_status": "RETRIEVAL NOT NEEDED",
+        "embedding_executed": False,
+        "vector_search_executed": False,
+        "rag_chunks": 0,
+        "reranked_chunks": 0,
+        "graded_chunks": 0,
+        "confidence": 1.0,
+        "documents": [],
+    }
+    state["memory_status"] = {
+        "lookup_status": "MEMORY NOT CHECKED",
+        "memory_hits": 0,
+        "injected_into_prompt": False,
+        "write_executed": False,
+        "persisted_content": None,
+    }
+    state["web_status"] = {
+        "executed": False,
+        "reason": "Web search was evaluated as unnecessary",
+        "results_count": 0,
+        "accepted_sources_count": 0,
+        "used_in_final_answer": False,
+        "queries": [],
+        "sources": [],
+    }
+
+
+import inspect
+
+
+def ensure_state_status_dicts(state: AgentState) -> None:
+    """Ensure semantic_status, memory_status, web_status dicts exist in state."""
+    if not isinstance(state.get("semantic_status"), dict):
+        state["semantic_status"] = {
+            "retrieval_status": "RETRIEVAL NOT NEEDED",
+            "embedding_executed": False,
+            "vector_search_executed": False,
+            "rag_chunks": 0,
+            "reranked_chunks": 0,
+            "graded_chunks": 0,
+            "confidence": 1.0,
+            "documents": [],
+        }
+    if not isinstance(state.get("memory_status"), dict):
+        state["memory_status"] = {
+            "lookup_status": "MEMORY NOT CHECKED",
+            "memory_hits": 0,
+            "injected_into_prompt": False,
+            "write_executed": False,
+            "persisted_content": None,
+        }
+    if not isinstance(state.get("web_status"), dict):
+        state["web_status"] = {
+            "executed": False,
+            "reason": "Web search was evaluated as unnecessary",
+            "results_count": 0,
+            "accepted_sources_count": 0,
+            "used_in_final_answer": False,
+            "queries": [],
+            "sources": [],
+        }
+
+
+def record_node_execution(
+    state: AgentState,
+    node_name: str,
+    status: str,  # "EXECUTED" | "BYPASSED" | "FAILED"
+    reason: str,
+    metadata: Optional[Dict[str, Any]] = None,
+    duration_ms: float = 0.0,
+    error: Optional[str] = None
+) -> None:
+    """Record runtime state execution for a specific node in state['execution_trace']."""
+    if "execution_trace" not in state or state.get("execution_trace") is None:
+        state["execution_trace"] = []
+
+    trace_entry = {
+        "name": node_name,
+        "status": status,
+        "timestamp": time.time(),
+        "duration_ms": round(duration_ms, 2),
+        "reason": reason,
+        "metadata": metadata or {},
+        "error": error,
+    }
+    state["execution_trace"].append(trace_entry)
+
+
+def validate_execution_trace(state: AgentState) -> List[str]:
+    """
+    Detect impossible or inconsistent execution states.
+    Returns a list of SYSTEM INCONSISTENCY error messages.
+    """
+    inconsistencies = list(state.get("inconsistencies") or [])
+    trace = state.get("execution_trace") or []
+    nodes_status = {t["name"]: t["status"] for t in trace}
+
+    semantic = state.get("semantic_status") or {}
+    memory = state.get("memory_status") or {}
+    web = state.get("web_status") or {}
+
+    rag_chunks = semantic.get("rag_chunks", 0)
+    retrieval_node_status = nodes_status.get("retrieve_context", "BYPASSED")
+    check_retrieval_status = nodes_status.get("check_retrieval", "BYPASSED")
+    if retrieval_node_status == "EXECUTED" and check_retrieval_status == "BYPASSED":
+        inconsistencies.append("SYSTEM INCONSISTENCY: Node 'retrieve_context' EXECUTED but prerequisite 'check_retrieval' was BYPASSED")
+    if retrieval_node_status == "BYPASSED" and rag_chunks > 0:
+        inconsistencies.append(f"SYSTEM INCONSISTENCY: retrieve_context=BYPASSED but rag_chunks={rag_chunks}")
+
+    memory_lookup_status = memory.get("lookup_status", "MEMORY NOT CHECKED")
+    memory_hits = memory.get("memory_hits", 0)
+    if memory_lookup_status == "MEMORY NOT CHECKED" and memory_hits > 0:
+        inconsistencies.append(f"SYSTEM INCONSISTENCY: memory_lookup=MEMORY NOT CHECKED but memory_hits={memory_hits}")
+
+    web_executed = web.get("executed", False)
+    web_results = web.get("results_count", 0)
+    if not web_executed and web_results > 0:
+        inconsistencies.append(f"SYSTEM INCONSISTENCY: web_search=BYPASSED but web_results={web_results}")
+
+    grade_status = nodes_status.get("grade_documents", "BYPASSED")
+    retrieved_docs = state.get("retrieved_documents") or []
+    if grade_status == "EXECUTED" and len(retrieved_docs) == 0 and semantic.get("retrieval_status") == "RETRIEVAL NOT NEEDED":
+        inconsistencies.append("SYSTEM INCONSISTENCY: grade_documents=EXECUTED when no documents exist and retrieval not needed")
+
+    mem_write_status = nodes_status.get("memory_write", "BYPASSED")
+    if mem_write_status == "EXECUTED" and not memory.get("persisted_content"):
+        inconsistencies.append("SYSTEM INCONSISTENCY: memory_write=EXECUTED but nothing was persisted")
+
+    deduped = []
+    for inc in inconsistencies:
+        if inc not in deduped:
+            deduped.append(inc)
+
+    state["inconsistencies"] = deduped
+    return deduped
+
 
 # ── Private-document routing signals ─────────────────────────────────────────
 # PRODUCTION FIX: Static _PERSONAL_DOC_SIGNALS has been REPLACED with a dynamic
@@ -1037,18 +1198,45 @@ async def classify_intent_node(
     """
     Intent Classifier Node — determines intent, language, and routing.
 
-    Key fixes applied:
-    1. Ambiguity detector now receives conversation history context —
-       follow-up queries ('translate this', 'do it again') are no longer flagged ambiguous.
-    2. Images auto-route to VISION without requiring explicit text from user.
-    3. Language detection stored in state for downstream multilingual prompting.
-    4. Language mode detection (e.g., 'Let's talk Roman Odia').
-    5. Vastly expanded web search heuristics (population, PM, price, weather, etc.).
+    Updates execution_trace, memory_status, and freshness signals.
     """
+    node_start = time.time()
+    init_execution_trace(state)
+
     config = config or {}
     messages = state.get("messages", [])
     images   = state.get("images") or []
     steps    = list(state.get("steps") or [])
+
+    # Evaluate Memory Lookup Status
+    memories = config.get("configurable", {}).get("memories")
+    if memories is not None:
+        memory_count = len(memories)
+        if memory_count > 0:
+            memory_status = {
+                "lookup_status": f"MEMORY CHECKED → {memory_count} HITS",
+                "memory_hits": memory_count,
+                "injected_into_prompt": True,
+                "write_executed": False,
+                "persisted_content": None,
+            }
+        else:
+            memory_status = {
+                "lookup_status": "MEMORY CHECKED → 0 HITS",
+                "memory_hits": 0,
+                "injected_into_prompt": False,
+                "write_executed": False,
+                "persisted_content": None,
+            }
+    else:
+        memory_status = {
+            "lookup_status": "MEMORY NOT CHECKED",
+            "memory_hits": 0,
+            "injected_into_prompt": False,
+            "write_executed": False,
+            "persisted_content": None,
+        }
+    state["memory_status"] = memory_status
 
     # Initialize Phase 2 state variables
     retrieval_retry_count = state.get("retrieval_retry_count", 0)
@@ -1065,11 +1253,6 @@ async def classify_intent_node(
     # Extract last user query
     last_query = _extract_last_user_query(messages)
 
-    # ── Strip injected context prefixes so they don't pollute intent detection ─
-    # The frontend injects [System Context: ...] (datetime), [User Location Context: ...],
-    # and [Connected Reference Context ...] into every user message payload.
-    # Words like 'today', 'current', 'date', 'now' inside those brackets must NOT
-    # trigger INTENT_WEB_SEARCH or other heuristics.
     import re as _re
     _clean_query = last_query
     _clean_query = _re.sub(r"\[System Context:[^\]]*\]", "", _clean_query)
@@ -1081,27 +1264,17 @@ async def classify_intent_node(
         flags=_re.DOTALL,
     )
     last_query_clean = _clean_query.strip()
-    # Use clean query for intent classification; keep original for LLM prompts.
 
-    # This is the key fix: the ambiguity detector previously received ONLY the
-    # current query, causing follow-up queries like 'translate this' to be
-    # flagged as ambiguous. Now it gets the recent conversation history.
     conversation_context = _build_conversation_context(messages, max_exchanges=3)
 
-    # ── Language mode detection ───────────────────────────────────────────────
-    # Check if the user is explicitly setting a language/conversation mode.
     if last_query:
         new_mode = _detect_language_mode(last_query)
         if new_mode:
             language_mode = new_mode
             logger.info(f"Language mode set to: {language_mode}")
 
-    # ── Image auto-routing ────────────────────────────────────────────────────
-    # If images are attached, default to VISION intent immediately.
-    # The LLM classifier can override this only if the query is clearly unrelated.
     images_present = bool(images)
 
-    # Resumption check: did the user answer a clarification question?
     if is_ambiguous and clarification_question and original_query and last_query:
         reconstruct_prompt = QUERY_RECONSTRUCTOR_PROMPT.format(
             original_query=original_query,
@@ -1115,15 +1288,10 @@ async def classify_intent_node(
             is_ambiguous = False
             logger.info(f"Reconstructed resolved query: {resolved_query}")
 
-    # ── Ambiguity check (with conversation context) ───────────────────────────
-    # Skip ambiguity check for self-contained queries (>10 chars or common question/action words)
-    is_clear_self_contained = (
-        bool(last_query_clean) and (
-            len(last_query_clean) >= 12 or
-            any(last_query_clean.lower().startswith(w) for w in ("what", "how", "why", "who", "where", "when", "can", "could", "would", "is", "are", "do", "does", "explain", "write", "tell", "show", "give", "help", "solve", "create", "generate", "hi", "hello"))
-        )
-    )
-    if not resolved_query and last_query and not images_present and not is_clear_self_contained:
+    # ── Ambiguity check via LLM (no keyword shortcuts) ───────────────────────
+    # Let the AMBIGUITY_DETECTOR_PROMPT decide — it's already calibrated to
+    # never flag normal questions as ambiguous. No keyword bypass needed.
+    if not resolved_query and last_query and not images_present:
         ambiguity_prompt = AMBIGUITY_DETECTOR_PROMPT.format(
             query=last_query,
             conversation_context=conversation_context,
@@ -1133,6 +1301,12 @@ async def classify_intent_node(
             reason = parsed_ambiguity.get("reason", "Query lacks context")
             logger.info(f"Ambiguity detected: {reason}")
             steps.append("classify_intent")
+            dur = (time.time() - node_start) * 1000
+            record_node_execution(
+                state, "classify_intent", "EXECUTED",
+                f"Query classified as ambiguous: {reason}",
+                metadata={"is_ambiguous": True}, duration_ms=dur
+            )
             return {
                 "is_ambiguous": True,
                 "original_query": last_query,
@@ -1143,113 +1317,51 @@ async def classify_intent_node(
                 "steps": steps,
                 "language_mode": language_mode,
                 "detected_language": detected_language,
+                "execution_trace": state["execution_trace"],
+                "memory_status": state["memory_status"],
             }
 
-    # Defaults — safe fallback values
+    # ── Safe defaults ─────────────────────────────────────────────────────────
     intent                = INTENT_NORMAL_CHAT
     is_private_doc_query  = False
     memory_write_content  = None
     memory_write_category = None
 
-    # ── Image auto-routing: set VISION if images attached ─────────────────────
+    # ── Image fast-path (no LLM needed — images make it VISION) ──────────────
     if images_present:
         intent = INTENT_VISION
-        logger.info("classify_intent_node: images present → auto-routing to VISION")
+        logger.info("classify_intent_node: images present → VISION")
 
-    # ── High-confidence memory-write keyword override ─────────────────────────
-    # Use last_query_clean to ignore injected [System Context: ...] prefixes
+    # ── LLM Intent Classification (runs for ALL non-vision queries) ───────────
+    # This is now the ONLY routing decision — no keyword overrides before or after.
     if last_query_clean and intent != INTENT_VISION:
-        q_lower = last_query_clean.lower().strip()
-        question_prefixes = ("what", "who", "where", "when", "why", "how", "do you", "can you", "is my", "what's")
-        memory_signals = (
-            "remember that", "remember this:", "remember this ",
-            "note that my", "note that i", "save that i", "save that my",
-            "keep in mind that", "make a note that", "store this:"
+        await _notify_step(config, "Analyzing query intent & context...")
+        prompt = INTENT_CLASSIFIER_PROMPT.format(
+            query=last_query_clean,
+            has_images=images_present,
+            conversation_context=conversation_context,
         )
-        if any(sig in q_lower for sig in memory_signals) and not any(q_lower.startswith(qp) for qp in question_prefixes):
-            intent = INTENT_MEMORY_WRITE
-            is_private_doc_query = False
-            # Extract content: find the signal and extract everything after it
-            content = last_query
-            for sig in memory_signals:
-                if sig in q_lower:
-                    idx = q_lower.find(sig)
-                    content = last_query[idx + len(sig):].strip()
-                    break
-            # Clean content from trailing punctuation, emojis, and spaces
-            content = content.strip(' "\'.:,🦀🐍')
-            memory_write_content = content if content else last_query
-            # Category heuristic
-            category = "fact"
-            if any(p in q_lower for p in ("favorite", "favourite", "prefer", "like")):
-                category = "preference"
-            elif any(g in q_lower for g in ("goal", "aim", "target")):
-                category = "goal"
-            elif any(t in q_lower for t in ("topic", "subject")):
-                category = "topic"
-            memory_write_category = category
+        parsed = await _call_llm_judge(prompt, config)
+        logger.info(f"classify_intent_node: LLM judge returned: {parsed}")
 
-            logger.info(
-                f"Intent Classifier heuristic override: intent={intent} | "
-                f"content='{memory_write_content}' | category={memory_write_category}"
-            )
-
-    # ── LLM-First Intent Classification ──────────────────────────────────────
-    # The LLM is the PRIMARY classifier for all non-trivial queries.
-    # We avoid hardcoded keyword-to-intent mappings that misroute edge cases.
-    # Only two cheap zero-cost fast-paths are kept:
-    #   1. Trivial greetings (≤4 words, no content signals) → NORMAL_CHAT
-    #   2. Unambiguous memory-write openers → MEMORY_WRITE
-    # Everything else goes to the LLM judge which performs real-time semantic
-    # analysis of the full query + conversation context.
-    if last_query_clean and intent not in (INTENT_MEMORY_WRITE, INTENT_VISION):
-        q_lower = last_query_clean.lower()
-        _word_count = len(last_query_clean.split())
-
-        # Fast-path 3: Unambiguous MCP / Expense / Math / Action signals
-        _mcp_action_signals = (
-            "mcp server", "mcp tool", "expense mcp", "add expense", "add an expense",
-            "log expense", "track expense", "new expense", "get expenses", "list expenses",
-            "show expenses", "total spent", "total spend", "expense breakdown",
-            "summarize expenses", "expense summary", "category summary", "monthly summary",
-            "top merchants", "create reminder", "set reminder", "send email", "send an email",
-        )
-        if any(sig in q_lower for sig in _mcp_action_signals):
-            intent = INTENT_MCP_TOOL
-            logger.info(f"classify_intent_node: MCP tool fast-path for: '{last_query_clean[:60]}'")
-
+        if parsed and isinstance(parsed, dict):
+            intent                = parsed.get("intent", INTENT_NORMAL_CHAT)
+            is_private_doc_query  = bool(parsed.get("is_private_doc_query", False))
+            memory_write_content  = parsed.get("memory_content") or None
+            memory_write_category = parsed.get("memory_category") or None
+            lang_from_llm         = parsed.get("detected_language")
+            if lang_from_llm and lang_from_llm.lower() not in ("unknown", "none", ""):
+                detected_language = lang_from_llm
+            # LLM-suggested tool hints (informational — semantic router makes final call)
+            _llm_tool_hints = parsed.get("tool_hints") or []
+            logger.debug(f"classify_intent_node: tool_hints from LLM: {_llm_tool_hints}")
         else:
-            # ── LLM judge: real-time semantic classification ──────────────────
-            # No keyword lists here — the LLM reads the full query + context and
-            # decides the intent, is_private_doc_query, and detected language.
-            prompt = INTENT_CLASSIFIER_PROMPT.format(
-                query=last_query_clean,
-                has_images=images_present,
-                conversation_context=conversation_context,
-            )
-            parsed = await _call_llm_judge(prompt, config)
-            logger.info(f"classify_intent_node: LLM judge returned: {parsed}")
+            # LLM call failed → safe fallback
+            intent = INTENT_DOCUMENT_QA if (is_private_doc_query or state.get("active_documents")) else INTENT_NORMAL_CHAT
 
-            if parsed and isinstance(parsed, dict):
-                intent                = parsed.get("intent", INTENT_NORMAL_CHAT)
-                is_private_doc_query  = bool(parsed.get("is_private_doc_query", False))
-                memory_write_content  = parsed.get("memory_content") or None
-                memory_write_category = parsed.get("memory_category") or None
-                lang_from_llm = parsed.get("detected_language")
-                if lang_from_llm and lang_from_llm.lower() not in ("unknown", "none", ""):
-                    detected_language = lang_from_llm
-            else:
-                # Robust Fallback: if LLM judge fails, inspect query for MCP / action signals before defaulting to NORMAL_CHAT
-                if any(sig in q_lower for sig in _mcp_action_signals) or any(w in q_lower for w in ("expense", "spent", "mcp")):
-                    intent = INTENT_MCP_TOOL
-                    logger.info(f"classify_intent_node: LLM judge failed, fallback to INTENT_MCP_TOOL for '{last_query_clean[:60]}'")
-                else:
-                    intent = INTENT_NORMAL_CHAT
-
-
-    # ── Private-document possession override (dynamic, per-user) ───────────────
-    # Build the signal set from the user's actual uploaded filenames so that
-    # no developer-specific project names are hardcoded in routing logic.
+    # ── DB-backed document signal check (semantic, not keyword-based) ─────────
+    # query_matches_user_signals uses embeddings and user-uploaded filenames from DB.
+    # This overrides to DOCUMENT_QA or COMPLEX when the user asks about their own files.
     if last_query_clean:
         _user_id_for_signals = state.get("user_id") or config.get("configurable", {}).get("user_id", "")
         try:
@@ -1260,39 +1372,21 @@ async def classify_intent_node(
 
         if query_matches_user_signals(last_query_clean, _doc_signals):
             is_private_doc_query = True
-            q_low_personal = last_query_clean.lower()
-            # CRITICAL FIX: Do NOT override active tool/action intents (MCP_TOOL, CODE_EXECUTION, MATH, FINANCE, MEMORY_WRITE)
-            if intent not in (INTENT_MCP_TOOL, INTENT_CODE_EXECUTION, INTENT_MATH, INTENT_FINANCE, INTENT_MEMORY_WRITE, INTENT_VISION):
-                if intent in (INTENT_WEB_SEARCH, INTENT_NEWS, INTENT_CURRENT_EVENTS) or any(w in q_low_personal for w in ("2024", "2025", "2026", "news", "today", "latest")):
+            # If the LLM already classified as WEB_SEARCH or COMPLEX, escalate to COMPLEX
+            # (need both web + doc context). Otherwise go to DOCUMENT_QA.
+            if intent not in (INTENT_MCP_TOOL, INTENT_CODE_EXECUTION, INTENT_MEMORY_WRITE, INTENT_VISION):
+                if intent == INTENT_WEB_SEARCH:
                     intent = INTENT_COMPLEX
-                    logger.info(
-                        f"classify_intent_node: hybrid doc + web query detected → INTENT_COMPLEX "
-                        f"(is_private_doc_query=True) for query='{last_query_clean[:60]}'"
-                    )
                 else:
                     intent = INTENT_DOCUMENT_QA
-                    logger.info(
-                        f"classify_intent_node: personal-data signal detected → DOCUMENT_QA "
-                        f"(is_private_doc_query=True) for query='{last_query_clean[:60]}'"
-                    )
-            else:
-                logger.info(
-                    f"classify_intent_node: personal-data signal detected but preserving tool intent={intent} "
-                    f"(is_private_doc_query=True) for query='{last_query_clean[:60]}'"
-                )
 
-    # ── Guard: empty query with images → force VISION ─────────────────────────
+    # ── Final image guard: if image attached but user typed nothing, force VISION
     if images_present and intent == INTENT_NORMAL_CHAT and not last_query.strip():
         intent = INTENT_VISION
-        logger.info("classify_intent_node: empty query with images → forcing VISION")
 
-    # ── Compound Query Detection ──────────────────────────────────────────────
-    # Detect if the user asked MULTIPLE DISTINCT questions so each can be
-    # answered independently. Also extracts memory-write facts embedded in
-    # compound queries (e.g. "...and remember that my chess player is Magnus").
+    # ── Compound query detection (LLM-based, for queries ≥ 6 words) ──────────
     sub_questions: List[str] = []
-    _cq_word_count = len(last_query_clean.split())
-    # Only run for queries long enough to possibly be compound (≥ 6 words)
+    _cq_word_count = len(last_query_clean.split()) if last_query_clean else 0
     if _cq_word_count >= 6:
         try:
             _cq_prompt = COMPOUND_QUERY_DETECTOR_PROMPT.format(query=last_query_clean)
@@ -1302,19 +1396,19 @@ async def classify_intent_node(
                     _cq_subs = _cq_parsed.get("sub_questions", [])
                     if isinstance(_cq_subs, list) and len(_cq_subs) >= 2:
                         sub_questions = [str(q).strip() for q in _cq_subs if str(q).strip()]
-                        logger.info(f"[CompoundQuery] Detected {len(sub_questions)} sub-questions: {sub_questions}")
-                # Extract memory-write facts embedded in compound queries
                 _mem_parts = _cq_parsed.get("memory_write_parts", [])
                 if isinstance(_mem_parts, list) and _mem_parts:
                     combined_mem = "; ".join(str(m).strip() for m in _mem_parts if str(m).strip())
                     if combined_mem and not memory_write_content:
                         memory_write_content  = combined_mem
                         memory_write_category = "compound_memory"
-                        logger.info(f"[CompoundQuery] Extracted memory facts: {combined_mem}")
         except Exception as _cq_err:
             logger.debug(f"[CompoundQuery] detection failed (non-fatal): {_cq_err}")
 
-    # ── Determine allowed tools from whitelist & ToolRegistry ─────────────────
+    # ── Tool discovery via registry (semantic, no whitelist) ──────────────────
+    # For tool-eligible intents, expose ALL registered tools to the semantic router.
+    # The router uses cosine similarity between the query and tool descriptions to
+    # select the most relevant tools — no hardcoded name lists.
     from app.tools.registry import ToolRegistry
     registry = ToolRegistry()
     if not registry.is_initialized:
@@ -1323,38 +1417,20 @@ async def classify_intent_node(
         except Exception as init_exc:
             logger.warning(f"ToolRegistry initialization warning in classify_intent_node: {init_exc}")
 
-    _q_low_tools = last_query_clean.lower()
-    has_multi_tool_request = (
-        len(sub_questions) >= 2 or
-        ("python" in _q_low_tools or "code" in _q_low_tools or "script" in _q_low_tools or "execute" in _q_low_tools) and
-        ("search" in _q_low_tools or "find" in _q_low_tools or "news" in _q_low_tools or "latest" in _q_low_tools or "price" in _q_low_tools)
-    )
-    if has_multi_tool_request and intent not in (INTENT_MEMORY_WRITE, INTENT_VISION):
-        intent = INTENT_COMPLEX
-        logger.info(f"classify_intent_node: Multi-tool request detected → promoted to INTENT_COMPLEX")
+    _NO_TOOL_INTENTS = {INTENT_MEMORY_WRITE, INTENT_NORMAL_CHAT, INTENT_DOCUMENT_QA, INTENT_VISION}
+    from app.agent.prompts import INTENT_TOOL_WHITELIST
+    all_registered = set(registry.local_tools.keys()) | set(registry.mcp_tools_schemas.keys())
 
-    allowed_tools = list(INTENT_TOOL_WHITELIST.get(intent, []))
-    if intent in (INTENT_MCP_TOOL, INTENT_COMPLEX, INTENT_FINANCE, INTENT_MATH, "MULTI_STEP", "REASONING"):
-        all_registered = set(registry.local_tools.keys()).union(set(registry.mcp_tools_schemas.keys()))
-        allowed_tools = list(set(allowed_tools).union(all_registered))
-        # Disambiguate: if query asks about expenses/money and does NOT explicitly request code execution,
-        # omit python_sandbox so LLMs don't write python scripts instead of calling MCP expense tools.
-        if "python_sandbox" in allowed_tools and any(w in _q_low_tools for w in ("expense", "spent", "lunch", "food", "dinner", "budget", "amount")):
-            if not any(cw in _q_low_tools for cw in ("python", "script", "execute code", "run code", "plot", "code execution")):
-                allowed_tools.remove("python_sandbox")
-                logger.info("classify_intent_node: Omitted python_sandbox to favor MCP expense tools.")
+    if intent in _NO_TOOL_INTENTS:
+        allowed_tools = []
+    elif intent in INTENT_TOOL_WHITELIST:
+        whitelisted = set(INTENT_TOOL_WHITELIST[intent])
+        allowed_tools = [t for t in INTENT_TOOL_WHITELIST[intent] if t in all_registered or t in registry.local_tools or t in registry.mcp_tools_schemas]
+    else:
+        allowed_tools = list(all_registered)
+    logger.info(f"classify_intent_node: intent={intent} → exposing {len(allowed_tools)} tools: {allowed_tools}")
 
-    logger.info(
-        f"Intent Classifier: intent={intent} | "
-        f"private_doc={is_private_doc_query} | "
-        f"allowed_tools={allowed_tools} | "
-        f"language={detected_language} | "
-        f"language_mode={language_mode} | "
-        f"sub_questions={sub_questions} | "
-        f"query='{last_query[:60]}'"
-    )
-
-    # BUG-5a FIX: Record routing decision in telemetry if available
+    # ── Telemetry ─────────────────────────────────────────────────────────────
     _telemetry = config.get("configurable", {}).get("telemetry")
     if _telemetry is not None:
         try:
@@ -1368,6 +1444,20 @@ async def classify_intent_node(
             logger.debug(f"Telemetry record_routing failed (non-fatal): {_tel_err}")
 
     steps.append("classify_intent")
+    dur = (time.time() - node_start) * 1000
+    record_node_execution(
+        state,
+        "classify_intent",
+        "EXECUTED",
+        f"Query classified as intent={intent} via LLM (allowed_tools={len(allowed_tools)} registered)",
+        metadata={
+            "intent": intent,
+            "allowed_tools": allowed_tools,
+            "is_private_doc_query": is_private_doc_query,
+        },
+        duration_ms=dur
+    )
+
     return {
         "intent":                intent,
         "allowed_tools":         allowed_tools,
@@ -1385,7 +1475,13 @@ async def classify_intent_node(
         "detected_language":     detected_language,
         "language_mode":         language_mode,
         "sub_questions":         sub_questions,
+        "execution_trace":       state["execution_trace"],
+        "semantic_status":       state["semantic_status"],
+        "memory_status":         state["memory_status"],
+        "web_status":            state["web_status"],
+        "inconsistencies":       state["inconsistencies"],
     }
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1397,15 +1493,9 @@ async def memory_write_node(
 ) -> Dict[str, Any]:
     """
     Memory Write node — handles MEMORY_WRITE intent exclusively.
-
-    Actions:
-      1. Persists the extracted fact to the database via MemoryService.
-      2. Generates a short, warm acknowledgement using a constrained LLM call.
-      3. Sets response_text so the graph terminates cleanly at END.
-
-    This node NEVER calls any external tool, never triggers retrieval,
-    and never invokes the reflection node for its response.
     """
+    node_start = time.time()
+    ensure_state_status_dicts(state)
     config  = config or {}
     steps   = list(state.get("steps") or [])
     cfg     = config.get("configurable", {})
@@ -1418,7 +1508,6 @@ async def memory_write_node(
     if content and user_id:
         try:
             from app.services.memory_service import MemoryService
-            # Map importance score by category
             importance_map = {"fact": 8, "preference": 7, "goal": 6, "topic": 5}
             importance = importance_map.get(category, 6)
             async with AsyncSessionLocal() as db:
@@ -1433,7 +1522,11 @@ async def memory_write_node(
                 f"memory_write_node: stored [{category}] '{content}' for user {user_id}"
             )
         except Exception as e:
-            logger.error(f"memory_write_node: failed to persist memory: {e}")
+            logger.error(f"memory_write_node: failed to persist memory (non-fatal): {e}")
+
+    if content:
+        state["memory_status"]["write_executed"] = True
+        state["memory_status"]["persisted_content"] = content
 
     # ── 2. Generate short acknowledgement ─────────────────────────────────────
     ack_text = f"Got it! I've noted that: {content}" if content else "Got it! I'll remember that."
@@ -1480,16 +1573,32 @@ async def memory_write_node(
         except Exception as e:
             logger.warning(f"memory_write_node: on_token callback failed: {e}")
 
+    dur = (time.time() - node_start) * 1000
+    record_node_execution(
+        state, "memory_write", "EXECUTED",
+        f"Persisted extracted memory fact: '{content}'",
+        metadata={"category": category, "content": content}, duration_ms=dur
+    )
+    record_node_execution(state, "check_retrieval", "BYPASSED", "Memory write intent short-circuits pipeline")
+    record_node_execution(state, "retrieve_context", "BYPASSED", "Memory write intent short-circuits pipeline")
+    record_node_execution(state, "grade_documents", "BYPASSED", "Memory write intent short-circuits pipeline")
+    record_node_execution(state, "generate_response", "BYPASSED", "Memory write intent short-circuits pipeline")
+    record_node_execution(state, "reflect", "BYPASSED", "Memory write intent short-circuits pipeline")
+
+    validate_execution_trace(state)
+
     messages  = list(state.get("messages", []))
     ai_msg    = AIMessage(content=ack_text)
     steps.append("memory_write")
     return {
-        "response_text": ack_text,
-        "messages":      messages + [ai_msg],
-        "tool_calls":    [],
-        "steps":         steps,
-        # Ensure reflection is skipped (reflection_passed=True → route to END)
-        "reflection_passed": True,
+        "response_text":       ack_text,
+        "messages":            messages + [ai_msg],
+        "tool_calls":          [],
+        "steps":               steps,
+        "reflection_passed":   True,
+        "execution_trace":     state["execution_trace"],
+        "memory_status":       state["memory_status"],
+        "inconsistencies":     state["inconsistencies"],
     }
 
 
@@ -1708,6 +1817,142 @@ def _log_rag_audit(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Node 2b: Execute Web Search (Direct execution for INTENT_WEB_SEARCH)
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def execute_web_search_node(
+    state: AgentState, config: RunnableConfig = None
+) -> Dict[str, Any]:
+    """
+    Direct Web Search Execution Node — executes real-time web search for
+    INTENT_WEB_SEARCH / INTENT_NEWS / INTENT_CURRENT_EVENTS queries.
+    """
+    node_start = time.time()
+    config = config or {}
+    messages = state.get("messages", [])
+    steps = list(state.get("steps") or [])
+    req_api_keys: Dict[str, Any] = config.get("configurable", {}).get("api_keys", {})
+
+    last_query = state.get("resolved_query") or _extract_last_user_query(messages)
+
+    import re as _re
+    clean_query = last_query
+    clean_query = _re.sub(r"\[System Context:[^\]]*\]", "", clean_query)
+    clean_query = _re.sub(r"\[User Location Context:[^\]]*\]", "", clean_query)
+    clean_query = _re.sub(
+        r"\[Connected Reference Context[^\[]*\[End of Referenced Context\]",
+        "",
+        clean_query,
+        flags=_re.DOTALL,
+    ).strip() or last_query
+
+    await _notify_step(config, f"Searching the web: '{clean_query[:50]}'")
+
+    sub_questions: List[str] = state.get("sub_questions") or []
+    _search_targets = sub_questions if len(sub_questions) >= 2 else [clean_query]
+
+    all_web_src_docs: List[Dict[str, Any]] = []
+    combined_web_text_parts: List[str] = []
+    src_index_offset = 0
+    tool_calls_recorded = []
+
+    try:
+        for _sq in _search_targets:
+            _sq_clean = _re.sub(r"\[System Context:[^\]]*\]", "", _sq)
+            _sq_clean = _re.sub(r"\[User Location Context:[^\]]*\]", "", _sq_clean)
+            _sq_clean = _re.sub(r"\[Connected Reference Context[^\[]*\[End of Referenced Context\]", "", _sq_clean, flags=_re.DOTALL).strip() or _sq
+
+            tool_calls_recorded.append({
+                "name": "web_search",
+                "args": {"query": _sq_clean},
+                "id": f"call_web_{len(tool_calls_recorded)}"
+            })
+
+            _sq_results = await unified_web_search(_sq_clean, req_api_keys)
+            if _sq_results:
+                _sq_text = format_for_llm(_sq_results)
+                _sq_src_docs = format_as_source_documents(_sq_results)
+                combined_web_text_parts.append(f"### Search results for: {_sq_clean}\n{_sq_text}")
+                for _sd in _sq_src_docs:
+                    _sd["index"] = src_index_offset + _sd["index"]
+                    _sd["sub_question"] = _sq_clean
+                    all_web_src_docs.append(_sd)
+                src_index_offset += len(_sq_src_docs)
+
+        combined_web_result = "\n\n".join(combined_web_text_parts) if combined_web_text_parts else ""
+    except Exception as exc:
+        import traceback
+        logger.error(f"execute_web_search_node error: {exc}\n{traceback.format_exc()}")
+        combined_web_result = ""
+        if not tool_calls_recorded:
+            tool_calls_recorded.append({
+                "name": "web_search",
+                "args": {"query": clean_query},
+                "id": "call_web_0"
+            })
+
+    # Determine if web search actually found anything useful
+    web_search_succeeded = bool(combined_web_result)
+
+    if web_search_succeeded:
+        web_chunk = {
+            "type":     "chunk",
+            "content":  combined_web_result,
+            "filename": "Web Search Results",
+            "distance": 0.0,
+        }
+        retrieved_docs = [web_chunk]
+        gen_mode = "web_search"
+        confidence = 0.95
+        tool_results = [{"tool": "web_search", "output": combined_web_result}]
+    else:
+        logger.warning(f"execute_web_search_node: all providers returned 0 results — falling back to model_knowledge for '{clean_query[:60]}'")
+        retrieved_docs = []
+        gen_mode = "model_knowledge"
+        confidence = 0.0
+        tool_results = []
+
+    updated_steps = steps + ["execute_web_search", "execute_tools"]
+    dur = (time.time() - node_start) * 1000
+
+    state["web_status"] = {
+        "executed": True,
+        "reason": f"Executed real-time web search for '{clean_query[:50]}'",
+        "results_count": len(all_web_src_docs),
+        "accepted_sources_count": len(all_web_src_docs),
+        "used_in_final_answer": web_search_succeeded,
+        "queries": [clean_query],
+        "sources": all_web_src_docs,
+    }
+
+    record_node_execution(
+        state, "execute_web_search", "EXECUTED",
+        f"Executed live web search for '{clean_query[:50]}'",
+        metadata={"results_count": len(all_web_src_docs)}, duration_ms=dur
+    )
+    record_node_execution(
+        state, "execute_tools", "EXECUTED",
+        "Executed web_search tool",
+        metadata={"tool": "web_search"}, duration_ms=dur
+    )
+
+    return {
+        "needs_retrieval":         False,
+        "document_relevance":      "web_fallback",
+        "no_doc_answer":           False,
+        "retrieved_documents":     retrieved_docs,
+        "source_documents":        all_web_src_docs,
+        "retrieval_confidence":    confidence,
+        "generation_mode":         gen_mode,
+        "tool_calls":              tool_calls_recorded,
+        "tool_execution_results":  tool_results,
+        "steps":                   updated_steps,
+        "web_status":              state["web_status"],
+        "execution_trace":         state["execution_trace"],
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Node 3: Self-RAG — check retrieval necessity
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1716,12 +1961,10 @@ async def check_retrieval_node(
 ) -> Dict[str, Any]:
     """
     Self-RAG node — determines whether the current query benefits from
-    vector-store retrieval.  Skips retrieval for conversational, creative,
-    or general-knowledge queries to save latency.
-
-    Also respects the intent detected by classify_intent_node: DOCUMENT_QA
-    always needs retrieval, NORMAL_CHAT / WEB_SEARCH never do.
+    vector-store retrieval.
     """
+    node_start = time.time()
+    ensure_state_status_dicts(state)
     config   = config or {}
     messages = state.get("messages", [])
     steps    = list(state.get("steps") or [])
@@ -1734,23 +1977,16 @@ async def check_retrieval_node(
     )
     is_private_doc = state.get("is_private_doc_query", False)
 
-    # Non-retrieval intents skip RAG regardless of uploaded files unless is_private_doc_query is True
+    needs_retrieval = False
+    reason = "Default conversational query — retrieval not required"
+
     if intent in (INTENT_WEB_SEARCH, INTENT_MCP_TOOL, INTENT_MEMORY_WRITE, INTENT_VISION, INTENT_CODE_EXECUTION, INTENT_MATH) and not is_private_doc:
-        logger.info(f"Self-RAG: intent {intent} does not require RAG vector retrieval → needs_retrieval=False")
-        steps.append("check_retrieval")
-        return {"needs_retrieval": False, "steps": steps}
-
-    # Intent-based shortcuts for Document QA & Hybrid/Private doc queries
-    if intent in (INTENT_DOCUMENT_QA, INTENT_COMPLEX) or is_private_doc or (uploaded_paths and is_private_doc):
-        logger.info(
-            f"Self-RAG: forcing needs_retrieval=True (intent={intent}, is_private_doc={is_private_doc}, uploaded_paths_count={len(uploaded_paths)})"
-        )
-        steps.append("check_retrieval")
-        return {"needs_retrieval": True, "steps": steps}
-
-    # For NORMAL_CHAT without uploaded files: check for personal possession signals.
-    # Uses UNIVERSAL_SIGNALS from doc_signals to avoid hardcoded project names.
-    if intent in (INTENT_NORMAL_CHAT,):
+        needs_retrieval = False
+        reason = f"Intent {intent} does not require vector retrieval"
+    elif intent in (INTENT_DOCUMENT_QA, INTENT_COMPLEX) or is_private_doc or (uploaded_paths and is_private_doc):
+        needs_retrieval = True
+        reason = f"Intent {intent} or private document query requires vector retrieval"
+    elif intent in (INTENT_NORMAL_CHAT,):
         last_q_temp = state.get("resolved_query") or ""
         if not last_q_temp:
             for msg in reversed(messages):
@@ -1758,16 +1994,43 @@ async def check_retrieval_node(
                     last_q_temp = msg.content if isinstance(msg.content, str) else ""
                     break
         if query_matches_user_signals(last_q_temp, UNIVERSAL_SIGNALS):
-            logger.info(
-                f"Self-RAG: personal-data signal detected in NORMAL_CHAT query "
-                f"→ forcing needs_retrieval=True for '{last_q_temp[:60]}'"
-            )
-            steps.append("check_retrieval")
-            return {"needs_retrieval": True, "steps": steps}
+            needs_retrieval = True
+            reason = "Personal data signal detected in query"
 
-    if intent in (INTENT_WEB_SEARCH, INTENT_MCP_TOOL, INTENT_MEMORY_WRITE, INTENT_VISION):
-        steps.append("check_retrieval")
-        return {"needs_retrieval": False, "steps": steps}
+    if not needs_retrieval and intent not in (INTENT_WEB_SEARCH, INTENT_MCP_TOOL, INTENT_MEMORY_WRITE, INTENT_VISION):
+        last_query = state.get("resolved_query")
+        if not last_query:
+            for msg in reversed(messages):
+                if hasattr(msg, "type") and msg.type in ("human", "user"):
+                    last_query = msg.content if isinstance(msg.content, str) else ""
+                    break
+        if last_query:
+            prompt = RETRIEVAL_CHECK_PROMPT.format(query=last_query)
+            parsed = await _call_llm_judge(prompt, config)
+            if parsed is not None:
+                needs_retrieval = bool(parsed.get("needs_retrieval", False))
+                reason = f"Self-RAG judge evaluated needs_retrieval={needs_retrieval}"
+
+    steps.append("check_retrieval")
+    dur = (time.time() - node_start) * 1000
+
+    record_node_execution(
+        state, "check_retrieval", "EXECUTED",
+        f"Self-RAG evaluation complete: needs_retrieval={needs_retrieval} ({reason})",
+        metadata={"needs_retrieval": needs_retrieval}, duration_ms=dur
+    )
+
+    if not needs_retrieval:
+        record_node_execution(state, "retrieve_context", "BYPASSED", "Retrieval evaluated as unnecessary by Self-RAG")
+        record_node_execution(state, "grade_documents", "BYPASSED", "Retrieval bypassed — no documents retrieved to grade")
+        state["semantic_status"]["retrieval_status"] = "RETRIEVAL NOT NEEDED"
+
+    return {
+        "needs_retrieval": needs_retrieval,
+        "steps": steps,
+        "execution_trace": state["execution_trace"],
+        "semantic_status": state["semantic_status"],
+    }
 
     last_query = state.get("resolved_query")
     if not last_query:
@@ -1838,6 +2101,8 @@ async def retrieve_context_node(
     Retrieves long-term memories + relevant document chunks from ChromaDB.
     Uses multi-query decomposition, dynamic k sizing, and query reformulation on retries.
     """
+    node_start = time.time()
+    ensure_state_status_dicts(state)
     config   = config or {}
     memories = config.get("configurable", {}).get("memories", [])
     for mem in memories:
@@ -1964,9 +2229,13 @@ async def retrieve_context_node(
         try:
             from app.services.document_service import DocumentService
             async with AsyncSessionLocal() as db:
-                user_docs = await DocumentService.get_user_documents(db, user_id)
+                _docs_res = DocumentService.get_user_documents(db, user_id)
+                if inspect.isawaitable(_docs_res):
+                    user_docs = await _docs_res
+                else:
+                    user_docs = _docs_res or []
                 num_docs = len(user_docs)
-                total_size_bytes = sum(d.size_bytes for d in user_docs)
+                total_size_bytes = sum(getattr(d, "size_bytes", 0) or 0 for d in user_docs)
         except Exception as e:
             logger.error(f"Failed to fetch user documents for dynamic k: {e}")
 
@@ -2131,12 +2400,35 @@ async def retrieve_context_node(
     )
 
     steps = list(state.get("steps") or []) + ["retrieve_context"]
+    dur = (time.time() - node_start) * 1000
+
+    chunk_count = len(doc_chunks)
+    state["semantic_status"]["embedding_executed"] = True
+    state["semantic_status"]["vector_search_executed"] = True
+    state["semantic_status"]["rag_chunks"] = chunk_count
+
+    if chunk_count == 0:
+        state["semantic_status"]["retrieval_status"] = "RETRIEVAL NEEDED BUT 0 RESULTS"
+        reason = "Vector store search executed but 0 matching document chunks were found"
+    else:
+        state["semantic_status"]["retrieval_status"] = "RETRIEVAL EXECUTED WITH RESULTS"
+        reason = f"Vector store search retrieved {chunk_count} relevant document chunk(s)"
+
+    record_node_execution(
+        state, "retrieve_context", "EXECUTED",
+        reason,
+        metadata={"chunks": chunk_count, "above_threshold": len(above_threshold)},
+        duration_ms=dur
+    )
+
     return {
         "retrieved_documents": retrieved_items,
         "source_documents":    source_documents,
         "document_relevance":  "no_docs" if not doc_chunks else "ungraded",
         "retrieval_retry_count": retry_count + 1,
         "steps":               steps,
+        "execution_trace":     state["execution_trace"],
+        "semantic_status":     state["semantic_status"],
     }
 
 
@@ -2172,11 +2464,19 @@ async def grade_documents_node(
     memory_items = [d for d in retrieved_docs if d.get("type") != "chunk"]
 
     if not doc_chunks:
-        # Attempt live web search ONLY for search-specific public queries when vector DB has no chunks
-        if not is_private and intent in (INTENT_WEB_SEARCH, INTENT_NEWS, INTENT_CURRENT_EVENTS, INTENT_FINANCE):
+        # Attempt live web search for public queries or queries with real-world/freshness signals when vector DB has no chunks
+        _empty_freshness_signals = ("latest", "current", "today", "now", "recent", "news", "version", "update", "stock", "price", "weather", "minister", "president", "who is", "who is the")
+        _query_lower_empty = (last_query or "").lower()
+        _freshness_in_empty = any(k in _query_lower_empty for k in _empty_freshness_signals)
+
+        if not is_private and (
+            intent in (INTENT_WEB_SEARCH, INTENT_NEWS, INTENT_CURRENT_EVENTS, INTENT_FINANCE, INTENT_COMPLEX) or
+            _freshness_in_empty or
+            intent in (INTENT_NORMAL_CHAT, INTENT_DOCUMENT_QA)
+        ):
             if last_query:
                 logger.info(
-                    f"CRAG: No doc chunks for public search query (intent={intent}) → forcing web search fallback."
+                    f"CRAG: No doc chunks for public query (intent={intent}) → forcing web search fallback."
                 )
                 try:
                     import re as _re2
@@ -2350,17 +2650,20 @@ async def grade_documents_node(
     # Always search web for public sub-questions regardless of is_private flag
     has_public_sub_questions = len(public_sub_questions) > 0
 
-    if not is_private or intent in (INTENT_COMPLEX, INTENT_WEB_SEARCH):
-        if intent in (INTENT_WEB_SEARCH, INTENT_NEWS, INTENT_CURRENT_EVENTS, INTENT_FINANCE, INTENT_COMPLEX):
-            should_search_web = True
-        elif freshness_required and (has_outdated or not relevant_chunks):
-            should_search_web = True
-        elif not relevant_chunks and not is_private:
-            should_search_web = True
+    # Never execute RAG web search fallback for action tool intents, memory, or vision queries
+    needs_retrieval = state.get("needs_retrieval", True)
+    if intent not in (INTENT_MCP_TOOL, INTENT_CODE_EXECUTION, INTENT_MATH, INTENT_MEMORY_WRITE, INTENT_VISION) and (needs_retrieval or intent in (INTENT_WEB_SEARCH, INTENT_NEWS, INTENT_CURRENT_EVENTS, INTENT_FINANCE, INTENT_COMPLEX)):
+        if not is_private or intent in (INTENT_COMPLEX, INTENT_WEB_SEARCH):
+            if intent in (INTENT_WEB_SEARCH, INTENT_NEWS, INTENT_CURRENT_EVENTS, INTENT_FINANCE, INTENT_COMPLEX):
+                should_search_web = True
+            elif freshness_required and (has_outdated or not relevant_chunks):
+                should_search_web = True
+            elif not relevant_chunks and not is_private and intent in (INTENT_DOCUMENT_QA, INTENT_PROGRAMMING):
+                should_search_web = True
 
     # HYBRID QUERY FIX: also trigger web search if there are public sub-questions,
     # even when the overall query is private (is_private_doc_query=True)
-    if has_public_sub_questions and not should_search_web:
+    if has_public_sub_questions and not should_search_web and intent not in (INTENT_MCP_TOOL, INTENT_CODE_EXECUTION, INTENT_MATH, INTENT_MEMORY_WRITE, INTENT_VISION):
         should_search_web = True
         logger.info(
             f"CRAG: Hybrid query detected — triggering web search for "
@@ -2749,6 +3052,17 @@ async def generate_response_node(
                         pass
             images = []
 
+    if intent in (INTENT_WEB_SEARCH, INTENT_NEWS, INTENT_CURRENT_EVENTS):
+        await _notify_step(config, "Searching the web for current information...")
+    elif intent in (INTENT_DOCUMENT_QA, INTENT_COMPLEX):
+        await _notify_step(config, "Reading retrieved context & documents...")
+    elif intent == INTENT_CODE_EXECUTION:
+        await _notify_step(config, "Preparing code execution environment...")
+    elif intent == INTENT_MCP_TOOL:
+        await _notify_step(config, "Executing system tool action...")
+    else:
+        await _notify_step(config, "Formulating response...")
+
 
 
 
@@ -2788,9 +3102,12 @@ async def generate_response_node(
                 "content": f"[Tool Output: {tool_name}] (Status: {status})\n{output}"
             })
 
-    # ── Intent-gated tool schema injection ────────────────────────────────────
-    # Only the tools in allowed_tools are exposed to the LLM.
-    # An empty allowed_tools → no tool schemas → LLM cannot call any tool.
+    # ── Semantic tool schema injection ────────────────────────────────────────
+    # For tool-eligible intents (allowed_tools non-empty), we ask the SemanticToolRouter
+    # to score ALL registered tools by relevance to this specific query and return the
+    # best matches. No hardcoded whitelist — pure cosine similarity.
+    # For pure-text intents (NORMAL_CHAT, DOCUMENT_QA, VISION, MEMORY_WRITE),
+    # allowed_tools is [] → no tools are offered to the LLM.
     from app.tools.registry import ToolRegistry
     registry = ToolRegistry()
     if not registry.is_initialized:
@@ -2800,23 +3117,29 @@ async def generate_response_node(
             logger.warning(f"ToolRegistry initialization warning in generate_response_node: {exc}")
 
     last_user_query = state.get("resolved_query") or state.get("original_query") or _extract_last_user_query(messages)
+
     if allowed_tools and last_user_query:
+        # allowed_tools is non-empty → intent is tool-eligible.
+        # Pass allowed_tools=None to evaluate ALL registered tools semantically.
         tool_schemas = await registry.get_semantically_relevant_tools(
             query=last_user_query,
-            allowed_tools=allowed_tools,
-            top_k=5,
+            allowed_tools=None,   # None = evaluate all registered tools, not just whitelist
+            top_k=6,
             api_key=keys.get("gemini_api_key")
         )
-    elif allowed_tools:
-        tool_schemas = registry.get_tool_schemas_for_intent(allowed_tools)
+        logger.info(
+            f"generate_response_node: semantic router selected {len(tool_schemas)} tools "
+            f"for intent={intent}: {[t['name'] for t in tool_schemas]}"
+        )
     else:
-        tool_schemas = []  # Pure generation — no tools offered
+        tool_schemas = []   # Pure generation — no tools offered
 
     logger.info(
         f"generate_response_node: intent={intent} | "
         f"tools_offered={[t['name'] for t in tool_schemas]} | "
         f"model={model}"
     )
+
 
     # ── Provider & fallback setup (logging, overrides and fallback checks) ────
     # actual_model_id strips the "openrouter/" prefix for provider routing logic
@@ -3151,7 +3474,17 @@ async def generate_response_node(
             if full_response:
                 # Already streamed some content — cannot silently retry mid-stream
                 raise e
-            # On rate-limit, skip any remaining fallbacks on the SAME provider class
+            # On rate-limit, attempt 1 brief backoff retry before skipping to next provider
+            if is_rate_limit and not full_response:
+                logger.warning(f"[RateLimitRetry] HTTP 429 on {current_model}. Pausing 1.5s for exponential backoff retry...")
+                try:
+                    await asyncio.sleep(1.5)
+                    tool_calls = await _stream(current_provider, current_model, current_key)
+                    success = True
+                    break
+                except Exception as retry_err:
+                    logger.warning(f"[RateLimitRetry] Backoff retry failed on {current_model}: {retry_err}")
+
             if is_rate_limit:
                 current_prov_class = type(current_provider).__name__
                 # Advance past any remaining same-provider attempts in the list
@@ -3254,25 +3587,63 @@ async def generate_response_node(
 
     if not success:
         err_msg = str(primary_error or last_error or "")
+        # Build comprehensive telemetry metrics on error so Developer HUD renders accurately
+        final_sources = state.get("source_documents", [])
+        retrieved_items = state.get("retrieved_documents", [])
+        error_telemetry = {
+            "model_used": current_model if 'current_model' in locals() else (actual_model_id if 'actual_model_id' in locals() else "unknown"),
+            "latency_ms": int((_wall_time.monotonic() - _llm_start_time) * 1000),
+            "cost_estimate": 0.0,
+            "tokens_input": 0,
+            "tokens_output": 0,
+            "memory_hits": 0,
+            "chunks_used": len([x for x in retrieved_items if x.get("type") == "chunk"]),
+            "generation_mode": "error_fallback",
+            "steps": list(state.get("steps") or []) + ["generate_response"],
+            "source_documents": final_sources,
+            "retrieved_context": [
+                {
+                    "type": item.get("type", "chunk"),
+                    "filename": item.get("filename", "Web Search Results" if item.get("type") == "chunk" else "Memory"),
+                    "content": item.get("content", ""),
+                    "distance": item.get("distance"),
+                    "used": False,
+                } for item in retrieved_items
+            ],
+            "error_details": err_msg,
+        }
+        if on_metrics:
+            try:
+                await on_metrics(error_telemetry)
+            except Exception:
+                pass
+
         if "429" in err_msg or "rate limit" in err_msg.lower() or "quota" in err_msg.lower():
             friendly_msg = (
                 "⚠️ **Rate Limit Exceeded (HTTP 429)**\n\n"
                 "The API request limit or quota for the active model has been reached. "
                 "Please wait a moment before trying again, or select a different model from the top bar."
             )
-            if on_token and not full_response:
-                try:
-                    await on_token(friendly_msg)
-                except Exception:
-                    pass
-            full_response = friendly_msg
-            # BUG FIX: Mark this as a transient error — do NOT save it into the conversation
-            # history as an AI message. If saved, the next LLM call would see the error text
-            # as a prior assistant turn and generate a confused response trying to address it.
-            _is_error_response = True
+        elif "api key" in err_msg.lower() or "missing" in err_msg.lower() or "invalid" in err_msg.lower() or "credentials" in err_msg.lower() or "401" in err_msg or "403" in err_msg:
+            friendly_msg = (
+                f"⚠️ **API Key Error**\n\n"
+                f"{err_msg}\n\n"
+                f"Please check your API key in **Settings → AI Models**."
+            )
         else:
-            # Surface the primary provider's error if it failed, otherwise use last error
-            raise (primary_error or last_error or Exception("No active provider models were able to process the request."))
+            friendly_msg = (
+                f"⚠️ **Model Provider Error**\n\n"
+                f"Unable to complete request with model '{model}': {err_msg}\n\n"
+                f"Please select a different model from the top dropdown."
+            )
+
+        if on_token and not full_response:
+            try:
+                await on_token(friendly_msg)
+            except Exception:
+                pass
+        full_response = friendly_msg
+        _is_error_response = True
 
     # Determine generation mode and authoritative source list.
     # These come from grade_documents_node (or initial empty state for model-knowledge).
@@ -3336,7 +3707,7 @@ async def generate_response_node(
 
     return {
         "response_text":   full_response,
-        "tool_calls":      [],
+        "tool_calls":      tool_calls or state.get("tool_calls", []),
         "messages":        updated_messages,
         "steps":           steps,
         "iteration_count": iteration_count + 1,
@@ -3401,11 +3772,21 @@ async def execute_tools_node(
             HumanMessage(content=f"[Tool Result] {result}")
         )
 
+    node_start = time.time()
     steps = list(state.get("steps") or []) + ["execute_tools"]
+    dur = (time.time() - node_start) * 1000
+
+    record_node_execution(
+        state, "execute_tools", "EXECUTED",
+        f"Executed {len(tool_calls)} system/MCP tool call(s)",
+        metadata={"tool_calls": tool_calls}, duration_ms=dur
+    )
+
     return {
-        "messages":   messages + new_messages,
-        "tool_calls": [],
-        "steps":      steps,
+        "messages":        messages + new_messages,
+        "tool_calls":      [],
+        "steps":           steps,
+        "execution_trace": state["execution_trace"],
     }
 
 
@@ -3418,29 +3799,27 @@ async def reflect_node(
 ) -> Dict[str, Any]:
     """
     Reflection node — evaluates the latest AI response for quality.
-
-    P0 Fixes:
-    • Reflection is SKIPPED for MEMORY_WRITE (ACKs should never be lengthened).
-    • Reflection is SKIPPED for NORMAL_CHAT to reduce unnecessary latency.
-    • The "too brief" heuristic threshold is raised significantly:
-      Only triggers if response < 10 words AND query > 20 words.
-      This prevents short-but-correct answers from being inflated.
     """
+    node_start = time.time()
     config  = config or {}
     messages = state.get("messages", [])
     steps    = list(state.get("steps") or [])
     intent   = state.get("intent", INTENT_NORMAL_CHAT)
 
-    # Skip reflection for intents that don't benefit from quality critique.
-    # DOCUMENT_QA is also skipped — evidence_checker already validated accuracy.
-    # INTENT_VISION is skipped to prevent multi-pass regeneration on images.
-    skip_intents = {INTENT_MEMORY_WRITE, INTENT_NORMAL_CHAT, INTENT_DOCUMENT_QA, INTENT_VISION}
+    skip_intents = {
+        INTENT_MEMORY_WRITE, INTENT_NORMAL_CHAT, INTENT_DOCUMENT_QA, INTENT_VISION,
+        INTENT_WEB_SEARCH, INTENT_NEWS, INTENT_CURRENT_EVENTS
+    }
     if intent in skip_intents:
         steps.append("reflect")
+        record_node_execution(state, "reflect", "BYPASSED", f"Reflection skipped for intent={intent}")
+        validate_execution_trace(state)
         return {
             "reflection_passed":   True,
             "reflection_feedback": None,
             "steps":               steps,
+            "execution_trace":     state.get("execution_trace", []),
+            "inconsistencies":     state.get("inconsistencies", []),
         }
 
     last_query    = state.get("resolved_query")
@@ -3472,18 +3851,28 @@ async def reflect_node(
             else:
                 logger.info("Reflection: PASS")
         else:
-            # Heuristic — much higher threshold than before (P0 fix)
             query_words    = len(last_query.split())
             response_words = len(last_response.split())
             if query_words > 20 and response_words < 10:
                 reflection_passed   = False
                 reflection_feedback = "The response appears too brief. Provide a more thorough answer."
 
+    dur = (time.time() - node_start) * 1000
     steps.append("reflect")
+    record_node_execution(
+        state, "reflect", "EXECUTED",
+        f"Reflection quality check complete (passed={reflection_passed})",
+        metadata={"passed": reflection_passed, "feedback": reflection_feedback},
+        duration_ms=dur
+    )
+    validate_execution_trace(state)
+
     return {
         "reflection_passed":   reflection_passed,
         "reflection_feedback": reflection_feedback,
         "steps":               steps,
+        "execution_trace":     state.get("execution_trace", []),
+        "inconsistencies":     state.get("inconsistencies", []),
     }
 
 
@@ -3578,14 +3967,13 @@ async def parallel_tool_execution_node(
         registry  = ToolRegistry()
         await registry.initialize()
 
-        # Strict whitelisting guard: only allow tools that are whitelisted in state.allowed_tools
-        allowed = state.get("allowed_tools") or []
+        # Build task list from the DAG — all registered tools are eligible for execution.
+        # The semantic router in generate_response_node and tool_planner_node already
+        # ensures only semantically relevant tools are in the DAG. The registry itself
+        # will reject any unregistered tool with a clear error.
         tasks = []
         for t in tool_dag:
             tool_name = t["tool"]
-            if tool_name not in allowed:
-                logger.warning(f"[ParallelToolExec] Blocking execution of un-whitelisted tool '{tool_name}'")
-                continue
             tasks.append(
                 ToolTask(
                     id         = t["id"],
@@ -3598,9 +3986,10 @@ async def parallel_tool_execution_node(
             )
 
         if not tasks:
-            logger.info("[ParallelToolExec] No whitelisted tool tasks to execute.")
+            logger.info("[ParallelToolExec] No tool tasks in DAG to execute.")
             steps.append("parallel_tool_execution")
             return {"tool_execution_results": None, "steps": steps}
+
 
         scheduler = ToolScheduler(registry)
         results   = await scheduler.run(tasks)
@@ -3675,11 +4064,11 @@ async def evidence_checker_node(
             "ux_stage":                 UX_STAGE_GENERATING,
         }
 
-    # Skip deep verification ONLY for memory/chat/vision intents.
-    # WEB_SEARCH and COMPLEX are included so search-grounded answers get verified
-    # against retrieved web context, preventing sycophantic hallucination.
+    await _notify_step(config, "Verifying response accuracy...")
+
+    # Skip deep evidence verification for memory/chat/vision intents or when no retrieved evidence exists
     skip_intents = {INTENT_MEMORY_WRITE, INTENT_NORMAL_CHAT, INTENT_VISION}
-    if intent in skip_intents:
+    if intent in skip_intents or not retrieved:
         steps.append("evidence_checker")
         return {
             "verified_response":        last_response,

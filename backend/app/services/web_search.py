@@ -395,6 +395,26 @@ async def search_duckduckgo(query: str, max_results: int = 8) -> List[SearchResu
     return []
 
 
+def enhance_query_for_freshness(query: str) -> str:
+    """
+    Enrich search query with temporal/freshness indicators if asking for current information
+    so external search engines prioritize recent news articles over stale historical ones.
+    """
+    q_clean = query.strip()
+    q_lower = q_clean.lower()
+    fresh_keywords = (
+        "current", "latest", "present", "who is the", "who is minister",
+        "chief minister", "education minister", "prime minister", "president of",
+        "governor of", "election", "cabinet"
+    )
+    if any(kw in q_lower for kw in fresh_keywords):
+        if not re.search(r"\b(202\d|203\d)\b", q_clean):
+            import datetime
+            current_year = datetime.datetime.now().year
+            q_clean = f"{q_clean} {current_year - 1} {current_year}"
+    return q_clean
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  Unified search entry point
 # ─────────────────────────────────────────────────────────────────────────────
@@ -436,6 +456,9 @@ async def unified_web_search(
                 score=1.0,
             )]
 
+    search_query = enhance_query_for_freshness(query)
+    logger.info(f"[unified_web_search] Temporal enhanced query: '{search_query[:80]}'")
+
     n = max_results or settings.WEB_SEARCH_MAX_RESULTS
     provider_order = [p.strip() for p in settings.WEB_SEARCH_PROVIDER_ORDER.split(",") if p.strip()]
 
@@ -470,26 +493,26 @@ async def unified_web_search(
                 key = merged_keys.get("tavily") or merged_keys.get("tavily_search")
                 if not key:
                     continue
-                logger.info(f"[web_search] Trying Tavily for: '{query[:60]}'")
-                results = await asyncio.wait_for(search_tavily(query, key, n), timeout=7.0)
+                logger.info(f"[web_search] Trying Tavily for: '{search_query[:60]}'")
+                results = await asyncio.wait_for(search_tavily(search_query, key, n), timeout=7.0)
 
             elif provider == "serpapi":
                 key = merged_keys.get("serpapi") or merged_keys.get("serp_api")
                 if not key:
                     continue
-                logger.info(f"[web_search] Trying SerpAPI for: '{query[:60]}'")
-                results = await asyncio.wait_for(search_serpapi(query, key, n), timeout=7.0)
+                logger.info(f"[web_search] Trying SerpAPI for: '{search_query[:60]}'")
+                results = await asyncio.wait_for(search_serpapi(search_query, key, n), timeout=7.0)
 
             elif provider == "exa":
                 key = merged_keys.get("exa")
                 if not key:
                     continue
-                logger.info(f"[web_search] Trying Exa AI for: '{query[:60]}'")
-                results = await asyncio.wait_for(search_exa(query, key, n), timeout=7.0)
+                logger.info(f"[web_search] Trying Exa AI for: '{search_query[:60]}'")
+                results = await asyncio.wait_for(search_exa(search_query, key, n), timeout=7.0)
 
             elif provider == "duckduckgo":
-                logger.info(f"[web_search] Trying DuckDuckGo for: '{query[:60]}'")
-                results = await asyncio.wait_for(search_duckduckgo(query, n), timeout=7.0)
+                logger.info(f"[web_search] Trying DuckDuckGo for: '{search_query[:60]}'")
+                results = await asyncio.wait_for(search_duckduckgo(search_query, n), timeout=7.0)
 
             else:
                 logger.warning(f"[web_search] Unknown provider in order list: {provider}")
@@ -502,8 +525,7 @@ async def unified_web_search(
                 # so subsequent calls with the same query (e.g. CRAG retry) are served
                 # from cache without hitting external APIs again.
                 try:
-                    from app.services.web_search import format_for_llm as _fmt
-                    await web_search_cache.set(query, _fmt(ranked))
+                    await web_search_cache.set(query, ranked)
                 except Exception as _cache_err:
                     logger.debug(f"[unified_web_search] Cache set failed (non-fatal): {_cache_err}")
                 return ranked

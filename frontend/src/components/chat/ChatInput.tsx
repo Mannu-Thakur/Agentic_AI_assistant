@@ -493,8 +493,8 @@ export const ChatInput = React.memo(function ChatInput({
 
       {/* Connected Chat Chip */}
       {connectedChat && (
-        <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#212121] border border-[#2B2B2B] text-xs text-[#F2F2F2] font-medium animate-slide-up shadow-sm w-fit">
-          <div className="w-5 h-5 rounded-md bg-[#000000] border border-[#2B2B2B] flex items-center justify-center flex-shrink-0">
+        <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#212121] text-xs text-[#F2F2F2] font-medium animate-slide-up shadow-sm w-fit">
+          <div className="w-5 h-5 rounded-md bg-[#000000] flex items-center justify-center flex-shrink-0">
             <Link className="w-3 h-3 text-[#FFFFFF]" />
           </div>
           <span className="text-[#BDBDBD] text-[10.5px] font-semibold uppercase tracking-wider">Connected:</span>
@@ -566,7 +566,7 @@ export const ChatInput = React.memo(function ChatInput({
           </button>
 
           {showPlusMenu && (
-            <div className="absolute bottom-full left-0 mb-2.5 z-50 w-[248px] bg-[#212121] border border-[#2B2B2B] rounded-2xl py-1.5 shadow-[0_8px_32px_rgba(0,0,0,0.65)] animate-fade-in text-[#F2F2F2] overflow-hidden">
+            <div className="absolute bottom-full left-0 mb-2.5 z-50 w-[248px] bg-[#212121] rounded-2xl py-1.5 shadow-[0_8px_32px_rgba(0,0,0,0.65)] animate-fade-in text-[#F2F2F2] overflow-hidden">
               <button
                 type="button"
                 onClick={() => {
@@ -640,8 +640,8 @@ export const ChatInput = React.memo(function ChatInput({
 
           {/* Connect Chat Dropdown Popover */}
           {showConnectModal && (
-            <div className="absolute bottom-full left-0 mb-3.5 z-50 w-72 bg-[#212121] border border-[#2B2B2B] rounded-2xl p-3 shadow-2xl space-y-2.5 animate-slide-up text-[#F2F2F2]">
-              <div className="flex items-center justify-between pb-1.5 border-b border-[#2B2B2B]">
+            <div className="absolute bottom-full left-0 mb-3.5 z-50 w-72 bg-[#212121] rounded-2xl p-3 shadow-2xl space-y-2.5 animate-slide-up text-[#F2F2F2]">
+              <div className="flex items-center justify-between pb-1.5">
                 <div className="flex items-center gap-2">
                   <GitBranch className="w-3.5 h-3.5 text-[#FFFFFF]" />
                   <span className="font-bold text-xs text-[#F2F2F2]">Connect Chat Reference</span>
@@ -662,7 +662,7 @@ export const ChatInput = React.memo(function ChatInput({
                   placeholder="Search chats to connect…"
                   value={connectSearch}
                   onChange={(e) => setConnectSearch(e.target.value)}
-                  className="w-full bg-[#000000] border border-[#2B2B2B] focus:border-[#444] rounded-xl pl-8 pr-2.5 py-1.5 text-xs text-[#F2F2F2] placeholder:text-[#BDBDBD] focus:outline-none transition-colors"
+                  className="w-full bg-[#000000] rounded-xl pl-8 pr-2.5 py-1.5 text-xs text-[#F2F2F2] placeholder:text-[#BDBDBD] focus:outline-none transition-colors"
                 />
               </div>
 

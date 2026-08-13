@@ -197,7 +197,7 @@ async def cache_set(key: str, value: Any, ttl_seconds: int = 300) -> bool:
     try:
         r = await get_redis()
         if r is not None:
-            await r.setex(key, ttl_seconds, json.dumps(value, default=str))
+            await r.set(key, json.dumps(value, default=str), ex=ttl_seconds)
             return True
     except Exception as e:
         logger.debug(f"[Redis] cache_set({key}) redis error: {e}")

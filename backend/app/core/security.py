@@ -127,7 +127,7 @@ async def blacklist_token(token: str, expires_in_seconds: int) -> None:
         from app.core.redis_client import get_redis
         r = await get_redis()
         if r:
-            await r.setex(f"blacklist:{token}", expires_in_seconds, "1")
+            await r.set(f"blacklist:{token}", "1", ex=expires_in_seconds)
             return
     except Exception:
         pass
@@ -185,7 +185,7 @@ async def store_oauth_state(state: str, ttl: int = 600) -> None:
         from app.core.redis_client import get_redis
         r = await get_redis()
         if r:
-            await r.setex(f"oauth_state:{state}", ttl, "1")
+            await r.set(f"oauth_state:{state}", "1", ex=ttl)
     except Exception:
         pass  # Memory store is the fallback
 
@@ -276,7 +276,7 @@ async def store_reset_token(token: str, user_id: str, ttl_seconds: int) -> None:
         from app.core.redis_client import get_redis
         r = await get_redis()
         if r:
-            await r.setex(f"pwd_reset:{token}", ttl_seconds, user_id)
+            await r.set(f"pwd_reset:{token}", user_id, ex=ttl_seconds)
     except Exception:
         pass  # memory + persistent store is the fallback
 

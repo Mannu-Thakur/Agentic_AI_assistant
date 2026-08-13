@@ -57,7 +57,7 @@ export const TextSelectionTooltip: React.FC<TextSelectionTooltipProps> = ({
         left: `${Math.max(80, Math.min(window.innerWidth - 80, position.left))}px`,
         transform: 'translateX(-50%)',
       }}
-      className="z-50 flex items-center gap-1 p-1 bg-[#212121] border border-[#2B2B2B] rounded-xl shadow-[0_8px_32px_rgba(0,0,0,0.6)] animate-fade-in"
+      className="z-50 flex items-center gap-1 p-1 bg-[#212121] rounded-xl shadow-[0_8px_32px_rgba(0,0,0,0.6)] animate-fade-in"
     >
       <button
         onClick={() => { onAsk(selectedText); setPosition(null); }}
@@ -69,7 +69,7 @@ export const TextSelectionTooltip: React.FC<TextSelectionTooltipProps> = ({
 
       <button
         onClick={() => { onStartWriting(selectedText); setPosition(null); }}
-        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-[#BDBDBD] hover:text-[#F2F2F2] bg-[#2a2a2a] hover:bg-[#333] border border-[#2B2B2B] transition-colors"
+        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-[#BDBDBD] hover:text-[#F2F2F2] bg-[#2a2a2a] hover:bg-[#333] transition-colors"
       >
         <Edit3 className="w-3 h-3" />
         <span>Write</span>

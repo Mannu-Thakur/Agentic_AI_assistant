@@ -32,7 +32,8 @@ async def test_tavily_search_mock(monkeypatch):
     from app.services.web_search import SearchResult
     monkeypatch.setattr("app.tools.local_tools.settings.TAVILY_API_KEY", "mock_key")
     fake_res = [SearchResult(title="FastAPI Best Practices", url="https://example.com", snippet="FastAPI tips", source="duckduckgo")]
-    with patch("app.services.web_search.search_duckduckgo", new=AsyncMock(return_value=fake_res)):
+    with patch("app.services.web_search.search_duckduckgo", new=AsyncMock(return_value=fake_res)), \
+         patch("app.tools.local_tools.web_search_cache.get", new=AsyncMock(return_value=None)):
         result = await tavily_search("fastapi best practices")
     assert any(k in result for k in ("Result", "FastAPI", "DuckDuckGo", "Search", "Source"))
 

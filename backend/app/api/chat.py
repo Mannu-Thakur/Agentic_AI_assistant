@@ -203,190 +203,195 @@ async def stream_agent_message(
           detail="Too many requests. You have exceeded the per-user rate limit (200/min). Please slow down.",
       )
 
-  chat = await ChatService.get_chat_by_id(db, chat_id, current_user.id)
-  if not chat:
-    raise HTTPException(status_code=404, detail="Conversation session not found")
+  try:
+    chat = await ChatService.get_chat_by_id(db, chat_id, current_user.id)
+    if not chat:
+      raise HTTPException(status_code=404, detail="Conversation session not found")
 
-  await ChatService.delete_messages_after(db, chat_id, schema.parent_message_id)
+    await ChatService.delete_messages_after(db, chat_id, schema.parent_message_id)
 
-  import re as _re
-  clean_save_content = _re.sub(r"\[System Context:[^\]]*\]\n?", "", schema.content)
-  clean_save_content = _re.sub(r"\[User Location Context:[^\]]*\]\n?", "", clean_save_content).strip() or schema.content
+    import re as _re
+    clean_save_content = _re.sub(r"\[System Context:[^\]]*\]\n?", "", schema.content)
+    clean_save_content = _re.sub(r"\[User Location Context:[^\]]*\]\n?", "", clean_save_content).strip() or schema.content
 
-  images_payload = (
-      [img.model_dump() for img in schema.images] if schema.images else None
-  )
-
-  # Guard: verify parent_message_id still exists after the delete above.
-  # When the user edits the very first message, delete_messages_after removes
-  # ALL messages, so parent_message_id no longer exists in the DB.
-  # Passing a stale FK causes a ForeignKeyViolationError (HTTP 500).
-  safe_parent_id: Optional[str] = None
-  if schema.parent_message_id:
-    from sqlalchemy.future import select as _select
-    _ref = await db.execute(
-        _select(Message.id).where(Message.id == schema.parent_message_id)
+    images_payload = (
+        [img.model_dump() for img in schema.images] if schema.images else None
     )
-    if _ref.scalar_one_or_none():
-      safe_parent_id = schema.parent_message_id
 
-  user_msg = await ChatService.save_message(
-      db=db,
-      chat_id=chat_id,
-      role="user",
-      content=clean_save_content,
-      parent_id=safe_parent_id,
-      images=images_payload,
-  )
-
-  is_first_message = chat.title in ("New Chat", "", None)
-
-  from sqlalchemy.future import select
-  from app.models.user import ApiKey
-  from app.core.security import decrypt_api_key
-  from app.services.document_service import DocumentService
-
-  # ── Parallelize all pre-flight DB queries for minimum latency ─────────────
-  db_keys_result, db_messages, memories, user_docs = await asyncio.gather(
-      db.execute(select(ApiKey).where(ApiKey.user_id == current_user.id)),
-      ChatService.get_chat_messages(db, chat_id),
-      ChatService.get_user_memories(db, current_user.id),
-      DocumentService.get_user_documents(db, current_user.id, chat_id=chat_id),
-  )
-  api_keys = db_keys_result.scalars().all()
-
-  # ── Decrypt user API keys & resolve provider ──────────────────────────────
-  user_keys = {}
-  for k in api_keys:
-    prov = (getattr(k, "provider_name", "") or "").lower()
-    enc_val = getattr(k, "encrypted_api_key", None)
-    if enc_val:
-      try:
-        user_keys[prov] = decrypt_api_key(enc_val)
-      except Exception:
-        user_keys[prov] = enc_val
-
-  # ── Merge request header keys (x-api-keys) if present ─────────────────────
-  x_api_keys_header = request.headers.get("x-api-keys")
-  if x_api_keys_header:
-    try:
-      header_keys = json.loads(x_api_keys_header)
-      for hk, hv in header_keys.items():
-        if hk and hv:
-          user_keys[hk.lower()] = hv
-    except Exception:
-      pass
-
-
-
-  # ── Real-time provider resolution: look up which provider owns this model ──
-  resolved_prov = None
-  for k in api_keys:
-      if k.status == "VERIFIED" and k.available_models:
-          prov_name = (getattr(k, "provider_name", "") or "").lower()
-          if prov_name == "gemini":
-              prov_name = "google"
-          if schema.model in k.available_models:
-              resolved_prov = prov_name
-              break
-  # Fallback: keyword-based inference if model not found in any provider's live list
-  if not resolved_prov:
-      resolved_prov = resolve_provider_from_model(schema.model)
-
-  final_key = user_keys.get(resolved_prov)
-  # Extra fallback: google/gemini alias
-  if not final_key and resolved_prov in ("google", "gemini"):
-      final_key = user_keys.get("gemini") or user_keys.get("google")
-
-  # Fallback to system settings if not provided by user keys
-  from app.core.config import settings
-  if not final_key:
-      if resolved_prov in ("google", "gemini") and settings.GEMINI_API_KEY:
-          final_key = settings.GEMINI_API_KEY
-      elif resolved_prov == "openrouter" and settings.OPENROUTER_API_KEY:
-          final_key = settings.OPENROUTER_API_KEY
-      elif resolved_prov == "groq" and settings.GROQ_API_KEY:
-          final_key = settings.GROQ_API_KEY
-      elif resolved_prov == "openai" and settings.OPENAI_API_KEY:
-          final_key = settings.OPENAI_API_KEY
-
-  key_found = bool(final_key and not str(final_key).startswith("mock_"))
-
-  # ── P3-3 FIX: Chat history trimming ──────────────────────────────────────
-  # Long conversations will eventually exceed provider context limits.
-  # Strategy: keep the most recent messages within a character budget.
-  #   - Hard turn cap: max 30 exchange pairs (60 messages) — always keep the
-  #     most recent turns.
-  #   - Char budget: 60,000 chars (~15k tokens) — oldest messages are dropped
-  #     first until the total fits within budget.
-  # This prevents 400/context-overflow errors on Groq (32k) and other providers.
-  _MAX_HISTORY_MESSAGES = 60       # 30 turn pairs
-  _MAX_HISTORY_CHARS    = 60_000   # ~15k tokens at 4 chars/token
-
-  # Step 1: apply hard turn cap — take the N most recent messages
-  db_messages_trimmed = list(db_messages[-_MAX_HISTORY_MESSAGES:]) if len(db_messages) > _MAX_HISTORY_MESSAGES else list(db_messages)
-
-  # Step 2: apply character budget — drop oldest messages until under budget
-  _total_chars = sum(len(m.content or "") for m in db_messages_trimmed)
-  while _total_chars > _MAX_HISTORY_CHARS and len(db_messages_trimmed) > 2:
-      removed = db_messages_trimmed.pop(0)
-      _total_chars -= len(removed.content or "")
-
-  if len(db_messages_trimmed) < len(db_messages):
-      logger.info(
-          f"[HistoryTrim] Trimmed chat history: {len(db_messages)} → "
-          f"{len(db_messages_trimmed)} messages (chars={_total_chars})"
+    # Guard: verify parent_message_id still exists after the delete above.
+    # When the user edits the very first message, delete_messages_after removes
+    # ALL messages, so parent_message_id no longer exists in the DB.
+    # Passing a stale FK causes a ForeignKeyViolationError (HTTP 500).
+    safe_parent_id: Optional[str] = None
+    if schema.parent_message_id:
+      from sqlalchemy.future import select as _select
+      _ref = await db.execute(
+          _select(Message.id).where(Message.id == schema.parent_message_id)
       )
+      if _ref.scalar_one_or_none():
+        safe_parent_id = schema.parent_message_id
 
-  langchain_messages = []
-  for msg in db_messages_trimmed:
-    if msg.role == "user":
-      langchain_messages.append(HumanMessage(content=msg.content))
-    elif msg.role == "assistant":
-      langchain_messages.append(AIMessage(content=msg.content))
+    user_msg = await ChatService.save_message(
+        db=db,
+        chat_id=chat_id,
+        role="user",
+        content=clean_save_content,
+        parent_id=safe_parent_id,
+        images=images_payload,
+    )
 
+    is_first_message = chat.title in ("New Chat", "", None)
 
-  _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tiff", ".heic", ".heif"}
-  uploaded_file_paths = [
-      doc.storage_path
-      for doc in user_docs
-      if doc.storage_path
-      and doc.status in ("ready", "pending")
-      # Exclude raw image uploads — those are handled as base64 vision input,
-      # not as file paths for code execution. Including them in the system prompt
-      # caused the LLM to generate Python/Pytesseract code to open them instead
-      # of directly performing vision/OCR.
-      and not any(doc.storage_path.lower().endswith(ext) for ext in _IMAGE_EXTENSIONS)
-  ]
+    from sqlalchemy.future import select
+    from app.models.user import ApiKey
+    from app.core.security import decrypt_api_key
+    from app.services.document_service import DocumentService
 
-  initial_state = {
-      "messages": langchain_messages,
-      "active_model": schema.model,
-      "user_id": current_user.id,
-      "chat_id": chat_id,
-      "retrieved_documents": [],
-      "metrics": {},
-      "response_text": "",
-      "steps": [],
-      "images": [{"base64": img.base64, "mimeType": img.mimeType} for img in (schema.images or [])],
-      "intent":               INTENT_NORMAL_CHAT,
-      "allowed_tools":        [],
-      "is_private_doc_query": False,
-      "no_doc_answer":        False,
-      "memory_write_content":  None,
-      "memory_write_category": None,
-      "uploaded_file_paths":   uploaded_file_paths,
-      "tool_calls":            [],
-      "tool_dag":              None,
-      "tool_execution_results": None,
-      "reflection_feedback":   None,
-      "reflection_passed":     True,
-      "iteration_count":       0,
-      "source_documents":      [],
-      "detected_language":     None,
-      "language_mode":         None,
-      "generation_mode":       None,
-  }
+    # ── Parallelize all pre-flight DB queries for minimum latency ─────────────
+    db_keys_result, db_messages, memories, user_docs = await asyncio.gather(
+        db.execute(select(ApiKey).where(ApiKey.user_id == current_user.id)),
+        ChatService.get_chat_messages(db, chat_id),
+        ChatService.get_user_memories(db, current_user.id),
+        DocumentService.get_user_documents(db, current_user.id, chat_id=chat_id),
+    )
+    api_keys = db_keys_result.scalars().all()
+
+    # ── Decrypt user API keys & resolve provider ──────────────────────────────
+    user_keys = {}
+    for k in api_keys:
+      prov = (getattr(k, "provider_name", "") or "").lower()
+      enc_val = getattr(k, "encrypted_api_key", None)
+      if enc_val:
+        try:
+          user_keys[prov] = decrypt_api_key(enc_val)
+        except Exception:
+          user_keys[prov] = enc_val
+
+    # ── Merge request header keys (x-api-keys) if present ─────────────────────
+    x_api_keys_header = request.headers.get("x-api-keys")
+    if x_api_keys_header:
+      try:
+        header_keys = json.loads(x_api_keys_header)
+        for hk, hv in header_keys.items():
+          if hk and hv:
+            user_keys[hk.lower()] = hv
+      except Exception:
+        pass
+
+    # ── Real-time provider resolution: look up which provider owns this model ──
+    resolved_prov = None
+    for k in api_keys:
+        if k.status == "VERIFIED" and k.available_models:
+            prov_name = (getattr(k, "provider_name", "") or "").lower()
+            if prov_name == "gemini":
+                prov_name = "google"
+            if schema.model in k.available_models:
+                resolved_prov = prov_name
+                break
+    # Fallback: keyword-based inference if model not found in any provider's live list
+    if not resolved_prov:
+        resolved_prov = resolve_provider_from_model(schema.model)
+
+    final_key = user_keys.get(resolved_prov) or getattr(settings, f"{resolved_prov.upper()}_API_KEY", None)
+    if not final_key and resolved_prov == "google":
+        final_key = user_keys.get("gemini")
+
+    key_found = bool(final_key and not str(final_key).startswith("mock_"))
+
+    # ── Auto Key Fallback: if requested provider key missing, fallback to any valid available key ──
+    if not key_found:
+        available_fallback = None
+        if (user_keys.get("openai") or settings.OPENAI_API_KEY) and not str(settings.OPENAI_API_KEY or "").startswith("mock_"):
+            available_fallback = ("openai", user_keys.get("openai") or settings.OPENAI_API_KEY, "gpt-4o-mini")
+        elif (user_keys.get("google") or user_keys.get("gemini") or settings.GEMINI_API_KEY) and not str(settings.GEMINI_API_KEY or "").startswith("mock_"):
+            available_fallback = ("google", user_keys.get("google") or user_keys.get("gemini") or settings.GEMINI_API_KEY, "gemini-2.5-flash")
+        elif (user_keys.get("groq") or settings.GROQ_API_KEY) and not str(settings.GROQ_API_KEY or "").startswith("mock_"):
+            available_fallback = ("groq", user_keys.get("groq") or settings.GROQ_API_KEY, "llama-3.3-70b-versatile")
+        elif (user_keys.get("openrouter") or settings.OPENROUTER_API_KEY) and not str(settings.OPENROUTER_API_KEY or "").startswith("mock_"):
+            available_fallback = ("openrouter", user_keys.get("openrouter") or settings.OPENROUTER_API_KEY, "meta-llama/llama-3.1-8b-instruct:free")
+        
+        if available_fallback:
+            resolved_prov, final_key, schema.model = available_fallback
+            key_found = True
+            logger.info(f"Auto-fallback active: using provider {resolved_prov} with model {schema.model}")
+
+    # ── Chat history trimming ──────────────────────────────────────
+    _MAX_HISTORY_MESSAGES = 60       # 30 turn pairs
+    _MAX_HISTORY_CHARS    = 60_000   # ~15k tokens at 4 chars/token
+
+    # Step 1: apply hard turn cap — take the N most recent messages
+    db_messages_trimmed = list(db_messages[-_MAX_HISTORY_MESSAGES:]) if len(db_messages) > _MAX_HISTORY_MESSAGES else list(db_messages)
+
+    # Step 2: apply character budget — drop oldest messages until under budget
+    _total_chars = sum(len(m.content or "") for m in db_messages_trimmed)
+    while _total_chars > _MAX_HISTORY_CHARS and len(db_messages_trimmed) > 2:
+        removed = db_messages_trimmed.pop(0)
+        _total_chars -= len(removed.content or "")
+
+    if len(db_messages_trimmed) < len(db_messages):
+        logger.info(
+            f"[HistoryTrim] Trimmed chat history: {len(db_messages)} → "
+            f"{len(db_messages_trimmed)} messages (chars={_total_chars})"
+        )
+
+    langchain_messages = []
+    for msg in db_messages_trimmed:
+      if msg.role == "user":
+        langchain_messages.append(HumanMessage(content=msg.content))
+      elif msg.role == "assistant":
+        langchain_messages.append(AIMessage(content=msg.content))
+
+    _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tiff", ".heic", ".heif"}
+    uploaded_file_paths = [
+        doc.storage_path
+        for doc in user_docs
+        if doc.storage_path
+        and doc.status in ("ready", "pending")
+        and not any(doc.storage_path.lower().endswith(ext) for ext in _IMAGE_EXTENSIONS)
+    ]
+
+    initial_state = {
+        "messages": langchain_messages,
+        "active_model": schema.model,
+        "user_id": current_user.id,
+        "chat_id": chat_id,
+        "retrieved_documents": [],
+        "metrics": {},
+        "response_text": "",
+        "steps": [],
+        "images": [{"base64": img.base64, "mimeType": img.mimeType} for img in (schema.images or [])],
+        "intent":               INTENT_NORMAL_CHAT,
+        "allowed_tools":        [],
+        "is_private_doc_query": False,
+        "no_doc_answer":        False,
+        "memory_write_content":  None,
+        "memory_write_category": None,
+        "uploaded_file_paths":   uploaded_file_paths,
+        "tool_calls":            [],
+        "tool_dag":              None,
+        "tool_execution_results": None,
+        "reflection_feedback":   None,
+        "reflection_passed":     True,
+        "iteration_count":       0,
+        "source_documents":      [],
+        "detected_language":     None,
+        "language_mode":         None,
+        "generation_mode":       None,
+        "execution_trace":       [],
+        "semantic_status":       {},
+        "memory_status":         {},
+        "web_status":            {},
+        "inconsistencies":       [],
+    }
+  except HTTPException:
+    raise
+  except Exception as preflight_err:
+    err_detail = str(preflight_err) or "Failed to initialize response generator"
+    logger.error(f"Error during stream_agent_message preflight setup: {preflight_err}\n{traceback.format_exc()}")
+    async def sse_preflight_error():
+      yield f"data: {json.dumps({'event': 'error', 'detail': err_detail})}\n\n"
+      yield "data: [DONE]\n\n"
+    return StreamingResponse(sse_preflight_error(), media_type="text/event-stream")
 
   async def sse_event_stream():
     # BUG-8: use INFO not ERROR for normal lifecycle events
@@ -416,6 +421,19 @@ async def stream_agent_message(
       if not key_found:
           err_msg = f"Authentication failed - Missing or invalid API key for provider {(resolved_prov or 'unknown').upper()}. Configure it in Settings."
           logger.error(f"YIELDING AUTH ERROR: {err_msg}")
+          try:
+              from app.core.database import AsyncSessionLocal
+              async with AsyncSessionLocal() as err_db:
+                  await ChatService.save_message(
+                      db=err_db,
+                      chat_id=chat_id,
+                      role="assistant",
+                      content=f"⚠️ **{err_msg}**",
+                      parent_id=user_msg.id,
+                  )
+          except Exception as _err_save_ex:
+              logger.warning(f"Could not persist auth error message: {_err_save_ex}")
+
           yield f"data: {json.dumps({'event': 'error', 'detail': err_msg})}\n\n"
           yield "data: [DONE]\n\n"
           return
@@ -425,6 +443,9 @@ async def stream_agent_message(
 
       async def on_token_callback(token: str):
         await queue.put({"event": "chunk", "text": token})
+
+      async def on_step_callback(step_name: str):
+        await queue.put({"event": "step", "step": step_name})
 
       async def on_metrics_callback(metrics: dict):
         metrics_store.update(metrics)
@@ -451,6 +472,7 @@ async def stream_agent_message(
               "chat_id": chat_id,
               "memories": memories,
               "on_token": on_token_callback,
+              "on_step": on_step_callback,
               "on_metrics": on_metrics_callback,
               "telemetry": _telemetry,  # BUG-5d: nodes read this via config["configurable"]["telemetry"]
               # Always pass the primary resolved key for google/gemini (they share a key)
@@ -564,9 +586,35 @@ async def stream_agent_message(
           except Exception as _tel_fin_err:
             logger.warning(f"Telemetry finalize failed (non-fatal): {_tel_fin_err}")
 
+        # Compile full runtime execution trace & Dev HUD metrics
+        if isinstance(final_state, dict):
+            metrics_store.update({
+                "model_used": schema.model,
+                "latency_ms": getattr(_telemetry, "total_latency_ms", 0) if _telemetry else 0,
+                "cost_estimate": 0.0,
+                "tokens_input": getattr(_telemetry, "token_estimate", 0) if _telemetry else 0,
+                "tokens_output": len(response_content) // 4,
+                "execution_trace": final_state.get("execution_trace", []),
+                "semantic_status": final_state.get("semantic_status", {}),
+                "memory_status": final_state.get("memory_status", {}),
+                "web_status": final_state.get("web_status", {}),
+                "inconsistencies": final_state.get("inconsistencies", []),
+                "source_documents": final_state.get("source_documents", []),
+                "retrieved_context": final_state.get("retrieved_documents", []),
+                "steps": final_state.get("steps", []),
+                "generation_mode": final_state.get("generation_mode"),
+            })
+
+        # Yield runtime telemetry metrics payload to frontend right before DB save
+        yield f"data: {json.dumps({'event': 'metrics', 'metrics': metrics_store})}\n\n"
+
         try:
           from app.core.database import AsyncSessionLocal, get_db
           get_db_override = request.app.dependency_overrides.get(get_db)
+          tc_payload = final_state.get("tool_calls") if isinstance(final_state, dict) else None
+          if tc_payload:
+            metrics_store["tool_calls"] = tc_payload
+
           if get_db_override:
             async for test_db in get_db_override():
               await ChatService.save_message(
@@ -575,6 +623,7 @@ async def stream_agent_message(
                   role="assistant",
                   content=response_content,
                   parent_id=user_msg.id,
+                  tool_calls=tc_payload or None,
                   developer_metrics=metrics_store or None
               )
               if is_first_message:
@@ -592,6 +641,7 @@ async def stream_agent_message(
                   role="assistant",
                   content=response_content,
                   parent_id=user_msg.id,
+                  tool_calls=tc_payload or None,
                   developer_metrics=metrics_store or None
               )
 

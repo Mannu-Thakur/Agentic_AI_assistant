@@ -100,13 +100,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
       localStorage.setItem('omni_active_chat_id', id);
       const state = get();
       const cachedMsgs = state.messageCache[id];
+      const isSameOrNewSession = state.activeChatId === id || state.activeChatId === null || state.activeChatId?.startsWith('temp-');
       const msgsToKeep = (cachedMsgs && cachedMsgs.length > 0)
         ? cachedMsgs
-        : (state.activeChatId === id ? state.messages : []);
+        : (isSameOrNewSession && state.messages.length > 0 ? state.messages : []);
+      const keepStreaming = isSameOrNewSession ? state.isStreaming : false;
       set({
         activeChatId: id,
         messages: msgsToKeep,
-        isStreaming: false,
+        isStreaming: keepStreaming,
         messageCache: (cachedMsgs && cachedMsgs.length > 0)
           ? state.messageCache
           : (msgsToKeep.length > 0 ? { ...state.messageCache, [id]: msgsToKeep } : state.messageCache),
@@ -216,7 +218,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   addMessage: (msg) => set((state) => {
     const nextMsgs = [...state.messages, msg];
-    const activeId = state.activeChatId;
+    const activeId = state.activeChatId || (msg.chat_id && !msg.chat_id.startsWith('temp-') ? msg.chat_id : null);
     return {
       messages: nextMsgs,
       messageCache: activeId

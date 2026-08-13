@@ -51,6 +51,9 @@ async def test_tavily_search_no_key_uses_ddg_fallback(monkeypatch):
     monkeypatch.setattr("app.services.web_search.settings.TAVILY_API_KEY", None)
     monkeypatch.setattr("app.services.web_search.settings.SERP_API_KEY", None)
     monkeypatch.setattr("app.services.web_search.settings.EXA_API_KEY", None)
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.delenv("SERP_API_KEY", raising=False)
+    monkeypatch.delenv("EXA_API_KEY", raising=False)
 
     fake_ddg_result = [
         SearchResult(
@@ -65,6 +68,7 @@ async def test_tavily_search_no_key_uses_ddg_fallback(monkeypatch):
     mock_cache.get = AsyncMock(return_value=None)
     mock_cache.set = AsyncMock(return_value=None)
     monkeypatch.setattr("app.tools.local_tools.web_search_cache", mock_cache)
+    monkeypatch.setattr("app.services.web_search.web_search_cache", mock_cache)
 
     with patch(
         "app.services.web_search.search_duckduckgo",
@@ -84,6 +88,9 @@ async def test_tavily_search_mock_key_uses_ddg_fallback(monkeypatch):
     monkeypatch.setattr("app.services.web_search.settings.TAVILY_API_KEY", "mock_key_123")
     monkeypatch.setattr("app.services.web_search.settings.SERP_API_KEY", None)
     monkeypatch.setattr("app.services.web_search.settings.EXA_API_KEY", None)
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.delenv("SERP_API_KEY", raising=False)
+    monkeypatch.delenv("EXA_API_KEY", raising=False)
 
     fake_ddg_result = [
         SearchResult(
@@ -98,6 +105,7 @@ async def test_tavily_search_mock_key_uses_ddg_fallback(monkeypatch):
     mock_cache.get = AsyncMock(return_value=None)
     mock_cache.set = AsyncMock(return_value=None)
     monkeypatch.setattr("app.tools.local_tools.web_search_cache", mock_cache)
+    monkeypatch.setattr("app.services.web_search.web_search_cache", mock_cache)
 
     with patch(
         "app.services.web_search.search_duckduckgo",
@@ -131,6 +139,7 @@ async def test_tavily_search_http_error_falls_back_to_ddg(monkeypatch):
     mock_cache.get = AsyncMock(return_value=None)
     mock_cache.set = AsyncMock(return_value=None)
     monkeypatch.setattr("app.tools.local_tools.web_search_cache", mock_cache)
+    monkeypatch.setattr("app.services.web_search.web_search_cache", mock_cache)
 
     mock_response = MagicMock()
     mock_response.status_code = 429
@@ -175,6 +184,7 @@ async def test_tavily_search_exception_falls_back_to_ddg(monkeypatch):
     mock_cache.get = AsyncMock(return_value=None)
     mock_cache.set = AsyncMock(return_value=None)
     monkeypatch.setattr("app.tools.local_tools.web_search_cache", mock_cache)
+    monkeypatch.setattr("app.services.web_search.web_search_cache", mock_cache)
 
     with patch("httpx.AsyncClient") as mock_client_cls:
         mock_client = AsyncMock()

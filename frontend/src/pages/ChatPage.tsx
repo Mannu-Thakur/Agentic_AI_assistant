@@ -33,14 +33,15 @@ import {
   MessageSquare, Pencil, Trash2, Pin,
   BookOpen, Share2, Download, FileJson, FileText,
   MoreHorizontal, Archive, FolderClosed, ChevronDown, ChevronUp, Files,
-  Settings, LogOut, GitBranch, Link, PenLine, Eye, ExternalLink, Globe
+  Settings, LogOut, GitBranch, Link, PenLine, Eye, ExternalLink, Globe,
+  SquarePen, Folder, SquareTerminal
 } from 'lucide-react';
 
 
 // ─────────────────────────────────────────────────────────────
 //  Types
 // ─────────────────────────────────────────────────────────────
-import { SourceDocument } from '../types/chat';
+import { SourceDocument, DeveloperMetrics } from '../types/chat';
 
 // Helper: Relative time formatter with UTC-safe parsing
 // Backend stores naive UTC datetimes without timezone suffix;
@@ -574,49 +575,24 @@ interface TypingIndicatorProps {
   serverStep?: string;
 }
 
-function TypingIndicator({ userPrompt, hasFiles, serverStep }: TypingIndicatorProps) {
-  // Build dynamic process steps depending on user context & prompt intent
+function TypingIndicator({ hasFiles, serverStep }: TypingIndicatorProps) {
+  // Build dynamic process steps strictly from backend SSE serverStep events
   const steps = useMemo(() => {
     if (serverStep) {
       return [{ label: serverStep, icon: Sparkles }];
     }
 
-    const p = (userPrompt || '').toLowerCase();
-
-    if (hasFiles || /\b(file|pdf|doc|document|resume|cv|csv|image|png|jpg|attachment|upload)\b/i.test(p)) {
+    if (hasFiles) {
       return [
-        { label: 'Reading uploaded document...', icon: FileText },
-        { label: 'Extracting content & key details...', icon: Search },
-        { label: 'Analyzing document structure...', icon: Cpu },
+        { label: 'Processing attached documents...', icon: FileText },
         { label: 'Synthesizing response...', icon: Sparkles },
       ];
     }
 
-    if (/\b(search|find|latest|news|weather|who is|what is|price|current|today|where|google)\b/i.test(p)) {
-      return [
-        { label: 'Reading query intent...', icon: Globe },
-        { label: 'Searching knowledge base...', icon: Search },
-        { label: 'Extracting relevant information...', icon: Database },
-        { label: 'Formatting response...', icon: Sparkles },
-      ];
-    }
-
-    if (/\b(code|function|python|js|typescript|react|bug|fix|html|css|sql|script|error|api|class|algorithm)\b/i.test(p)) {
-      return [
-        { label: 'Reading technical prompt...', icon: Terminal },
-        { label: 'Analyzing code structure...', icon: Cpu },
-        { label: 'Evaluating solution logic...', icon: Search },
-        { label: 'Generating code & explanation...', icon: Sparkles },
-      ];
-    }
-
     return [
-      { label: 'Reading question...', icon: BookOpen },
-      { label: 'Understanding context & intent...', icon: Cpu },
-      { label: 'Extracting key facts...', icon: Search },
-      { label: 'Synthesizing response...', icon: Sparkles },
+      { label: 'Processing request with AI Agent...', icon: Sparkles },
     ];
-  }, [userPrompt, hasFiles, serverStep]);
+  }, [hasFiles, serverStep]);
 
   const [currentStepIdx, setCurrentStepIdx] = useState(0);
 
@@ -715,7 +691,7 @@ function parseErrorFromContent(content: string): { clean: string; error: string 
     else cleanLines.push(line);
   }
   const clean = cleanLines.join('\n').trim();
-  const error = errLines.length ? 'Request failed' : null;
+  const error = errLines.length ? errLines.join('\n') : null;
   return { clean, error };
 }
 
@@ -1129,6 +1105,16 @@ export default function ChatPage() {
           if (!active) return;
           if (useChatStore.getState().isStreaming) return;
           if (!Array.isArray(freshMsgs)) return;
+
+          const currentCached = useChatStore.getState().messageCache[revalidateChatId] || [];
+          // Guard 1: Don't overwrite non-empty local cache with empty DB response (e.g. after a failed request)
+          if (freshMsgs.length === 0 && currentCached.length > 0) return;
+
+          // Guard 2: Don't overwrite local cache if freshMsgs has fewer messages than current local cache
+          if (freshMsgs.length < currentCached.length) {
+            return;
+          }
+
           const hydratedFresh = freshMsgs.map((m: import('../types/chat').Message) => ({
             ...m,
             imagePreviewUrls:
@@ -1159,8 +1145,8 @@ export default function ChatPage() {
           const hasLiveAssistantContent = cachedForThisChat.some(
             (m) => m.role === 'assistant' && m.content && m.content.length > 0
           );
-          // Only skip if the DB result has *fewer* messages (i.e. assistant not committed yet)
-          if (hasLiveAssistantContent && msgs.length < cachedForThisChat.length) {
+          // Only skip if the DB result has *fewer* messages (i.e. assistant not committed yet) or empty DB response
+          if ((hasLiveAssistantContent || cachedForThisChat.length > 0) && msgs.length < cachedForThisChat.length) {
             setMessagesLoading(false);
             setHistoryError(null);
             return;
@@ -1514,7 +1500,16 @@ export default function ChatPage() {
         } catch { /* proceed to check res.ok */ }
       }
 
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) {
+        let errDetail = `HTTP ${res.status}`;
+        try {
+          const errData = await res.json();
+          if (errData && errData.detail) {
+            errDetail = typeof errData.detail === 'string' ? errData.detail : JSON.stringify(errData.detail);
+          }
+        } catch { /* proceed with default status text */ }
+        throw new Error(errDetail);
+      }
 
       const reader  = res.body?.getReader();
       const decoder = new TextDecoder('utf-8');
@@ -1554,10 +1549,14 @@ export default function ChatPage() {
       }
     } catch (err: any) {
       if (err.name !== 'AbortError') {
-        const errorMsg = err.message || '';
+        const errorMsg = (err.message || '').trim();
         const formattedErr = errorMsg.includes('401')
           ? 'Authentication failed - Invalid or missing API key (HTTP 401)'
-          : `Error: ${errorMsg || 'Response interrupted or connection lost'}`;
+          : errorMsg.toLowerCase().includes('failed to fetch')
+            ? 'Connection Error: Unable to reach backend server. Please verify the FastAPI server is running on http://127.0.0.1:8000.'
+            : errorMsg.startsWith('Error:') || errorMsg.startsWith('⚠️') || errorMsg.startsWith('Authentication')
+              ? errorMsg
+              : `Error: ${errorMsg || 'Response interrupted or connection lost'}`;
         asstText += `\n\n*[${formattedErr}]*`;
         updateMessage(asstMsgId, { content: asstText });
       }
@@ -1593,12 +1592,19 @@ export default function ChatPage() {
                 if (latest.isStreaming) return; // Don't overwrite if a new stream started
                 // Always sync from DB — replace local optimistic messages with real DB IDs/content.
                 // The last assistant message from DB must have real content to be worth replacing.
+                const currentLocal = latest.messageCache[chatId] || [];
                 const lastDbAsst = [...dbMsgs].reverse().find((m: any) => m.role === 'assistant');
-                const lastLocalAsst = [...(latest.messageCache[chatId] || [])].reverse().find((m: any) => m.role === 'assistant');
+                const lastLocalAsst = [...currentLocal].reverse().find((m: any) => m.role === 'assistant');
                 const dbHasContent = lastDbAsst && lastDbAsst.content && lastDbAsst.content.trim().length > 0;
                 const localIsEmpty = !lastLocalAsst || !lastLocalAsst.content || lastLocalAsst.content.trim().length === 0;
-                // Sync if: DB has real content OR DB has more messages than local
-                if (dbHasContent || dbMsgs.length > (latest.messageCache[chatId] || []).length) {
+
+                // Guard: don't wipe out local state if DB has fewer messages than current local cache
+                if (dbMsgs.length < currentLocal.length) {
+                  return;
+                }
+
+                // Sync if DB has real content and at least as many messages as local
+                if (dbHasContent || dbMsgs.length > currentLocal.length) {
                   const hydrated = dbMsgs.map((m: import('../types/chat').Message) => ({
                     ...m,
                     imagePreviewUrls:
@@ -2339,7 +2345,7 @@ export default function ChatPage() {
                 className="w-full flex items-center justify-between px-3 py-2.5 rounded-[14px] bg-surface-2 hover:bg-surface-3 text-foreground text-sm font-semibold transition-all duration-150 active:scale-[0.98] border border-border/60 shadow-sm"
               >
                 <div className="flex items-center gap-2.5">
-                  <Pencil className="w-4 h-4 text-foreground-2" />
+                  <SquarePen className="w-4 h-4 text-foreground-2" />
                   <span>New chat</span>
                 </div>
               </button>
@@ -2369,7 +2375,7 @@ export default function ChatPage() {
                   onClick={() => setFilesModalOpen(true)}
                   className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-medium text-foreground-2 hover:text-foreground hover:bg-surface-2 transition-all duration-150 text-left"
                 >
-                  <FolderClosed className="w-4 h-4 text-foreground-3" />
+                  <Folder className="w-4 h-4 text-foreground-3" />
                   <span>Workspace Files</span>
                 </button>
 
@@ -2377,7 +2383,7 @@ export default function ChatPage() {
                   onClick={toggleDeveloperMode}
                   className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-medium text-foreground-2 hover:text-foreground hover:bg-surface-2 transition-all duration-150 text-left"
                 >
-                  <Terminal className="w-4 h-4 text-foreground-3" />
+                  <SquareTerminal className="w-4 h-4 text-foreground-3" />
                   <span>Developer HUD</span>
                   {developerMode && (
                     <span className="text-[9px] font-bold text-accent uppercase bg-accent/10 px-1.5 py-0.5 rounded-full ml-auto">
@@ -2474,9 +2480,9 @@ export default function ChatPage() {
               <button
                 onClick={handleCreateChat}
                 aria-label="New Chat"
-                className="w-9 h-9 rounded-xl flex items-center justify-center bg-surface-2 text-foreground hover:bg-surface-3 border border-border/60 transition-all duration-150"
+                className="w-9 h-9 rounded-xl flex items-center justify-center bg-surface-2 text-foreground hover:bg-surface-3 transition-all duration-150"
               >
-                <Plus className="w-4 h-4" />
+                <SquarePen className="w-4 h-4 text-foreground" />
               </button>
             </Tooltip>
 
@@ -2486,7 +2492,7 @@ export default function ChatPage() {
                 aria-label="Files"
                 className="w-9 h-9 rounded-xl flex items-center justify-center text-foreground-3 hover:text-foreground hover:bg-surface-2 transition-all duration-150"
               >
-                <FolderClosed className="w-4 h-4" />
+                <Folder className="w-4 h-4" />
               </button>
             </Tooltip>
 
@@ -2495,10 +2501,10 @@ export default function ChatPage() {
                 onClick={toggleDeveloperMode}
                 aria-label="Dev HUD"
                 className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all duration-150 ${
-                  developerMode ? 'bg-accent/10 text-accent border border-accent/20' : 'text-foreground-3 hover:text-foreground hover:bg-surface-2'
+                  developerMode ? 'bg-accent/10 text-accent' : 'text-foreground-3 hover:text-foreground hover:bg-surface-2'
                 }`}
               >
-                <Terminal className="w-4 h-4" />
+                <SquareTerminal className="w-4 h-4" />
               </button>
             </Tooltip>
           </div>
@@ -2998,7 +3004,7 @@ export default function ChatPage() {
                         {/* User message block */}
                         {isUser && (
                           isEditing ? (
-                            <div className="w-full min-w-[320px] sm:min-w-[500px] md:min-w-[620px] bg-[#212121] border border-[#383838] rounded-2xl p-4 shadow-2xl animate-fade-in-up">
+                            <div className="w-full min-w-[320px] sm:min-w-[500px] md:min-w-[620px] bg-[#212121] rounded-2xl p-4 shadow-2xl animate-fade-in-up">
                               {/* Image previews inside edit box */}
                               {editImages.length > 0 && (
                                 <div className="flex flex-wrap gap-2.5 mb-3">
@@ -3007,12 +3013,12 @@ export default function ChatPage() {
                                       <img
                                         src={img.previewUrl}
                                         alt="attached image"
-                                        className="w-20 h-20 sm:w-24 sm:h-24 rounded-xl object-cover border border-[#383838]"
+                                        className="w-20 h-20 sm:w-24 sm:h-24 rounded-xl object-cover"
                                       />
                                       <button
                                         type="button"
                                         onClick={() => setEditImages((prev) => prev.filter((i) => i.id !== img.id))}
-                                        className="absolute -top-1.5 -right-1.5 p-1 rounded-full bg-[#212121] hover:bg-red-600 text-[#F2F2F2] border border-[#383838] transition-colors shadow-md"
+                                        className="absolute -top-1.5 -right-1.5 p-1 rounded-full bg-[#212121] hover:bg-red-600 text-[#F2F2F2] transition-colors shadow-md"
                                         title="Remove image"
                                       >
                                         <X className="w-3.5 h-3.5" />
@@ -3049,11 +3055,11 @@ export default function ChatPage() {
                                 onChange={handleEditFileSelect}
                               />
 
-                              <div className="flex items-center justify-between gap-2 mt-3 pt-2 border-t border-[#2B2B2B]">
+                              <div className="flex items-center justify-between gap-2 mt-3 pt-2">
                                 <button
                                   type="button"
                                   onClick={() => editFileInputRef.current?.click()}
-                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium text-[#BDBDBD] hover:text-[#F2F2F2] bg-[#2a2a2a] hover:bg-[#333] border border-[#2B2B2B] transition-colors"
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium text-[#BDBDBD] hover:text-[#F2F2F2] bg-[#2a2a2a] hover:bg-[#333] transition-colors"
                                   title="Add image"
                                 >
                                   <Plus className="w-3.5 h-3.5" />
@@ -3064,7 +3070,7 @@ export default function ChatPage() {
                                   <button
                                     type="button"
                                     onClick={handleCancelEdit}
-                                    className="inline-flex items-center justify-center px-4 py-1.5 rounded-xl text-xs font-medium text-[#BDBDBD] bg-[#2a2a2a] hover:bg-[#333] border border-[#2B2B2B] transition-colors active:scale-[0.97] flex-shrink-0 whitespace-nowrap"
+                                    className="inline-flex items-center justify-center px-4 py-1.5 rounded-xl text-xs font-medium text-[#BDBDBD] bg-[#2a2a2a] hover:bg-[#333] transition-colors active:scale-[0.97] flex-shrink-0 whitespace-nowrap"
                                   >
                                     Cancel
                                   </button>
@@ -3168,26 +3174,12 @@ export default function ChatPage() {
                             return <TypingIndicator userPrompt={userPromptText} hasFiles={hasFiles} serverStep={currentServerStep || undefined} />;
                           }
                           const { clean, error } = parseErrorFromContent(m.content);
-                          const displayContent = sanitizeAssistantContent(clean || m.content);
-                          // Find the actual last user message before this assistant reply (skip system/tool)
-                          let prevUserMsg = '';
-                          for (let i = idx - 1; i >= 0; i--) {
-                            if (messages[i].role === 'user') {
-                              // Strip ALL injected context prefixes before matching so they
-                              // don't accidentally trigger the clock widget or other detectors.
-                              prevUserMsg = (messages[i].content || '')
-                                .replace(/\[System Context:[^\]]*\]/gi, '')   // strip datetime injection
-                                .replace(/\[User Location Context:[^\]]*\]/gi, '') // strip location injection
-                                .replace(/\[Connected Reference Context[^\[]*\[End of Referenced Context\]/gi, '') // strip ref context
-                                .trim()
-                                .toLowerCase();
-                              break;
-                            }
-                          }
-                          // Only show the clock widget when the user explicitly asked about time/date.
-                          const isTimeQuery =
-                            /\b(time|date|clock|hour|minute|second)\b/i.test(prevUserMsg) &&
-                            /\b(current|now|what|tell|show|is|give|also|right now|today|what's)\b/i.test(prevUserMsg);
+                          const displayContent = sanitizeAssistantContent(clean || (error ? '' : m.content));
+                          // Drive TimeWidget display strictly from backend tool execution events
+                          const isTimeQuery = Array.isArray(m.tool_calls) && m.tool_calls.some((t: any) => {
+                            const name = (t?.name || t?.function?.name || '').toLowerCase();
+                            return name.includes('time') || name.includes('clock') || name.includes('date');
+                          });
 
                           return (
                             <div className={`assistant-bubble text-foreground rounded-2xl rounded-bl-sm px-4 py-3 text-sm w-full transition-all ${
@@ -3222,7 +3214,18 @@ export default function ChatPage() {
                                   isStreaming={isStreaming && isLastAsst && m.content !== ''}
                                 />
                               ) : error ? (
-                                <p className="text-sm text-foreground-2 leading-relaxed">{error}</p>
+                                <div className="p-3.5 rounded-xl bg-red-500/10 border border-red-500/20 text-red-300 text-xs flex flex-col gap-2 my-1">
+                                  <div className="flex items-center gap-2 font-semibold text-red-400">
+                                    <AlertCircle className="w-4 h-4" />
+                                    <span>Response Error</span>
+                                  </div>
+                                  <p className="leading-relaxed whitespace-pre-wrap">{error}</p>
+                                </div>
+                              ) : !isStreamingThis ? (
+                                <div className="p-3.5 rounded-xl bg-surface-2 border border-border text-foreground-2 text-xs flex items-center gap-2 my-1">
+                                  <AlertCircle className="w-4 h-4 text-warning flex-shrink-0" />
+                                  <span>No response content produced. Please try re-sending or select a different model.</span>
+                                </div>
                               ) : null}
                             </div>
                           );
@@ -3390,16 +3393,25 @@ export default function ChatPage() {
 
               <div className="flex-1 overflow-y-auto p-4 space-y-4">
                 {(() => {
-                  const msg = messages.find((m) => m.id === selectedMessageId);
+                  const msg = messages.find((m) => m.id === selectedMessageId) || messages.slice().reverse().find((m) => m.role === 'assistant');
                   if (!msg) return (
                     <div className="h-full flex flex-col items-center justify-center text-center p-6 space-y-2">
                       <Database className="w-8 h-8 text-foreground-3/30 animate-float" />
                       <p className="text-xs text-foreground-3">Select an assistant message to inspect telemetry metrics</p>
                     </div>
                   );
-                  const mx = msg.developer_metrics;
-                  if (!mx) return <div className="text-center py-6 text-xs text-foreground-3">No telemetry for this response. Ensure keys are correct and active.</div>;
-                  const steps   = mx.steps || ['retrieve_context', 'generate_response'];
+                  const mx: DeveloperMetrics = msg.developer_metrics || {
+                    steps: ['classify_intent', 'check_retrieval', 'generate_response'],
+                    model_used: activeModel,
+                    latency_ms: 0,
+                    cost_estimate: 0,
+                    tokens_input: 0,
+                    tokens_output: 0,
+                    memory_hits: 0,
+                    chunks_used: 0,
+                    confidence_score: 0,
+                  };
+                  const steps   = mx.steps || ['classify_intent', 'check_retrieval', 'generate_response'];
                   const hasTool = msg.tool_calls && msg.tool_calls.length > 0;
                   return (
                     <div className="space-y-4 animate-scale-in">
@@ -3449,6 +3461,55 @@ export default function ChatPage() {
                         ))}
                       </div>
 
+                      {/* System Inconsistency Banner */}
+                      {mx.inconsistencies && mx.inconsistencies.length > 0 && (
+                        <div className="p-3 rounded-xl border border-red-500/40 bg-red-500/10 space-y-1">
+                          <div className="flex items-center gap-1.5 text-red-400 font-bold text-xs uppercase tracking-wider">
+                            <AlertCircle className="w-4 h-4" /> SYSTEM INCONSISTENCY DETECTED
+                          </div>
+                          {mx.inconsistencies.map((inc: string, i: number) => (
+                            <p key={i} className="text-[10px] text-red-300 font-mono">
+                              • {inc}
+                            </p>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Runtime Metrics Overview */}
+                      <div className="grid grid-cols-3 gap-2">
+                        {[
+                          { label: 'Latency',    val: mx.latency_ms >= 1000 ? `${(mx.latency_ms/1000).toFixed(2)}s` : `${mx.latency_ms}ms`, color: '' },
+                          { label: 'Est. Cost',  val: `$${(mx.cost_estimate ?? 0).toFixed(6)}`, color: 'text-green-400' },
+                          { label: 'Tokens In',  val: mx.tokens_input?.toLocaleString(),  color: '' },
+                          { label: 'Tokens Out', val: mx.tokens_output?.toLocaleString(), color: '' },
+                          { label: 'Mem Health', val: mx.memory_status?.lookup_status ?? (mx.memory_hits ? `MEMORY CHECKED → ${mx.memory_hits} HITS` : 'MEMORY NOT CHECKED'), color: 'text-blue-400' },
+                          { label: 'RAG Status', val: mx.semantic_status?.retrieval_status ?? (mx.chunks_used ? 'RETRIEVAL EXECUTED WITH RESULTS' : 'RETRIEVAL NOT NEEDED'), color: 'text-purple-400' },
+                        ].map(({ label, val, color }) => (
+                          <div key={label} className="p-2.5 rounded-xl border border-border bg-surface-2 space-y-1">
+                            <span className="text-[9px] font-semibold uppercase tracking-wider text-foreground-3">{label}</span>
+                            <p className={`text-xs font-bold truncate ${color || 'text-foreground'}`}>{val ?? '—'}</p>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Web Search & Memory Summary Strip */}
+                      <div className="grid grid-cols-2 gap-2 text-[9px] font-mono">
+                        <div className="p-2 rounded-lg border border-border bg-surface-2 space-y-0.5">
+                          <span className="text-foreground-3 font-semibold uppercase text-[8px]">Web Search Status</span>
+                          <p className={mx.web_status?.executed ? "text-emerald-400 font-bold" : "text-foreground-3"}>
+                            {mx.web_status?.executed ? `EXECUTED (${mx.web_status.results_count ?? 0} results)` : 'NOT REQUIRED'}
+                          </p>
+                          {mx.web_status?.reason && <p className="text-foreground-3 text-[8px] truncate">{mx.web_status.reason}</p>}
+                        </div>
+                        <div className="p-2 rounded-lg border border-border bg-surface-2 space-y-0.5">
+                          <span className="text-foreground-3 font-semibold uppercase text-[8px]">Memory Status</span>
+                          <p className={mx.memory_status?.write_executed ? "text-amber-400 font-bold" : "text-foreground-3"}>
+                            {mx.memory_status?.write_executed ? `WRITE EXECUTED` : (mx.memory_status?.lookup_status || 'MEMORY CHECKED → 0 HITS')}
+                          </p>
+                          {mx.memory_status?.persisted_content && <p className="text-foreground-3 text-[8px] truncate">Saved: "{mx.memory_status.persisted_content}"</p>}
+                        </div>
+                      </div>
+
                       {/* Tabs */}
                       <div className="flex border-b border-border">
                         {(['flow', 'context', 'logs'] as const).map((tab) => (
@@ -3459,28 +3520,37 @@ export default function ChatPage() {
                         ))}
                       </div>
 
-                      {/* Tab 1: Flow / LangGraph Exec */}
+                      {/* Tab 1: Flow / Runtime Execution Trace */}
                       {activeHudTab === 'flow' && (
-                        <div className="pl-5 space-y-5 relative before:absolute before:left-2 before:top-1 before:bottom-1 before:w-px before:bg-border">
-                          {[
-                            { key: 'classify_intent',    label: 'classify_intent',   icon: GitBranch, detail: 'Intent classification & routing' },
-                            { key: 'plan',             label: 'plan',             icon: Sparkles, detail: 'Decompose execution paths' },
-                            { key: 'check_retrieval',  label: 'check_retrieval',  icon: Search,   detail: 'Self-RAG evaluation verdict' },
-                            { key: 'retrieve_context', label: 'retrieve_context', icon: Database, detail: `Hits: ${mx.memory_hits ?? 0} memory / ${mx.chunks_used ?? 0} RAG chunk` },
-                            { key: 'grade_documents',  label: 'grade_documents',  icon: CheckCircle2, detail: 'Document grading classification' },
-                            { key: 'generate_response',label: 'generate_response',icon: Cpu,      detail: 'Processed prompt + system instructions' },
-                            { key: 'execute_tools',    label: 'execute_tools',    icon: Terminal, detail: hasTool ? `${msg.tool_calls!.length} tool calls` : 'Bypassed' },
-                            { key: 'reflect',          label: 'reflect',          icon: RefreshCw, detail: 'Quality score criteria check' },
-                            { key: 'memory_write',     label: 'memory_write',     icon: Database, detail: 'Semantic memory indexing' },
-                          ].map(({ key, label, icon: Icon, detail }) => {
-                            const active = steps.includes(key) || (key === 'execute_tools' && hasTool);
+                        <div className="pl-5 space-y-4 relative before:absolute before:left-2 before:top-1 before:bottom-1 before:w-px before:bg-border">
+                          {(mx.execution_trace && mx.execution_trace.length > 0 ? mx.execution_trace : [
+                            { node: 'classify_intent',    status: steps.includes('classify_intent') ? 'EXECUTED' : 'BYPASSED', reason: 'Intent classification & query routing' },
+                            { node: 'plan',               status: steps.includes('plan') ? 'EXECUTED' : 'BYPASSED', reason: 'Decompose execution paths' },
+                            { node: 'check_retrieval',    status: steps.includes('check_retrieval') ? 'EXECUTED' : 'BYPASSED', reason: 'Self-RAG retrieval necessity evaluation' },
+                            { node: 'retrieve_context',   status: steps.includes('retrieve_context') ? 'EXECUTED' : 'BYPASSED', reason: `Hits: ${mx.memory_hits ?? 0} memory / ${mx.chunks_used ?? 0} RAG chunk` },
+                            { node: 'grade_documents',    status: steps.includes('grade_documents') ? 'EXECUTED' : 'BYPASSED', reason: 'CRAG document grading & web search fallback' },
+                            { node: 'generate_response',  status: steps.includes('generate_response') ? 'EXECUTED' : 'BYPASSED', reason: 'Processed prompt + system instructions' },
+                            { node: 'execute_tools',      status: (hasTool || steps.includes('execute_web_search')) ? 'EXECUTED' : 'BYPASSED', reason: (hasTool || steps.includes('execute_web_search')) ? `${hasTool ? msg.tool_calls!.length : 1} tool call(s) executed` : 'Bypassed (No system tools required)' },
+                            { node: 'reflect',            status: steps.includes('reflect') ? 'EXECUTED' : 'BYPASSED', reason: 'Self-reflection quality critique' },
+                            { node: 'memory_write',       status: steps.includes('memory_write') ? 'EXECUTED' : 'BYPASSED', reason: 'Semantic memory indexing' },
+                          ]).map((tr: any) => {
+                            const isExecuted = tr.status === 'EXECUTED';
+                            const isFailed = tr.status === 'FAILED';
                             return (
-                              <div key={key} className="relative">
-                                <div className={`absolute -left-5 w-4 h-4 rounded-full border flex items-center justify-center ${active ? 'border-accent bg-accent/10 text-accent animate-pulse-ring' : 'border-border bg-surface text-foreground-3 opacity-50'}`}>
-                                  <Icon className="w-2.5 h-2.5" />
+                              <div key={tr.node} className="relative">
+                                <div className={`absolute -left-5 w-4 h-4 rounded-full border flex items-center justify-center ${isExecuted ? 'border-emerald-500 bg-emerald-500/10 text-emerald-400' : isFailed ? 'border-red-500 bg-red-500/10 text-red-400' : 'border-border bg-surface text-foreground-3 opacity-40'}`}>
+                                  {isExecuted ? <CheckCircle2 className="w-2.5 h-2.5" /> : isFailed ? <AlertCircle className="w-2.5 h-2.5" /> : <GitBranch className="w-2.5 h-2.5" />}
                                 </div>
-                                <h4 className="text-[10px] font-semibold font-mono text-foreground">{label}</h4>
-                                <p className="text-[9px] text-foreground-3 mt-0.5 leading-relaxed">{detail}</p>
+                                <div className="flex items-center justify-between gap-2">
+                                  <h4 className={`text-[10px] font-semibold font-mono ${isExecuted ? 'text-foreground font-bold' : isFailed ? 'text-red-400 font-bold' : 'text-foreground-3'}`}>{tr.node}</h4>
+                                  <div className="flex items-center gap-1.5">
+                                    {tr.duration_ms != null && <span className="text-[8px] font-mono text-foreground-3">{tr.duration_ms.toFixed(1)}ms</span>}
+                                    <span className={`text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${isExecuted ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30' : isFailed ? 'bg-red-500/10 text-red-400 border border-red-500/30' : 'bg-surface-3 text-foreground-3 border border-border'}`}>
+                                      {tr.status}
+                                    </span>
+                                  </div>
+                                </div>
+                                <p className="text-[9px] text-foreground-3 mt-0.5 leading-relaxed font-mono">{tr.reason}</p>
                               </div>
                             );
                           })}
@@ -3510,12 +3580,15 @@ export default function ChatPage() {
                       {/* Tab 3: Search Logs */}
                       {activeHudTab === 'logs' && (
                         <div className="space-y-3">
-                          {mx.search_queries && mx.search_queries.length > 0 && (
+                          {mx.web_status && (
                             <div>
-                              <h4 className="text-[9px] font-bold uppercase tracking-wider text-foreground-3 mb-1.5">Web Queries</h4>
+                              <h4 className="text-[9px] font-bold uppercase tracking-wider text-foreground-3 mb-1.5">Web Search Status</h4>
                               <div className="p-2.5 rounded-lg border border-border bg-surface-2 font-mono text-[10px] space-y-1">
-                                {mx.search_queries.map((q: string, i: number) => (
-                                  <div key={i} className="text-foreground-2"><span className="text-foreground-3">› </span><span className="text-accent">"{q}"</span></div>
+                                <div className="text-foreground"><span className="text-foreground-3">Status: </span><span className={mx.web_status.executed ? "text-emerald-400 font-bold" : "text-foreground-3"}>{mx.web_status.executed ? 'EXECUTED' : 'NOT EXECUTED'}</span></div>
+                                <div className="text-foreground-3">Reason: {mx.web_status.reason || 'N/A'}</div>
+                                <div className="text-foreground-3">Results Count: {mx.web_status.results_count ?? 0}</div>
+                                {mx.web_status.queries && mx.web_status.queries.map((q: string, i: number) => (
+                                  <div key={i} className="text-foreground-2"><span className="text-foreground-3">› Query: </span><span className="text-accent">"{q}"</span></div>
                                 ))}
                               </div>
                             </div>
@@ -3523,9 +3596,10 @@ export default function ChatPage() {
                           <div>
                             <h4 className="text-[9px] font-bold uppercase tracking-wider text-foreground-3 mb-1.5">Memory Pipeline Status</h4>
                             <div className="p-2.5 rounded-lg border border-border bg-surface-2 font-mono text-[9px] text-foreground-3 space-y-1">
-                              <div className="flex items-center gap-1.5 text-green-400 font-sans text-[10px]"><CheckCircle2 className="w-3 h-3" /><span className="font-semibold">Pipeline Successful</span></div>
-                              <div>› Evaluated interaction for semantic facts...</div>
-                              <div>› Context indexed for subsequent sessions.</div>
+                              <div className="flex items-center gap-1.5 text-blue-400 font-sans text-[10px]"><CheckCircle2 className="w-3 h-3" /><span className="font-semibold">{mx.memory_status?.lookup_status || 'MEMORY CHECKED'}</span></div>
+                              <div>› Injected into Prompt: {mx.memory_status?.injected_into_prompt ? 'YES' : 'NO'}</div>
+                              <div>› Write Executed: {mx.memory_status?.write_executed ? 'YES' : 'NO'}</div>
+                              {mx.memory_status?.persisted_content && <div>› Persisted Fact: "{mx.memory_status.persisted_content}"</div>}
                             </div>
                           </div>
                         </div>

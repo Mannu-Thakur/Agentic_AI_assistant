@@ -60,6 +60,7 @@ from app.agent.nodes import (
     grade_documents_node,
     generate_response_node,
     execute_tools_node,
+    execute_web_search_node,
     reflect_node,
     clarification_node,
     # Phase 3
@@ -79,6 +80,8 @@ from app.agent.prompts import (
     INTENT_COMPLEX,
     INTENT_MATH,
     INTENT_FINANCE,
+    INTENT_NEWS,
+    INTENT_CURRENT_EVENTS,
 )
 
 MAX_ITERATIONS = 1  # maximum reflection-driven regeneration passes
@@ -93,15 +96,23 @@ def route_after_classify(state: AgentState) -> str:
     After intent classification:
       is_ambiguous=True → clarification
       MEMORY_WRITE → memory_write (short-circuits the full pipeline)
+      WEB_SEARCH | NEWS | CURRENT_EVENTS (not private doc) → execute_web_search (direct web search tool execution)
       NORMAL_CHAT | DOCUMENT_QA | VISION → check_retrieval (bypasses tool planning for fast single-turn path)
       Everything else (COMPLEX, MCP_TOOL, CODE_EXECUTION, etc.) → plan
     """
     if state.get("is_ambiguous", False):
         return "clarification"
     intent = state.get("intent", INTENT_NORMAL_CHAT)
+    is_private = state.get("is_private_doc_query", False)
     if intent == INTENT_MEMORY_WRITE:
         return "memory_write"
-    if intent in (INTENT_NORMAL_CHAT, INTENT_DOCUMENT_QA, INTENT_VISION):
+    if intent in (INTENT_WEB_SEARCH, INTENT_NEWS, INTENT_CURRENT_EVENTS) and not is_private:
+        return "execute_web_search"
+    if intent in (
+        INTENT_NORMAL_CHAT,
+        INTENT_DOCUMENT_QA,
+        INTENT_VISION,
+    ):
         return "check_retrieval"
     return "plan"
 
@@ -131,7 +142,8 @@ def route_after_grading(state: AgentState) -> str:
 def route_after_generation(state: AgentState) -> str:
     """After generate_response: run tools, check evidence, or reflect."""
     tool_calls = state.get("tool_calls", [])
-    if tool_calls:
+    steps = state.get("steps", [])
+    if tool_calls and "execute_web_search" not in steps:
         return "execute_tools"
     return "evidence_checker"
 
@@ -170,6 +182,7 @@ workflow.add_node("query_rewriter",            query_rewriter_node)
 workflow.add_node("check_retrieval",           check_retrieval_node)
 workflow.add_node("retrieve_context",          retrieve_context_node)
 workflow.add_node("grade_documents",           grade_documents_node)
+workflow.add_node("execute_web_search",        execute_web_search_node)
 workflow.add_node("generate_response",         generate_response_node)
 workflow.add_node("execute_tools",             execute_tools_node)
 workflow.add_node("evidence_checker",          evidence_checker_node)       # Phase 3
@@ -178,17 +191,21 @@ workflow.add_node("reflect",                   reflect_node)
 # Entry point → intent classifier
 workflow.set_entry_point("classify_intent")
 
-# classify_intent → memory_write | clarification | check_retrieval | plan
+# classify_intent → memory_write | clarification | execute_web_search | check_retrieval | plan
 workflow.add_conditional_edges(
     "classify_intent",
     route_after_classify,
     {
-        "memory_write":    "memory_write",
-        "clarification":   "clarification",
-        "check_retrieval": "check_retrieval",
-        "plan":            "plan",
+        "memory_write":       "memory_write",
+        "clarification":      "clarification",
+        "execute_web_search": "execute_web_search",
+        "check_retrieval":    "check_retrieval",
+        "plan":               "plan",
     },
 )
+
+# Direct web search execution → generate_response
+workflow.add_edge("execute_web_search", "generate_response")
 
 # Terminals for short-circuits
 workflow.add_edge("memory_write",  END)

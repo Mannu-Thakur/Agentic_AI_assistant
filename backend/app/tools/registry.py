@@ -155,6 +155,13 @@ class ToolRegistry:
         """Returns list of all currently registered MCP tool names."""
         return list(self.mcp_tools_schemas.keys())
 
+    def get_all_registered_tool_schemas(self) -> List[Dict[str, Any]]:
+        """
+        Returns ALL registered tool schemas across local and MCP tools.
+        Acts as the single source of truth for semantic routing and tool discovery.
+        """
+        return self.get_tool_schemas()
+
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
         """
         Returns ALL registered tool schemas.
@@ -223,22 +230,27 @@ class ToolRegistry:
     async def get_semantically_relevant_tools(
         self,
         query: str,
-        allowed_tools: List[str],
+        allowed_tools: Optional[List[str]] = None,
         top_k: int = 5,
         min_threshold: float = 0.20,
         api_key: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
-        Retrieves declarations for allowed tools and filters/ranks them using SemanticToolRouter.
+        Retrieves declarations for allowed tools (or ALL registered tools if allowed_tools is None)
+        and filters/ranks them using SemanticToolRouter.
         """
-        all_allowed_declarations = self.get_tool_schemas_for_intent(allowed_tools)
-        if not all_allowed_declarations or not query:
-            return all_allowed_declarations
+        if allowed_tools is not None:
+            all_declarations = self.get_tool_schemas_for_intent(allowed_tools)
+        else:
+            all_declarations = self.get_all_registered_tool_schemas()
+
+        if not all_declarations or not query:
+            return all_declarations
 
         from app.tools.semantic_router import semantic_router
         return await semantic_router.select_relevant_tools(
             query=query,
-            tool_declarations=all_allowed_declarations,
+            tool_declarations=all_declarations,
             top_k=top_k,
             min_threshold=min_threshold,
             api_key=api_key

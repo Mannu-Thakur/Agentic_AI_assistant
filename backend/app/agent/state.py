@@ -151,3 +151,24 @@ class AgentState(TypedDict):
     #   "crag_rejected"   — private doc query with no relevant chunks found
     #   "web_fallback"    — CRAG triggered web search due to outdated docs
     generation_mode: Optional[str]
+
+    # ── Observability & Execution Trace (Dev HUD Source of Truth) ───────────
+    # Full per-node execution history recorded at runtime.
+    # Each entry: {name, status: "EXECUTED"|"BYPASSED"|"FAILED", start_time, end_time, duration_ms, reason, metadata, error}
+    execution_trace: List[Dict[str, Any]]
+
+    # Detailed semantic retrieval pipeline metrics:
+    # retrieval_status: "NOT_NEEDED" | "NEEDED_0_RESULTS" | "EXECUTED_WITH_RESULTS" | "FAILED"
+    semantic_status: Dict[str, Any]
+
+    # Detailed memory pipeline metrics:
+    # lookup_status: "NOT_CHECKED" | "CHECKED_0_HITS" | "CHECKED_N_HITS" | "FAILED"
+    memory_status: Dict[str, Any]
+
+    # Detailed web search pipeline metrics:
+    # executed: bool, reason: str, results_count: int, accepted_sources_count: int, used_in_final_answer: bool
+    web_status: Dict[str, Any]
+
+    # Surface impossible or corrupt execution combinations to the Dev HUD
+    inconsistencies: List[str]
+

@@ -536,7 +536,7 @@
   /* User message bubble — sleek dark pill / rounded capsule (GPT style) */
   .user-bubble {
     background: #2f2f2f;
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    border: none;
     color: #FFFFFF;
     border-radius: 22px;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
@@ -1188,15 +1188,14 @@ select {
   transform: scale(0.92);
 }
 
-/* Prose chat inline code override (ChatGPT dark pill badge) */
 .prose-chat-inline-code {
   font-size: 0.85em;
-  background: #27272a;
-  padding: 0.18em 0.55em;
+  background: #262626;
+  padding: 0.2em 0.5em;
   border-radius: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: none;
   color: #FFFFFF;
-  font-weight: 600;
+  font-weight: 500;
   font-family: 'JetBrains Mono', Consolas, monospace;
   white-space: pre-wrap;
   word-break: break-word;
@@ -1454,14 +1453,14 @@ select {
   gap: 8px;
   padding: 8px 10px 8px 14px;
   border-radius: 26px;
-  border: 1px solid #2B2B2B;
+  border: none;
   background: #212121;
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
-  transition: border-color 0.2s, box-shadow 0.2s, background-color 0.2s;
+  transition: box-shadow 0.2s, background-color 0.2s;
 }
 
 .pill-input-bar:focus-within {
-  border-color: #444444;
+  border: none;
   background: #262626;
   box-shadow: 0 6px 32px rgba(0, 0, 0, 0.55);
 }

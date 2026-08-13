@@ -213,15 +213,15 @@ export const CanvasPanel: React.FC<CanvasPanelProps> = ({
 
   return (
     <div
-      className={`w-full bg-[#212121] border border-[#2B2B2B] rounded-2xl overflow-hidden shadow-[0_8px_40px_rgba(0,0,0,0.5)] flex flex-col animate-fade-in-up mt-3 transition-all duration-300 ${panelHeight}`}
+      className={`w-full bg-[#212121] rounded-2xl overflow-hidden shadow-[0_8px_40px_rgba(0,0,0,0.5)] flex flex-col animate-fade-in-up mt-3 transition-all duration-300 ${panelHeight}`}
     >
       {/* ── Header ── */}
-      <div className="flex items-center justify-between px-4 py-2.5 border-b border-[#2B2B2B] flex-shrink-0">
+      <div className="flex items-center justify-between px-4 py-2.5 flex-shrink-0">
         {/* Left: label */}
         <div className="flex items-center gap-2">
           <Pencil className="w-3.5 h-3.5 text-[#BDBDBD]" />
           <span className="text-[13px] font-semibold text-[#F2F2F2]">Edit</span>
-          <span className="text-[10px] text-[#808080] bg-[#2a2a2a] border border-[#2B2B2B] px-1.5 py-0.5 rounded-md font-mono">
+          <span className="text-[10px] text-[#808080] bg-[#2a2a2a] px-1.5 py-0.5 rounded-md font-mono">
             {text.length} chars
           </span>
         </div>
@@ -245,7 +245,7 @@ export const CanvasPanel: React.FC<CanvasPanelProps> = ({
       </div>
 
       {/* ── Toolbar ── */}
-      <div className="flex items-center gap-0.5 px-3 py-2 border-b border-[#2B2B2B] flex-shrink-0 flex-wrap">
+      <div className="flex items-center gap-0.5 px-3 py-2 flex-shrink-0 flex-wrap">
         {/* Ask for changes */}
         <button
           type="button"
@@ -258,7 +258,7 @@ export const CanvasPanel: React.FC<CanvasPanelProps> = ({
         >
           <MessageSquarePlus className="w-3.5 h-3.5" />
           <span>Ask for changes</span>
-          <kbd className="ml-0.5 text-[9px] bg-[#2a2a2a] border border-[#2B2B2B] px-1 py-0.5 rounded font-mono text-[#808080]">
+          <kbd className="ml-0.5 text-[9px] bg-[#2a2a2a] px-1 py-0.5 rounded font-mono text-[#808080]">
             Ctrl+K
           </kbd>
         </button>
@@ -294,7 +294,7 @@ export const CanvasPanel: React.FC<CanvasPanelProps> = ({
           </button>
 
           {showFormatMenu && (
-            <div className="absolute top-full left-0 mt-1 z-50 w-40 bg-[#212121] border border-[#2B2B2B] rounded-xl shadow-[0_8px_24px_rgba(0,0,0,0.6)] overflow-hidden animate-fade-in">
+            <div className="absolute top-full left-0 mt-1 z-50 w-40 bg-[#212121] rounded-xl shadow-[0_8px_24px_rgba(0,0,0,0.6)] overflow-hidden animate-fade-in">
               {FORMAT_OPTIONS.map(({ label, icon: Icon, tag }) => (
                 <button
                   key={label}
@@ -328,7 +328,7 @@ export const CanvasPanel: React.FC<CanvasPanelProps> = ({
 
       {/* ── Ask for changes bar ── */}
       {showAskBar && (
-        <div className="flex items-center gap-2 px-4 py-2.5 border-b border-[#2B2B2B] bg-[#000000]/30 flex-shrink-0 animate-fade-in">
+        <div className="flex items-center gap-2 px-4 py-2.5 bg-[#000000]/30 flex-shrink-0 animate-fade-in">
           <MessageSquarePlus className="w-3.5 h-3.5 text-[#BDBDBD] flex-shrink-0" />
           <input
             ref={askInputRef}
@@ -354,7 +354,7 @@ export const CanvasPanel: React.FC<CanvasPanelProps> = ({
 
       {/* ── Link dialog ── */}
       {showLinkDialog && (
-        <div className="flex items-center gap-2 px-4 py-2.5 border-b border-[#2B2B2B] bg-[#000000]/30 flex-shrink-0 animate-fade-in">
+        <div className="flex items-center gap-2 px-4 py-2.5 bg-[#000000]/30 flex-shrink-0 animate-fade-in">
           <Link2 className="w-3.5 h-3.5 text-[#BDBDBD] flex-shrink-0" />
           <input
             ref={linkInputRef}
@@ -405,10 +405,10 @@ export const CanvasPanel: React.FC<CanvasPanelProps> = ({
       </div>
 
       {/* ── Footer hint ── */}
-      <div className="px-4 py-2 border-t border-[#2B2B2B] flex items-center gap-4 text-[10px] text-[#808080] flex-shrink-0">
-        <span><kbd className="font-mono bg-[#2a2a2a] border border-[#2B2B2B] px-1 rounded">Ctrl+B</kbd> Bold</span>
-        <span><kbd className="font-mono bg-[#2a2a2a] border border-[#2B2B2B] px-1 rounded">Ctrl+I</kbd> Italic</span>
-        <span><kbd className="font-mono bg-[#2a2a2a] border border-[#2B2B2B] px-1 rounded">Ctrl+K</kbd> Ask for changes</span>
+      <div className="px-4 py-2 flex items-center gap-4 text-[10px] text-[#808080] flex-shrink-0">
+        <span><kbd className="font-mono bg-[#2a2a2a] px-1 rounded">Ctrl+B</kbd> Bold</span>
+        <span><kbd className="font-mono bg-[#2a2a2a] px-1 rounded">Ctrl+I</kbd> Italic</span>
+        <span><kbd className="font-mono bg-[#2a2a2a] px-1 rounded">Ctrl+K</kbd> Ask for changes</span>
         <span className="ml-auto">Markdown supported</span>
       </div>
     </div>

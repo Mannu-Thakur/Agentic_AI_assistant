@@ -45,7 +45,7 @@ export const SourcesDrawer: React.FC<SourcesDrawerProps> = ({
   /* ── Inline side-panel — animates width so chat stays scrollable ── */
   return (
     <div
-      className="flex-shrink-0 flex flex-col border-l border-[#2B2B2B] bg-[#0a0a0a] text-[#F2F2F2] transition-all duration-300 ease-in-out overflow-hidden"
+      className="flex-shrink-0 flex flex-col bg-[#0a0a0a] text-[#F2F2F2] transition-all duration-300 ease-in-out overflow-hidden"
       style={{
         width: isOpen ? 340 : 0,
         opacity: isOpen ? 1 : 0,
@@ -57,10 +57,10 @@ export const SourcesDrawer: React.FC<SourcesDrawerProps> = ({
       <div className="w-[340px] flex flex-col h-full">
 
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3.5 border-b border-[#2B2B2B] flex-shrink-0">
+        <div className="flex items-center justify-between px-4 py-3.5 flex-shrink-0">
           <div className="flex items-center gap-2.5">
             <h3 className="text-[13px] font-semibold text-[#F2F2F2]">Activity</h3>
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#2a2a2a] border border-[#2B2B2B] text-[11px] font-medium text-[#BDBDBD]">
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#212121] text-[11px] font-medium text-[#BDBDBD]">
               <Clock className="w-2.5 h-2.5" />
               {executionTime}s
             </span>
@@ -78,10 +78,10 @@ export const SourcesDrawer: React.FC<SourcesDrawerProps> = ({
         <div className="flex-1 overflow-y-auto custom-scrollbar px-4 py-4 space-y-4 min-h-0">
 
           {/* Thinking Accordion */}
-          <div className="bg-[#000000] border border-[#2B2B2B] rounded-xl overflow-hidden">
+          <div className="bg-[#141414] rounded-xl overflow-hidden">
             <button
               onClick={() => setThinkingExpanded(!thinkingExpanded)}
-              className="w-full px-3.5 py-3 flex items-center justify-between hover:bg-[#141414] transition-colors text-left"
+              className="w-full px-3.5 py-3 flex items-center justify-between hover:bg-[#1a1a1a] transition-colors text-left"
             >
               <div className="flex items-center gap-2">
                 <Sparkles className="w-3.5 h-3.5 text-[#FFFFFF]" />
@@ -93,7 +93,7 @@ export const SourcesDrawer: React.FC<SourcesDrawerProps> = ({
             </button>
 
             {thinkingExpanded && (
-              <div className="px-3.5 pb-3.5 border-t border-[#2B2B2B] space-y-2 pt-3">
+              <div className="px-3.5 pb-3.5 space-y-2 pt-2">
                 {thinkingSteps.map((step, idx) => (
                   <div key={idx} className="flex items-start gap-2">
                     <CheckCircle2 className="w-3 h-3 text-[#FFFFFF] mt-0.5 flex-shrink-0" />
@@ -106,7 +106,7 @@ export const SourcesDrawer: React.FC<SourcesDrawerProps> = ({
                     {domainChips.map((domain, i) => (
                       <span
                         key={i}
-                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[#212121] border border-[#2B2B2B] text-[10px] text-[#BDBDBD]"
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[#212121] text-[10px] text-[#BDBDBD]"
                       >
                         <Globe className="w-2.5 h-2.5 text-[#FFFFFF]" />
                         {domain}
@@ -125,7 +125,7 @@ export const SourcesDrawer: React.FC<SourcesDrawerProps> = ({
             </p>
 
             {sources.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-10 bg-[#000000] border border-[#2B2B2B] rounded-xl gap-2">
+              <div className="flex flex-col items-center justify-center py-10 bg-[#141414] rounded-xl gap-2">
                 <Globe className="w-6 h-6 text-[#BDBDBD] opacity-30" />
                 <p className="text-[11px] text-[#808080]">No additional sources found</p>
               </div>
@@ -134,7 +134,7 @@ export const SourcesDrawer: React.FC<SourcesDrawerProps> = ({
                 {sources.map((item) => (
                   <div
                     key={item.id}
-                    className="p-3 bg-[#000000] border border-[#2B2B2B] hover:border-[#444] rounded-xl transition-colors group"
+                    className="p-3 bg-[#141414] hover:bg-[#1f1f1f] rounded-xl transition-colors group"
                   >
                     <div className="flex items-center justify-between gap-2 mb-1">
                       <div className="flex items-center gap-1.5 min-w-0">

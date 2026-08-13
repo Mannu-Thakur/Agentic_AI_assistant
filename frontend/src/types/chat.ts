@@ -31,6 +31,40 @@ export interface DeveloperMetrics {
   chunks_used?: number;
   steps?: string[];
   generation_mode?: 'normal_rag' | 'model_knowledge' | 'crag_rejected' | 'web_fallback';
+  execution_trace?: Array<{
+    name: string;
+    status: 'EXECUTED' | 'BYPASSED' | 'FAILED';
+    timestamp?: number;
+    duration_ms?: number;
+    reason?: string;
+    metadata?: Record<string, any>;
+    error?: string;
+  }>;
+  semantic_status?: {
+    retrieval_status: string;
+    embedding_executed?: boolean;
+    vector_search_executed?: boolean;
+    rag_chunks?: number;
+    reranked_chunks?: number;
+    graded_chunks?: number;
+    confidence?: number;
+  };
+  memory_status?: {
+    lookup_status: string;
+    memory_hits?: number;
+    injected_into_prompt?: boolean;
+    write_executed?: boolean;
+    persisted_content?: string;
+  };
+  web_status?: {
+    executed: boolean;
+    reason?: string;
+    results_count?: number;
+    accepted_sources_count?: number;
+    used_in_final_answer?: boolean;
+    queries?: string[];
+  };
+  inconsistencies?: string[];
   // retrieved_context: ALL items fetched from vector store (for dev debug panel only)
   retrieved_context?: {
     type: 'memory' | 'chunk';

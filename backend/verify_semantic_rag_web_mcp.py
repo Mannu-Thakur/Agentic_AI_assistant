@@ -89,6 +89,17 @@ async def test_web_mcp_server():
     return web_tools_present and exec_pass
 
 
+import hashlib, math
+def _make_det_vec(text: str, dim: int = 768) -> list:
+    sb = hashlib.sha256((text or "").encode("utf-8")).digest()
+    st = int.from_bytes(sb[:4], "big")
+    v = []
+    for _ in range(dim):
+        st = (st * 1103515245 + 12345) & 0x7fffffff
+        v.append((st / 0x7fffffff) - 0.5)
+    n = math.sqrt(sum(x * x for x in v))
+    return [x / n for x in v] if n > 0 else [0.0] * dim
+
 async def test_rag_pipeline_with_semantic_routing():
     print("\n" + "="*70)
     print(" 3. TESTING PRODUCTION RAG PIPELINE & CRAG / SELF-RAG INTEGRATION")
@@ -114,8 +125,8 @@ async def test_rag_pipeline_with_semantic_routing():
     try:
         with patch.object(EmbeddingService, "get_embedding", new_callable=AsyncMock) as mock_emb, \
              patch.object(EmbeddingService, "get_embeddings", new_callable=AsyncMock) as mock_embs:
-            mock_emb.return_value = [0.05] * 768
-            mock_embs.return_value = [[0.05] * 768]
+            mock_emb.side_effect = lambda t, **kw: _make_det_vec(t)
+            mock_embs.side_effect = lambda ts, **kw: [_make_det_vec(t) for t in ts]
 
             vector_store = VectorStore()
             doc_id = "test-doc-sem-rag"

@@ -99,10 +99,10 @@ export default function GlobalSearch({ open, onClose, chats, onSelectChat }: Glo
         aria-label="Search chats"
         className="fixed top-[15%] left-1/2 -translate-x-1/2 z-50 w-full max-w-[520px] px-4 animate-fade-in-up"
       >
-        <div className="bg-[#212121] border border-[#2B2B2B] rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.7)] overflow-hidden">
+        <div className="bg-[#212121] rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.7)] overflow-hidden">
 
           {/* Search input */}
-          <div className="flex items-center gap-3 px-4 py-3.5 border-b border-[#2B2B2B]">
+          <div className="flex items-center gap-3 px-4 py-3.5">
             <Search className="w-4 h-4 text-[#BDBDBD] flex-shrink-0" />
             <input
               ref={inputRef}
@@ -121,7 +121,7 @@ export default function GlobalSearch({ open, onClose, chats, onSelectChat }: Glo
                 <X className="w-3.5 h-3.5" />
               </button>
             )}
-            <kbd className="hidden sm:inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-[#2a2a2a] border border-[#2B2B2B] text-[#BDBDBD] font-mono">Esc</kbd>
+            <kbd className="hidden sm:inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-[#2a2a2a] text-[#BDBDBD] font-mono">Esc</kbd>
           </div>
 
           {/* Results */}
@@ -179,15 +179,15 @@ export default function GlobalSearch({ open, onClose, chats, onSelectChat }: Glo
           </div>
 
           {/* Footer */}
-          <div className="px-4 py-2.5 border-t border-[#2B2B2B] bg-[#000000]/30 flex items-center gap-4 text-[11px] text-[#BDBDBD]">
+          <div className="px-4 py-2.5 bg-[#000000]/30 flex items-center gap-4 text-[11px] text-[#BDBDBD]">
             <span className="flex items-center gap-1">
-              <kbd className="px-1 py-0.5 rounded text-[10px] bg-[#2a2a2a] border border-[#2B2B2B] font-mono">↑↓</kbd> Navigate
+              <kbd className="px-1 py-0.5 rounded text-[10px] bg-[#2a2a2a] font-mono">↑↓</kbd> Navigate
             </span>
             <span className="flex items-center gap-1">
-              <kbd className="px-1 py-0.5 rounded text-[10px] bg-[#2a2a2a] border border-[#2B2B2B] font-mono">↵</kbd> Select
+              <kbd className="px-1 py-0.5 rounded text-[10px] bg-[#2a2a2a] font-mono">↵</kbd> Select
             </span>
             <span className="flex items-center gap-1">
-              <kbd className="px-1 py-0.5 rounded text-[10px] bg-[#2a2a2a] border border-[#2B2B2B] font-mono">Esc</kbd> Close
+              <kbd className="px-1 py-0.5 rounded text-[10px] bg-[#2a2a2a] font-mono">Esc</kbd> Close
             </span>
           </div>
         </div>

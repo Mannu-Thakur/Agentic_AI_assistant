@@ -86,11 +86,11 @@ export const AnswerContextMenu: React.FC<AnswerContextMenuProps> = ({
       </Tooltip>
 
       {isOpen && (
-        <div className={`absolute left-0 z-50 w-48 bg-[#212121] border border-[#2B2B2B] rounded-xl shadow-[0_8px_32px_rgba(0,0,0,0.6)] overflow-hidden animate-fade-in p-1 ${
+        <div className={`absolute left-0 z-50 w-48 bg-[#212121] rounded-xl shadow-[0_8px_32px_rgba(0,0,0,0.6)] overflow-hidden animate-fade-in p-1 ${
           openUpward ? 'bottom-full mb-1.5' : 'top-full mt-1.5'
         }`}>
           {/* Timestamp */}
-          <div className="px-3 py-1.5 text-[10px] text-[#808080] border-b border-[#2B2B2B] mb-0.5 font-medium">
+          <div className="px-3 py-1.5 text-[10px] text-[#808080] mb-0.5 font-medium">
             {formatTimestamp(createdAt)}
           </div>
 

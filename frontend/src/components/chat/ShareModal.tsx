@@ -79,7 +79,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-fade-in"
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className="relative w-full max-w-md bg-[#212121] border border-[#2B2B2B] rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.7)] overflow-hidden text-[#F2F2F2]">
+      <div className="relative w-full max-w-md bg-[#212121] rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.7)] overflow-hidden text-[#F2F2F2]">
 
         {/* Header */}
         <div className="flex items-center justify-between px-5 pt-5 pb-4">
@@ -92,14 +92,12 @@ export const ShareModal: React.FC<ShareModalProps> = ({
           </button>
         </div>
 
-        <div className="mx-5 h-px bg-[#2B2B2B]" />
-
         {/* Content Preview */}
-        <div className="mx-5 my-4 bg-[#000000] border border-[#2B2B2B] rounded-xl p-4 overflow-hidden">
+        <div className="mx-5 my-4 bg-[#141414] rounded-xl p-4 overflow-hidden">
           <div className="max-h-36 overflow-y-auto custom-scrollbar">
             <p className="text-[13px] text-[#F2F2F2] leading-relaxed line-clamp-6">{content.slice(0, 400)}{content.length > 400 ? '…' : ''}</p>
           </div>
-          <div className="mt-3 pt-3 border-t border-[#2B2B2B] flex items-center justify-between">
+          <div className="mt-3 pt-3 flex items-center justify-between">
             <div className="flex items-center gap-1.5 text-[11px] font-medium text-[#FFFFFF]">
               <Bot className="w-3 h-3" />
               <span>openChat AI</span>
@@ -113,7 +111,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({
           {socialLinks.map((item) => {
             const Icon = item.icon;
             const base = "flex flex-col items-center gap-1.5 group focus:outline-none";
-            const circle = "w-12 h-12 rounded-full bg-[#2a2a2a] border border-[#2B2B2B] text-[#FFFFFF] flex items-center justify-center transition-all group-hover:bg-[#333] group-hover:border-[#444] group-hover:scale-105";
+            const circle = "w-12 h-12 rounded-full bg-[#2a2a2a] text-[#FFFFFF] flex items-center justify-center transition-all group-hover:bg-[#333] group-hover:scale-105";
 
             if (item.onClick) {
               return (

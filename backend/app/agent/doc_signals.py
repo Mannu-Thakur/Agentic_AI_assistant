@@ -107,11 +107,18 @@ def _extract_filename_tokens(filename: str) -> FrozenSet[str]:
         # Skip tokens that are too short or too long
         if len(tok_lower) < _MIN_TOKEN_LEN or len(tok_lower) > _MAX_TOKEN_LEN:
             continue
-        # Skip common generic filler words that appear in almost every filename
+        # Skip common generic filler words & general domain terms that appear in filenames
         if tok_lower in {
             "the", "and", "for", "with", "new", "old", "final",
             "copy", "draft", "doc", "file", "pdf", "docx", "xlsx",
             "ver", "version", "rev", "updated", "latest", "backup",
+            "education", "minister", "government", "india", "bihar",
+            "state", "school", "college", "university", "system",
+            "data", "report", "test", "notes", "policy", "project",
+            "app", "paper", "book", "management", "development",
+            "information", "technology", "engineering", "math",
+            "code", "ai", "chat", "bot", "user", "general", "overview",
+            "summary", "analysis", "study", "guide", "introduction",
         }:
             continue
         tokens.add(tok_lower)
@@ -199,13 +206,21 @@ def invalidate_user_signals(user_id: str) -> None:
 
 def query_matches_user_signals(query: str, signals: FrozenSet[str]) -> bool:
     """
-    Return True if the lowercased query contains ANY signal from ``signals``.
+    Return True if the lowercased query matches ANY signal from ``signals``.
 
-    This is the drop-in replacement for:
-        any(sig in query.lower() for sig in _PERSONAL_DOC_SIGNALS)
+    Multi-word signals (e.g. 'my resume', 'iot project') are checked as substring phrases.
+    Single-word signals (e.g. 'resume', 'cv') are checked using strict word boundaries \\b
+    to avoid false-positive substring matches (e.g. 'cat' in 'education').
     """
     q_lower = query.lower()
-    return any(sig in q_lower for sig in signals)
+    for sig in signals:
+        if " " in sig:
+            if sig in q_lower:
+                return True
+        else:
+            if re.search(rf"\b{re.escape(sig)}\b", q_lower):
+                return True
+    return False
 
 
 def classify_sub_questions(

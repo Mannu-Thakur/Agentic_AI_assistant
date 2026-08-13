@@ -58,10 +58,10 @@ export default function KeyboardShortcutsModal({ open, onClose }: KeyboardShortc
         aria-labelledby="shortcuts-title"
         className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-full max-w-sm px-4 animate-fade-in"
       >
-        <div className="bg-[#212121] border border-[#2B2B2B] rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.7)] overflow-hidden text-[#F2F2F2]">
+        <div className="bg-[#212121] rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.7)] overflow-hidden text-[#F2F2F2]">
 
           {/* Header */}
-          <div className="flex items-center justify-between px-5 py-4 border-b border-[#2B2B2B]">
+          <div className="flex items-center justify-between px-5 py-4">
             <div className="flex items-center gap-2">
               <Command className="w-3.5 h-3.5 text-[#FFFFFF]" />
               <h2 id="shortcuts-title" className="text-[13px] font-semibold text-[#F2F2F2]">
@@ -94,7 +94,7 @@ export default function KeyboardShortcutsModal({ open, onClose }: KeyboardShortc
                       <div className="flex items-center gap-1">
                         {s.keys.map((k, i) => (
                           <span key={i} className="flex items-center gap-1">
-                            <kbd className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-[#2a2a2a] border border-[#2B2B2B] text-[#BDBDBD] font-mono">
+                            <kbd className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-[#2a2a2a] text-[#BDBDBD] font-mono">
                               {k}
                             </kbd>
                             {i < s.keys.length - 1 && (
@@ -111,10 +111,10 @@ export default function KeyboardShortcutsModal({ open, onClose }: KeyboardShortc
           </div>
 
           {/* Footer */}
-          <div className="px-5 py-3 border-t border-[#2B2B2B] bg-[#000000]/20">
+          <div className="px-5 py-3 bg-[#000000]/20">
             <p className="text-[11px] text-[#BDBDBD] text-center">
               Press{' '}
-              <kbd className="inline-flex items-center px-1 py-0.5 rounded text-[10px] bg-[#2a2a2a] border border-[#2B2B2B] font-mono">
+              <kbd className="inline-flex items-center px-1 py-0.5 rounded text-[10px] bg-[#2a2a2a] font-mono">
                 Esc
               </kbd>{' '}
               to close

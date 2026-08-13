@@ -161,22 +161,25 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     )
 
 
-if settings.BACKEND_CORS_ORIGINS:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=settings.BACKEND_CORS_ORIGINS,
-        allow_credentials=True,
-        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type", "Accept", "X-Request-ID", "x-api-keys", "x_api_keys"],
-        expose_headers=["X-Request-ID", "X-Process-Time", "X-Trace-ID"],
-    )
-
 # ── Phase 4 Security Middlewares ──────────────────────────────────────────────
 from app.middleware.security import SecureHeadersMiddleware, PayloadLimitMiddleware, InputSanitizationMiddleware
 
 app.add_middleware(SecureHeadersMiddleware)
 app.add_middleware(PayloadLimitMiddleware)
 app.add_middleware(InputSanitizationMiddleware)
+
+# CORSMiddleware MUST be added LAST so it becomes the outermost middleware,
+# ensuring Access-Control-Allow-Origin headers are attached to all responses,
+# preflight OPTIONS requests, and unhandled exception responses.
+if settings.BACKEND_CORS_ORIGINS:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.BACKEND_CORS_ORIGINS,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=["X-Request-ID", "X-Process-Time", "X-Trace-ID"],
+    )
 
 from app.resume.routes import router as resume_router
 

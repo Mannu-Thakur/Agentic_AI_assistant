@@ -93,6 +93,8 @@ function applyTheme(theme: ThemeType) {
   const effective = getEffectiveTheme(theme);
   if (effective === 'light') {
     root.classList.add('light');
+  } else {
+    root.classList.add('dark');
   }
 }
 
