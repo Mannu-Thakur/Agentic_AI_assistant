@@ -14,6 +14,7 @@ from app.schemas.chat import (
     ChatOut, MessageOut, MessageCreate, ChatCreate, ChatUpdate,
     ChatShareUpdate, SharedChatOut, SharedMessageOut,
 )
+from app.models.chat import Chat, Message, SharedLink
 from app.services.chat_service import ChatService
 from app.agent.graph import agent_graph
 from langchain_core.messages import HumanMessage, AIMessage
