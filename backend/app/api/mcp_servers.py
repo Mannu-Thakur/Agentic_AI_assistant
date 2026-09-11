@@ -89,8 +89,8 @@ async def test_mcp_server_connection(req: TestConnectionRequest):
     t0 = time.perf_counter()
     client = McpHttpClient(url=req.url, auth_header=req.auth_header, transport_type=req.transport_type)
     try:
-        await asyncio.wait_for(client.connect(), timeout=10.0)
-        tools = await asyncio.wait_for(client.list_tools(), timeout=10.0)
+        await asyncio.wait_for(client.connect(), timeout=30.0)
+        tools = await asyncio.wait_for(client.list_tools(), timeout=30.0)
         await client.close()
         latency_ms = round((time.perf_counter() - t0) * 1000, 1)
 
@@ -109,12 +109,22 @@ async def test_mcp_server_connection(req: TestConnectionRequest):
             "tool_count": len(tools),
             "tools": tool_summaries,
         }
-    except Exception as e:
+    except (asyncio.TimeoutError, TimeoutError):
         await client.close()
         latency_ms = round((time.perf_counter() - t0) * 1000, 1)
         return {
             "status": "error",
-            "message": f"Connection failed: {str(e)}",
+            "message": "Connection timed out after 30s. The remote server took too long to respond. If hosted on Render free tier, it may be waking up from sleep (cold start) or failing to start.",
+            "latency_ms": latency_ms,
+            "tools": [],
+        }
+    except Exception as e:
+        await client.close()
+        latency_ms = round((time.perf_counter() - t0) * 1000, 1)
+        err_msg = str(e).strip() or type(e).__name__
+        return {
+            "status": "error",
+            "message": f"Connection failed: {err_msg}",
             "latency_ms": latency_ms,
             "tools": [],
         }
@@ -130,20 +140,20 @@ async def create_remote_mcp_server(
     # Test connection first
     client = McpHttpClient(url=payload.url, auth_header=payload.auth_header, transport_type=payload.transport_type)
     try:
-        await asyncio.wait_for(client.connect(), timeout=10.0)
-        discovered_tools = await asyncio.wait_for(client.list_tools(), timeout=10.0)
+        await asyncio.wait_for(client.connect(), timeout=30.0)
+        discovered_tools = await asyncio.wait_for(client.list_tools(), timeout=30.0)
         await client.close()
-    except asyncio.TimeoutError:
+    except (asyncio.TimeoutError, TimeoutError):
         await client.close()
         raise HTTPException(
             status_code=408,
-            detail=f"Remote MCP Server connection timed out after 10s ({payload.url}). Check URL and server health."
+            detail=f"Remote MCP Server connection timed out after 30s ({payload.url}). Check URL and server health."
         )
     except Exception as e:
         await client.close()
         raise HTTPException(
             status_code=400,
-            detail=f"Could not connect to Remote MCP Server URL ({payload.url}): {str(e)}"
+            detail=f"Could not connect to Remote MCP Server URL ({payload.url}): {str(e) or type(e).__name__}"
         )
 
     new_server = RemoteMcpServer(

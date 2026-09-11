@@ -289,7 +289,7 @@ class McpHttpClient:
             # Closed client means the TCP connection was dropped.
             # Create a new client AND mark handshake as incomplete so
             # send_request re-runs MCP initialize before the next tool call.
-            self._client = httpx.AsyncClient(timeout=15.0, headers=self._get_headers())
+            self._client = httpx.AsyncClient(timeout=30.0, headers=self._get_headers())
             self._handshake_done = False
             self.session_id = None
             logger.info(f"[McpHttpClient] Re-created HTTP client for {self.url}; will re-handshake.")
