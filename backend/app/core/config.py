@@ -91,11 +91,13 @@ class Settings(BaseSettings):
     def ASYNC_DATABASE_URL(self) -> str:
         url = self.DATABASE_URL
         if url.startswith("postgresql://"):
-            return url.replace("postgresql://", "postgresql+asyncpg://", 1)
+            url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
         elif url.startswith("postgresql+psycopg2://"):
-            return url.replace("postgresql+psycopg2://", "postgresql+asyncpg://", 1)
+            url = url.replace("postgresql+psycopg2://", "postgresql+asyncpg://", 1)
         elif url.startswith("sqlite://"):
-            return url.replace("sqlite://", "sqlite+aiosqlite://", 1)
+            url = url.replace("sqlite://", "sqlite+aiosqlite://", 1)
+        if "sslmode=" in url:
+            url = url.replace("sslmode=", "ssl=")
         return url
 
     # Redis
