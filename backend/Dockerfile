@@ -25,8 +25,14 @@ RUN pip install --no-cache-dir --default-timeout=100 --retries 5 torch torchvisi
 # Copy application source (backend/.dockerignore excludes .env, venv, *.db, etc.)
 COPY . .
 
+# Make startup script executable
+RUN chmod +x /app/start.sh
+
 EXPOSE 8000
 
-# Run 4 Uvicorn workers for production throughput.
-# Lower to 1 for debugging or single-core hosts.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+# Container-level health check (Render also probes /api/v1/health via HTTP)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8000/api/v1/health || exit 1
+
+# Entrypoint: waits for DB → runs Alembic migrations → starts Uvicorn
+CMD ["/app/start.sh"]

@@ -1,6 +1,6 @@
 # ─────────────────────────────────────────────────────────────────────────────
 #  Render Deployment Blueprint (render.yaml)
-#  Automated deployment infrastructure for Render Cloud Platform
+#  Backend → Render | Frontend → Vercel (removed from here)
 # ─────────────────────────────────────────────────────────────────────────────
 services:
   # ── FastAPI Backend Service ───────────────────────────────────────────────
@@ -9,15 +9,20 @@ services:
     runtime: docker
     dockerContext: ./backend
     dockerfilePath: ./backend/Dockerfile
-    plan: starter
+    # Standard plan required: torch + easyocr + sentence-transformers need ≥2 GB RAM
+    plan: standard
     healthCheckPath: /api/v1/health
+    # preDeployCommand runs BEFORE traffic switches → zero-downtime DB migrations
+    preDeployCommand: "alembic upgrade head"
     envVars:
       - key: ENVIRONMENT
         value: production
+      # ── Database ───────────────────────────────────────────────────────────
       - key: DATABASE_URL
         fromDatabase:
           name: ai-assistant-db
           property: connectionString
+      # ── Redis ──────────────────────────────────────────────────────────────
       - key: REDIS_HOST
         fromService:
           type: redis
@@ -28,18 +33,23 @@ services:
           type: redis
           name: ai-assistant-redis
           property: port
+      # ── Security ───────────────────────────────────────────────────────────
       - key: SECRET_KEY
         generateValue: true
+      # ── CORS & OAuth redirect URIs ─────────────────────────────────────────
+      # IMPORTANT: Replace YOUR_VERCEL_URL with your actual Vercel deployment URL
+      # e.g. https://your-app.vercel.app  or your custom domain
       - key: FRONTEND_URL
-        value: https://ai-assistant-frontend.onrender.com
+        value: https://YOUR_VERCEL_URL
       - key: BACKEND_CORS_ORIGINS
-        value: '["https://ai-assistant-frontend.onrender.com"]'
+        value: '["https://YOUR_VERCEL_URL"]'
       - key: GOOGLE_REDIRECT_URI
-        value: https://ai-assistant-frontend.onrender.com/auth/google/callback
+        value: https://YOUR_VERCEL_URL/auth/google/callback
       - key: GITHUB_REDIRECT_URI
-        value: https://ai-assistant-frontend.onrender.com/auth/github/callback
+        value: https://YOUR_VERCEL_URL/auth/github/callback
       - key: ALLOWED_REDIRECT_URIS
-        value: '["https://ai-assistant-frontend.onrender.com/auth/google/callback","https://ai-assistant-frontend.onrender.com/auth/github/callback"]'
+        value: '["https://YOUR_VERCEL_URL/auth/google/callback","https://YOUR_VERCEL_URL/auth/github/callback"]'
+      # ── LLM API keys (set in Render dashboard — never commit) ──────────────
       - key: GROQ_API_KEY
         sync: false
       - key: GEMINI_API_KEY
@@ -48,12 +58,14 @@ services:
         sync: false
       - key: OPENROUTER_API_KEY
         sync: false
+      # ── Search API keys ────────────────────────────────────────────────────
       - key: TAVILY_API_KEY
         sync: false
       - key: SERP_API_KEY
         sync: false
       - key: EXA_API_KEY
         sync: false
+      # ── OAuth credentials (set in Render dashboard) ────────────────────────
       - key: GOOGLE_CLIENT_ID
         sync: false
       - key: GOOGLE_CLIENT_SECRET
@@ -62,18 +74,6 @@ services:
         sync: false
       - key: GITHUB_CLIENT_SECRET
         sync: false
-
-  # ── React/Vite Frontend Service ────────────────────────────────────────────
-  - type: web
-    name: ai-assistant-frontend
-    runtime: docker
-    dockerContext: ./frontend
-    dockerfilePath: ./frontend/Dockerfile
-    plan: starter
-    healthCheckPath: /health
-    envVars:
-      - key: VITE_API_BASE_URL
-        value: https://ai-assistant-backend.onrender.com
 
   # ── Redis Cache Service ───────────────────────────────────────────────────
   - type: redis
