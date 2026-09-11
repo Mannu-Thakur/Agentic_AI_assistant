@@ -1,4 +1,6 @@
 import { useAuthStore } from '../store/authStore';
+import { BASE_URL } from './api';
+
 
 export interface ProviderState {
   id: string;
@@ -119,7 +121,7 @@ class ProviderKeyManagerClass {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    const response = await fetch('/api/v1/api-keys', {
+    const response = await fetch(`${BASE_URL}/api-keys`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ provider_name: cleanProv, api_key: key }),
@@ -147,7 +149,7 @@ class ProviderKeyManagerClass {
     headers['x-api-keys'] = JSON.stringify(allKeys);
 
     try {
-      const res = await fetch('/api/v1/providers', { headers });
+      const res = await fetch(`${BASE_URL}/providers`, { headers });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const backendProviders: ProviderState[] = await res.json();
       
@@ -171,7 +173,7 @@ class ProviderKeyManagerClass {
       }
 
       if (updated) {
-        const refreshedRes = await fetch('/api/v1/providers', { headers });
+        const refreshedRes = await fetch(`${BASE_URL}/providers`, { headers });
         if (refreshedRes.ok) {
           return await refreshedRes.json();
         }

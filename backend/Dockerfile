@@ -25,14 +25,9 @@ RUN pip install --no-cache-dir --default-timeout=100 --retries 5 torch torchvisi
 # Copy application source (backend/.dockerignore excludes .env, venv, *.db, etc.)
 COPY . .
 
-# Make startup script executable
-RUN chmod +x /app/start.sh
-
 EXPOSE 8000
 
-# Container-level health check (Render also probes /api/v1/health via HTTP)
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:8000/api/v1/health || exit 1
+# Render free tier provides 512MB RAM. Use 1 worker to prevent OOM.
+# Bind dynamically to $PORT provided by Render (default to 8000).
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1"]
 
-# Entrypoint: waits for DB → runs Alembic migrations → starts Uvicorn
-CMD ["/app/start.sh"]

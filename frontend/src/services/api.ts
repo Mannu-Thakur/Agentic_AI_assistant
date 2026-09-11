@@ -1,7 +1,9 @@
 import { useAuthStore } from '../store/authStore';
 import { ProviderKeyManager } from './providerKeyManager';
 
-const BASE_URL = '/api/v1';
+const API_BASE = ((import.meta.env.VITE_API_BASE_URL as string | undefined) || '').replace(/\/+$/, '');
+export const BASE_URL = `${API_BASE}/api/v1`;
+
 
 interface RequestOptions extends RequestInit {
   json?: any;
@@ -72,7 +74,7 @@ export async function apiRequest<T = any>(
 
   const headers = new Headers(options.headers || {});
 
-  if (activeToken) {
+  if (activeToken && !headers.has('Authorization')) {
     headers.set('Authorization', `Bearer ${activeToken}`);
   }
 
@@ -89,7 +91,12 @@ export async function apiRequest<T = any>(
   const isUpload = options.body instanceof FormData;
   const timeoutMs = options.timeoutMs ?? (isUpload ? 120_000 : 30_000);
 
-  const url = `${BASE_URL}${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`;
+  const cleanEndpoint = endpoint.startsWith(BASE_URL)
+    ? endpoint.slice(BASE_URL.length)
+    : endpoint.startsWith('/api/v1')
+    ? endpoint.slice(7)
+    : endpoint;
+  const url = `${BASE_URL}${cleanEndpoint.startsWith('/') ? cleanEndpoint : `/${cleanEndpoint}`}`;
 
   if (localStorage.getItem('developer_mode') === 'true') {
     console.log(`[API REQUEST] ${options.method || 'GET'} ${url}`, {

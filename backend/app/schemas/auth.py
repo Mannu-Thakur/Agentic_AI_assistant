@@ -11,14 +11,9 @@ class UserLogin(BaseModel):
     email: EmailStr
     password: str
 
-class Token(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-    expires_in: int
-
 class UserOut(BaseModel):
     id: str
-    email: EmailStr
+    email: str
     full_name: Optional[str] = None
     avatar_url: Optional[str] = None
     is_active: bool
@@ -26,6 +21,12 @@ class UserOut(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    user: Optional[UserOut] = None
 
 class UserPreferenceOut(BaseModel):
     default_model: Optional[str] = None

@@ -1,4 +1,4 @@
-import { apiRequest } from './api';
+import { apiRequest, BASE_URL } from './api';
 import {
   ResumeData, JDAnalysis, ATSScoreBreakdown,
   DiffResponse, TemplateType, ExportFormat
@@ -101,7 +101,7 @@ export const resumeApi = {
     template?: TemplateType;
   }): Promise<Blob> {
     const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
-    const response = await fetch('/api/v1/resume/export', {
+    const response = await fetch(`${BASE_URL}/resume/export`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -132,7 +132,7 @@ export const resumeApi = {
   async compileLatex(params: { latex_code: string; template?: TemplateType }): Promise<Blob> {
     const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
     try {
-      const response = await fetch('/api/v1/resume/compile-latex', {
+      const response = await fetch(`${BASE_URL}/resume/compile-latex`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

@@ -33,3 +33,5 @@ Thumbs.db
 
 # ===== Vite cache =====
 .vite/
+
+.vercel

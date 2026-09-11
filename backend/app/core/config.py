@@ -11,8 +11,9 @@ Production hardening:
 
 import os
 import sys
+import json
 import logging
-from typing import List, Optional
+from typing import List, Optional, Any, Union
 from pydantic import AnyHttpUrl, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -56,8 +57,11 @@ class Settings(BaseSettings):
     JWT_ISSUER: str = "flagship-auth"
     JWT_AUDIENCE: str = "flagship-app"
 
+    # Cookie Configuration
+    COOKIE_SAMESITE: str = "lax"  # "lax" for same-domain/proxy, "none" for cross-origin credentials
+
     # CORS
-    BACKEND_CORS_ORIGINS: List[str] = [
+    BACKEND_CORS_ORIGINS: Union[List[str], str] = [
         "http://localhost:5173",
         "http://localhost:5174",
         "http://localhost:5175",
@@ -69,12 +73,25 @@ class Settings(BaseSettings):
     ]
     
     # Whitelisted OAuth Callback Redirect URIs to prevent Open Redirects
-    ALLOWED_REDIRECT_URIS: List[str] = [
+    ALLOWED_REDIRECT_URIS: Union[List[str], str] = [
         "http://localhost:5173/auth/google/callback",
         "http://localhost:5173/auth/github/callback",
         "http://127.0.0.1:5173/auth/google/callback",
         "http://127.0.0.1:5173/auth/github/callback",
     ]
+
+    @field_validator("BACKEND_CORS_ORIGINS", "ALLOWED_REDIRECT_URIS", mode="before")
+    @classmethod
+    def _parse_origins_list(cls, v: Any) -> List[str]:
+        if isinstance(v, str):
+            v = v.strip()
+            if v.startswith("[") and v.endswith("]"):
+                try:
+                    return json.loads(v)
+                except Exception:
+                    pass
+            return [item.strip() for item in v.split(",") if item.strip()]
+        return v
 
     # Database
     # ── PRODUCTION NOTE ────────────────────────────────────────────────────────
@@ -90,14 +107,14 @@ class Settings(BaseSettings):
     @property
     def ASYNC_DATABASE_URL(self) -> str:
         url = self.DATABASE_URL
+        if url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql://", 1)
         if url.startswith("postgresql://"):
-            url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+            return url.replace("postgresql://", "postgresql+asyncpg://", 1)
         elif url.startswith("postgresql+psycopg2://"):
-            url = url.replace("postgresql+psycopg2://", "postgresql+asyncpg://", 1)
+            return url.replace("postgresql+psycopg2://", "postgresql+asyncpg://", 1)
         elif url.startswith("sqlite://"):
-            url = url.replace("sqlite://", "sqlite+aiosqlite://", 1)
-        if "sslmode=" in url:
-            url = url.replace("sslmode=", "ssl=")
+            return url.replace("sqlite://", "sqlite+aiosqlite://", 1)
         return url
 
     # Redis

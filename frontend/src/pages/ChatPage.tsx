@@ -9,7 +9,7 @@ import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { useChatStore, getChatTimestamp } from '../store/chatStore';
 import { useUIStore } from '../store/uiStore';
 import { useAuthStore } from '../store/authStore';
-import { apiRequest } from '../services/api';
+import { apiRequest, BASE_URL } from '../services/api';
 import { ProviderKeyManager } from '../services/providerKeyManager';
 import Logo from '../components/ui/Logo';
 import { Tooltip } from '../components/ui/Tooltip';
@@ -1421,7 +1421,7 @@ export default function ChatPage() {
           fd.append('file', docFile);
           fd.append('chat_id', chatId);
           uploads.push(
-            fetch('/api/v1/documents/upload', {
+            fetch(`${BASE_URL}/documents/upload`, {
               method: 'POST',
               headers: { Authorization: `Bearer ${token}` },
               body: fd,
@@ -1492,7 +1492,7 @@ export default function ChatPage() {
         'x-telemetry-enabled': String(isTelemetryOn),
       };
 
-      let res = await fetch(`/api/v1/chats/${chatId}/messages`, {
+      let res = await fetch(`${BASE_URL}/chats/${chatId}/messages`, {
         method: 'POST',
         headers: headersInit,
         body: JSON.stringify({
@@ -1507,13 +1507,13 @@ export default function ChatPage() {
 
       if (res.status === 401 && token) {
         try {
-          const refreshRes = await fetch('/api/v1/auth/refresh', { method: 'POST', credentials: 'include' });
+          const refreshRes = await fetch(`${BASE_URL}/auth/refresh`, { method: 'POST', credentials: 'include' });
           if (refreshRes.ok) {
             const refreshData = await refreshRes.json();
             const newToken = refreshData.access_token;
             if (user) useAuthStore.getState().login(newToken, user);
             headersInit['Authorization'] = `Bearer ${newToken}`;
-            res = await fetch(`/api/v1/chats/${chatId}/messages`, {
+            res = await fetch(`${BASE_URL}/chats/${chatId}/messages`, {
               method: 'POST',
               headers: headersInit,
               body: JSON.stringify({ content: payloadContent, model: activeModel, parent_message_id: userMsg.parent_id, images: imagesToSend }),
@@ -1847,7 +1847,7 @@ export default function ChatPage() {
         'x-api-keys': JSON.stringify(allKeys),
       };
 
-      let res = await fetch(`/api/v1/chats/${activeChatId}/messages`, {
+      let res = await fetch(`${BASE_URL}/chats/${activeChatId}/messages`, {
         method: 'POST',
         headers: headersInit,
         body: JSON.stringify({ content: payloadContent, model: activeModel, parent_message_id: newUserMsg.parent_id, images: imagesToSend }),
@@ -1856,13 +1856,13 @@ export default function ChatPage() {
 
       if (res.status === 401 && token) {
         try {
-          const refreshRes = await fetch('/api/v1/auth/refresh', { method: 'POST', credentials: 'include' });
+          const refreshRes = await fetch(`${BASE_URL}/auth/refresh`, { method: 'POST', credentials: 'include' });
           if (refreshRes.ok) {
             const refreshData = await refreshRes.json();
             const newToken = refreshData.access_token;
             if (user) useAuthStore.getState().login(newToken, user);
             headersInit['Authorization'] = `Bearer ${newToken}`;
-            res = await fetch(`/api/v1/chats/${activeChatId}/messages`, {
+            res = await fetch(`${BASE_URL}/chats/${activeChatId}/messages`, {
               method: 'POST',
               headers: headersInit,
               body: JSON.stringify({ content: payloadContent, model: activeModel, parent_message_id: newUserMsg.parent_id, images: imagesToSend }),
@@ -1987,7 +1987,7 @@ export default function ChatPage() {
         headersInit['x-api-keys'] = JSON.stringify(allKeys);
       }
 
-      const res = await fetch(`/api/v1/chats/${activeChatId}/messages`, {
+      const res = await fetch(`${BASE_URL}/chats/${activeChatId}/messages`, {
         method: 'POST',
         headers: headersInit,
         body: JSON.stringify({
@@ -3895,7 +3895,7 @@ function ChatFilesModal({ onClose, documents, onRefresh, token, chatId, onSucces
     if (chatId) formData.append('chat_id', chatId);
 
     try {
-      const response = await fetch('/api/v1/documents/upload', {
+      const response = await fetch(`${BASE_URL}/documents/upload`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
         body: formData
@@ -3920,7 +3920,7 @@ function ChatFilesModal({ onClose, documents, onRefresh, token, chatId, onSucces
   const handleDelete = async (docId: string, filename: string) => {
     if (!confirm(`Delete "${filename}"? This cannot be undone.`)) return;
     try {
-      const response = await fetch(`/api/v1/documents/${docId}`, {
+      const response = await fetch(`${BASE_URL}/documents/${docId}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -3934,7 +3934,7 @@ function ChatFilesModal({ onClose, documents, onRefresh, token, chatId, onSucces
 
   const handleDownload = async (docId: string, filename: string) => {
     try {
-      const response = await fetch(`/api/v1/documents/${docId}/download`, {
+      const response = await fetch(`${BASE_URL}/documents/${docId}/download`, {
         headers: {
           Authorization: `Bearer ${token}`
         }

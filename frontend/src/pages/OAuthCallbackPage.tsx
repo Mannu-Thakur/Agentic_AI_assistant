@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { apiRequest } from '../services/api';
 import { useAuthStore } from '../store/authStore';
@@ -9,8 +9,16 @@ export default function OAuthCallbackPage({ provider }: { provider: 'google' | '
   const [error, setError] = useState<string | null>(null);
   const loginStore = useAuthStore((state) => state.login);
   const navigate = useNavigate();
+  const exchangeInitiated = useRef(false);
 
   useEffect(() => {
+    // Check if provider returned an explicit error parameter
+    const errorParam = searchParams.get('error_description') || searchParams.get('error');
+    if (errorParam) {
+      setError(`${provider.toUpperCase()} authentication error: ${errorParam}`);
+      return;
+    }
+
     const code = searchParams.get('code');
     const state = searchParams.get('state');
     if (!code) {
@@ -18,27 +26,38 @@ export default function OAuthCallbackPage({ provider }: { provider: 'google' | '
       return;
     }
 
+    // Prevent double execution in React 18 StrictMode
+    if (exchangeInitiated.current) {
+      return;
+    }
+    exchangeInitiated.current = true;
+
     async function exchangeCode() {
       try {
         // Build the same redirect_uri that was used during OAuth initiation
         const currentOrigin = window.location.origin;
         const redirectUri = encodeURIComponent(`${currentOrigin}/auth/${provider}/callback`);
+        const encodedCode = encodeURIComponent(code!);
+        const encodedState = state ? encodeURIComponent(state) : '';
 
         // Exchange authorization code for access token on backend
-        let callbackUrl = `/auth/oauth/${provider}/callback?code=${code}&redirect_uri=${redirectUri}`;
-        if (state) {
-          callbackUrl += `&state=${state}`;
+        let callbackUrl = `/auth/oauth/${provider}/callback?code=${encodedCode}&redirect_uri=${redirectUri}`;
+        if (encodedState) {
+          callbackUrl += `&state=${encodedState}`;
         }
         
         const data = await apiRequest(
           callbackUrl,
           { method: 'GET' }
         );
-        
-        // Fetch user profile info using the token
-        const user = await apiRequest('/auth/me', {
-          headers: { Authorization: `Bearer ${data.access_token}` }
-        });
+
+        // Retrieve user profile: use user from exchange payload if available, else fetch via /auth/me
+        let user = data.user;
+        if (!user) {
+          user = await apiRequest('/auth/me', {
+            headers: { Authorization: `Bearer ${data.access_token}` }
+          });
+        }
         
         // Save auth details in store (remember by default for OAuth)
         loginStore(data.access_token, user, true, data.expires_in);

@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Bot, User, Loader2, AlertCircle, Lock, ExternalLink, Copy, Check, Radio } from 'lucide-react';
+import { BASE_URL } from '../services/api';
+
 
 interface SharedMessage {
   id: string;
@@ -68,7 +70,7 @@ export default function SharedChatPage() {
   const fetchChat = async (id: string, showLoadingSpinner = false) => {
     if (showLoadingSpinner) setLoading(true);
     try {
-      const res = await fetch(`/api/v1/chats/shared/${id}`);
+      const res = await fetch(`${BASE_URL}/chats/shared/${id}`);
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.detail || `HTTP ${res.status}`);

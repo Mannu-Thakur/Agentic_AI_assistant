@@ -16,7 +16,7 @@ import {
   Database, Layers, Scissors, HardDrive, Plus, Monitor,
   Sun, Moon, Globe, Type, Archive, Link2, RotateCcw
 } from 'lucide-react';
-import { apiRequest } from '../services/api';
+import { apiRequest, BASE_URL } from '../services/api';
 import { ProviderKeyManager } from '../services/providerKeyManager';
 
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -1101,7 +1101,7 @@ export default function SettingsPage() {
     formData.append('file', file);
     try {
       startIngestionProgress(file.name);
-      const response = await fetch('/api/v1/documents/upload', {
+      const response = await fetch(`${BASE_URL}/documents/upload`, {
         method: 'POST',
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         body: formData,

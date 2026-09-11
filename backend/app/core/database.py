@@ -31,6 +31,8 @@ def _is_sqlite(url: str) -> bool:
 
 def _build_sync_engine():
     url = settings.DATABASE_URL
+    if url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql://", 1)
     if url.startswith("postgresql+asyncpg://"):
         url = url.replace("postgresql+asyncpg://", "postgresql+psycopg2://", 1)
     if _is_sqlite(url):
@@ -56,8 +58,17 @@ def _build_async_engine():
             connect_args={"check_same_thread": False, "timeout": 30},
         )
     # PostgreSQL: full production pool configuration
-    # pool_recycle=1800: recycle connections every 30 min to avoid stale connections
-    # pool_timeout=10: raise after 10 s if no connection available (prevents request queuing)
+    # For asyncpg, query params like sslmode=require or channel_binding=require
+    # cause TypeError: connect() got an unexpected keyword argument 'sslmode'.
+    # asyncpg expects connect_args={"ssl": "require"}.
+    connect_args = {}
+    if "sslmode=require" in url or "ssl=require" in url or "neon.tech" in url:
+        connect_args["ssl"] = "require"
+    if "?" in url:
+        base_url, query = url.split("?", 1)
+        params = [p for p in query.split("&") if not p.startswith("sslmode=") and not p.startswith("channel_binding=") and not p.startswith("ssl=")]
+        url = base_url + ("?" + "&".join(params) if params else "")
+
     return create_async_engine(
         url,
         pool_pre_ping=True,
@@ -65,6 +76,7 @@ def _build_async_engine():
         max_overflow=20,
         pool_recycle=1800,
         pool_timeout=10,
+        connect_args=connect_args,
     )
 
 

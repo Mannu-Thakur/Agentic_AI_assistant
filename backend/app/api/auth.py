@@ -143,7 +143,7 @@ async def login(
         value=refresh_token,
         httponly=True,
         max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 3600,
-        samesite="lax",
+        samesite=settings.COOKIE_SAMESITE,
         secure=request.url.scheme == "https" or settings.ENVIRONMENT in ("staging", "production"),   
     )
     
@@ -224,7 +224,7 @@ async def refresh_token(request: Request, response: Response, db: AsyncSession =
         value=new_refresh_token,
         httponly=True,
         max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 3600,
-        samesite="lax",
+        samesite=settings.COOKIE_SAMESITE,
         secure=request.url.scheme == "https" or settings.ENVIRONMENT in ("staging", "production"),
     )
     
@@ -266,7 +266,7 @@ async def logout(
         key="refresh_token",
         httponly=True,
         samesite="lax",
-        secure=True if not settings.ENABLE_MOCK_OAUTH else False
+        secure=request.url.scheme == "https" or settings.ENVIRONMENT in ("staging", "production")
     )
     return {"detail": "Successfully logged out."}
 
@@ -359,7 +359,7 @@ async def google_callback(
             getattr(settings, "ENVIRONMENT", "unknown")
         )
         profile = {
-            "email": "mockuser@mock.invalid",
+            "email": "mockuser@example.com",
             "name": "Mock User (Dev Only)",
             "email_verified": True,
             "picture": "https://example.com/avatar.png"
@@ -476,13 +476,14 @@ async def google_callback(
         value=refresh_token,
         httponly=True,
         max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 3600,
-        samesite="lax",
-        secure=True if not settings.ENABLE_MOCK_OAUTH else False,
+        samesite=settings.COOKIE_SAMESITE,
+        secure=request.url.scheme == "https" or settings.ENVIRONMENT in ("staging", "production"),
     )
     
     return Token(
         access_token=access_token,
-        expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+        expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        user=UserOut.model_validate(user)
     )
 
 @router.get("/oauth/github")
@@ -490,8 +491,15 @@ async def github_login(redirect_uri: Optional[str] = None):
     """
     Redirects the user to GitHub OAuth consent screen.
     """
-    from app.core.security import generate_state_token, store_oauth_state
+    from app.core.security import generate_state_token, store_oauth_state, is_safe_redirect_url
     from urllib.parse import urlencode
+
+    if redirect_uri and not is_safe_redirect_url(redirect_uri):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The redirect_uri is not whitelisted. Open redirect blocked."
+        )
+
     state = generate_state_token()
     await store_oauth_state(state)
 
@@ -524,9 +532,15 @@ async def github_callback(
     """
     Exchanges code for GitHub profile and logs user in.
     """
-    from app.core.security import verify_oauth_state
+    from app.core.security import verify_oauth_state, is_safe_redirect_url
     from app.services.audit_service import AuditService
     client_ip = request.client.host if request.client else "unknown"
+
+    if redirect_uri and not is_safe_redirect_url(redirect_uri):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The redirect_uri is not whitelisted. Open redirect blocked."
+        )
 
     if not state or not await verify_oauth_state(state):
         await AuditService.log_event(db, None, "oauth_failure", {"provider": "github", "reason": "Invalid or missing OAuth state"}, client_ip)
@@ -557,7 +571,7 @@ async def github_callback(
             getattr(settings, "ENVIRONMENT", "unknown")
         )
         profile = {
-            "email": "mockgithub@mock.invalid",
+            "email": "mockgithub@example.com",
             "name": "Mock GitHub User (Dev Only)",
             "login": "mockuser",
             "avatar_url": "https://example.com/avatar.png"
@@ -689,13 +703,14 @@ async def github_callback(
         value=refresh_token,
         httponly=True,
         max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 3600,
-        samesite="lax",
-        secure=True if not settings.ENABLE_MOCK_OAUTH else False,
+        samesite=settings.COOKIE_SAMESITE,
+        secure=request.url.scheme == "https" or settings.ENVIRONMENT in ("staging", "production"),
     )
     
     return Token(
         access_token=access_token,
-        expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+        expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        user=UserOut.model_validate(user)
     )
 
 

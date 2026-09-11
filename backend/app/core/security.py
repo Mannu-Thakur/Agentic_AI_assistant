@@ -173,26 +173,62 @@ def generate_state_token() -> str:
     """Generates a secure state parameter for OAuth flow."""
     return secrets.token_urlsafe(32)
 
-# In-memory fallback for OAuth state when Redis is unavailable
+# In-memory and file-backed fallback for OAuth state when Redis is unavailable
 # Maps state token -> expiry datetime
 _oauth_state_store: dict = {}
+_OAUTH_STATE_FILE = Path(__file__).resolve().parent.parent.parent / ".oauth_states_cache.json"
+
+
+def _load_persistent_oauth_states() -> dict:
+    try:
+        if _OAUTH_STATE_FILE.is_file():
+            with open(_OAUTH_STATE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data if isinstance(data, dict) else {}
+    except Exception:
+        pass
+    return {}
+
+
+def _save_persistent_oauth_states(states: dict) -> None:
+    try:
+        with open(_OAUTH_STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(states, f)
+    except Exception:
+        pass
+
 
 async def store_oauth_state(state: str, ttl: int = 600) -> None:
-    """Stores generated OAuth state in Redis (with in-memory fallback when Redis is down)."""
-    # Always store in memory as a reliable fallback
-    _oauth_state_store[state] = datetime.utcnow() + timedelta(seconds=ttl)
+    """Stores generated OAuth state in Redis (with in-memory & file-backed fallback when Redis is down)."""
+    expiry_dt = datetime.utcnow() + timedelta(seconds=ttl)
+    _oauth_state_store[state] = expiry_dt
+
+    try:
+        now_iso = datetime.utcnow().isoformat()
+        states = _load_persistent_oauth_states()
+        states = {k: v for k, v in states.items() if isinstance(v, str) and v > now_iso}
+        states[state] = expiry_dt.isoformat()
+        _save_persistent_oauth_states(states)
+    except Exception:
+        pass
+
     try:
         from app.core.redis_client import get_redis
         r = await get_redis()
         if r:
             await r.set(f"oauth_state:{state}", "1", ex=ttl)
     except Exception:
-        pass  # Memory store is the fallback
+        pass  # Memory + file store is the fallback
+
 
 async def verify_oauth_state(state: str) -> bool:
-    """Verifies and consumes the stored OAuth state parameter (Redis with in-memory fallback)."""
-    # Purge expired states from memory store
+    """Verifies and consumes the stored OAuth state parameter (Redis with in-memory & persistent fallback)."""
+    if not state or not isinstance(state, str):
+        return False
     now = datetime.utcnow()
+    now_iso = now.isoformat()
+
+    # Purge expired states from memory store
     expired = [k for k, v in _oauth_state_store.items() if v <= now]
     for k in expired:
         _oauth_state_store.pop(k, None)
@@ -205,14 +241,38 @@ async def verify_oauth_state(state: str) -> bool:
             if val is not None:
                 await r.delete(f"oauth_state:{state}")
                 _oauth_state_store.pop(state, None)  # also clean memory
+                try:
+                    p_states = _load_persistent_oauth_states()
+                    if state in p_states:
+                        p_states.pop(state, None)
+                        _save_persistent_oauth_states(p_states)
+                except Exception:
+                    pass
                 return True
     except Exception:
         pass
 
-    # Fallback: check in-memory store
+    # Check in-memory store
     if state in _oauth_state_store and _oauth_state_store[state] > now:
         del _oauth_state_store[state]
+        try:
+            p_states = _load_persistent_oauth_states()
+            if state in p_states:
+                p_states.pop(state, None)
+                _save_persistent_oauth_states(p_states)
+        except Exception:
+            pass
         return True
+
+    # Fallback: check file-backed store (survives worker reload without Redis)
+    try:
+        p_states = _load_persistent_oauth_states()
+        if state in p_states and p_states[state] > now_iso:
+            p_states.pop(state, None)
+            _save_persistent_oauth_states(p_states)
+            return True
+    except Exception:
+        pass
 
     return False
 

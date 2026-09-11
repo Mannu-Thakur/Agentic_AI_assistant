@@ -100,8 +100,8 @@ export default function LoginPage() {
           setOauthLoading(null);
         }
       })
-      .catch(() => {
-        setError(`Unable to connect to ${provider} authentication provider.`);
+      .catch((err: any) => {
+        setError(err.message || `Unable to connect to ${provider} authentication provider.`);
         setOauthLoading(null);
       });
   };
