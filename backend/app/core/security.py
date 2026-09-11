@@ -73,6 +73,7 @@ def is_safe_redirect_url(url: str) -> bool:
     """
     if not url:
         return True
+    import re
     from urllib.parse import urlparse
     parsed = urlparse(url)
     
@@ -84,15 +85,22 @@ def is_safe_redirect_url(url: str) -> bool:
         # Relative URLs are safe
         return True
         
-    # Check against settings CORS origins or ALLOWED_REDIRECT_URIS
-    origin = f"{parsed.scheme}://{parsed.netloc}"
-    allowed_domains = set(settings.BACKEND_CORS_ORIGINS) | set(settings.ALLOWED_REDIRECT_URIS)
+    origin = f"{parsed.scheme}://{parsed.netloc}".lower().rstrip("/")
     
-    # Also parse ALLOWED_REDIRECT_URIS individually
-    for allowed in settings.ALLOWED_REDIRECT_URIS:
+    # Allow any official Vercel app domain
+    if re.match(r"^https://[a-z0-9\-_.]+\.vercel\.app$", origin):
+        return True
+        
+    # Check against settings CORS origins, ALLOWED_REDIRECT_URIS, or FRONTEND_URL
+    raw_allowed = list(settings.BACKEND_CORS_ORIGINS) + list(settings.ALLOWED_REDIRECT_URIS)
+    if settings.FRONTEND_URL:
+        raw_allowed.append(settings.FRONTEND_URL)
+        
+    allowed_domains = set()
+    for allowed in raw_allowed:
         p_all = urlparse(allowed)
         if p_all.netloc:
-            allowed_domains.add(f"{p_all.scheme}://{p_all.netloc}")
+            allowed_domains.add(f"{p_all.scheme}://{p_all.netloc}".lower().rstrip("/"))
             
     return origin in allowed_domains
 
