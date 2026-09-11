@@ -7,12 +7,10 @@
     {
       "source": "/api/:path*",
       "destination": "https://ai-assistant-backend-6lnk.onrender.com/api/:path*"
-    }
-  ],
-  "routes": [
+    },
     {
-      "src": "/(.*)",
-      "dest": "/index.html"
+      "source": "/(.*)",
+      "destination": "/index.html"
     }
   ],
   "headers": [
