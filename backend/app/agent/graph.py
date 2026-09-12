@@ -121,7 +121,7 @@ def route_retrieval(state: AgentState) -> str:
     """Self-RAG router: skip or execute retrieval."""
     if state.get("needs_retrieval", True):
         return "retrieve_context"
-    return "grade_documents"
+    return "generate_response"
 
 
 def route_after_grading(state: AgentState) -> str:
@@ -223,13 +223,13 @@ workflow.add_edge("parallel_tool_execution", "query_rewriter")
 # query_rewriter → check_retrieval
 workflow.add_edge("query_rewriter", "check_retrieval")
 
-# check_retrieval → retrieve_context OR grade_documents (Self-RAG)
+# check_retrieval → retrieve_context OR generate_response (Self-RAG)
 workflow.add_conditional_edges(
     "check_retrieval",
     route_retrieval,
     {
-        "retrieve_context": "retrieve_context",
-        "grade_documents":  "grade_documents",
+        "retrieve_context":  "retrieve_context",
+        "generate_response": "generate_response",
     },
 )
 

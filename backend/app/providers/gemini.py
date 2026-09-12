@@ -278,8 +278,21 @@ class GeminiProvider(BaseLLMProvider):
                 )
 
             elif response.status_code in (400, 404):
-                # Invalid/deprecated model ID — mark unavailable, do NOT retry
-                registry.mark_model_unavailable(self.provider_name, model)
+                is_model_unavailable_error = (
+                    response.status_code == 404
+                    or any(kw in response.text.lower() for kw in ("not found", "model_not_found", "unknown model", "decommissioned"))
+                )
+                if is_model_unavailable_error:
+                    logger.warning(
+                        f"[GeminiProvider] Model '{model}' returned HTTP {response.status_code} (model unavailable). "
+                        "Marking model unavailable and routing to fallback."
+                    )
+                    registry.mark_model_unavailable(self.provider_name, model)
+                else:
+                    logger.warning(
+                        f"[GeminiProvider] Model '{model}' returned HTTP {response.status_code}: {response.text[:200]}. "
+                        "Routing to fallback without marking model unavailable."
+                    )
                 await cb.record_failure("model_invalid", no_trip=True)  # bad model ID, not broken provider
                 metrics.record_call_failure(self.provider_name, model, "model_invalid", response.status_code)
                 raise ProviderModelUnavailableError(
@@ -422,13 +435,27 @@ class GeminiProvider(BaseLLMProvider):
                             )
 
                         elif response.status_code in (400, 404):
-                            registry.mark_model_unavailable(self.provider_name, model)
+                            error_body = (await response.aread()).decode('utf-8', errors='ignore')
+                            is_model_unavailable_error = (
+                                response.status_code == 404
+                                or any(kw in error_body.lower() for kw in ("not found", "model_not_found", "unknown model", "decommissioned"))
+                            )
+                            if is_model_unavailable_error:
+                                logger.warning(
+                                    f"[GeminiProvider] Streaming model '{model}' returned HTTP {response.status_code} (model unavailable). "
+                                    "Marking model unavailable and routing to fallback."
+                                )
+                                registry.mark_model_unavailable(self.provider_name, model)
+                            else:
+                                logger.warning(
+                                    f"[GeminiProvider] Streaming model '{model}' returned HTTP {response.status_code}: {error_body[:200]}. "
+                                    "Routing to fallback without marking model unavailable."
+                                )
                             await cb.record_failure("model_invalid", no_trip=True)  # bad model ID, not broken provider
                             metrics.record_call_failure(self.provider_name, model, "model_invalid", response.status_code)
-                            error_body = await response.aread()
                             raise ProviderModelUnavailableError(
                                 f"Gemini streaming error {response.status_code} for model '{model}': "
-                                f"{error_body.decode('utf-8', errors='ignore')[:300]}"
+                                f"{error_body[:300]}"
                             )
 
                         elif response.status_code in (500, 502, 503, 504):

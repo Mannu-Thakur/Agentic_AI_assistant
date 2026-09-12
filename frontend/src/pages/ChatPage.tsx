@@ -937,9 +937,7 @@ export default function ChatPage() {
     // Groq (Free, Fast)
     { id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B',         provider: 'Groq',          apiProvider: 'groq',     icon: Cpu,      badge: 'Fast & Free',  desc: 'Best open-source model on Groq' },
     { id: 'llama-3.1-8b-instant',    name: 'Llama 3.1 8B Instant',  provider: 'Groq',          apiProvider: 'groq',     icon: Cpu,      badge: 'Fastest Free', desc: 'Ultra-fast small model' },
-    { id: 'llama3-70b-8192',         name: 'Llama 3 70B',           provider: 'Groq',          apiProvider: 'groq',     icon: Cpu,      badge: '',             desc: 'Llama 3 70B on Groq' },
     { id: 'gemma2-9b-it',            name: 'Gemma 2 9B',            provider: 'Groq',          apiProvider: 'groq',     icon: Cpu,      badge: '',             desc: 'Google Gemma 2 on Groq' },
-    { id: 'mixtral-8x7b-32768',      name: 'Mixtral 8x7B',          provider: 'Groq',          apiProvider: 'groq',     icon: Cpu,      badge: '',             desc: 'Mixtral MoE — long context' },
   ];
 
   const verifiedProviderSet = new Set(

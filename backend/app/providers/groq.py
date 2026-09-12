@@ -231,7 +231,7 @@ class GroqProvider(BaseLLMProvider):
             "stream":      False,
         }
 
-        if tools:
+        if tools and "gemma" not in model.lower():
             formatted_tools = []
             for t in tools:
                 formatted_tools.append({
@@ -296,12 +296,21 @@ class GroqProvider(BaseLLMProvider):
                 )
 
             elif response.status_code in (400, 404):
-                # BUG FIX: logger was undefined here in the original file (caused NameError crash)
-                logger.warning(
-                    f"[GroqProvider] Model '{payload['model']}' returned HTTP {response.status_code}. "
-                    "Marking model unavailable and routing to fallback."
+                is_decommissioned_or_not_found = (
+                    response.status_code == 404
+                    or any(kw in response.text.lower() for kw in ("decommissioned", "not found", "model_not_found", "unknown model"))
                 )
-                registry.mark_model_unavailable(self.provider_name, model)
+                if is_decommissioned_or_not_found:
+                    logger.warning(
+                        f"[GroqProvider] Model '{payload['model']}' returned HTTP {response.status_code} (model unavailable/decommissioned). "
+                        "Marking model unavailable and routing to fallback."
+                    )
+                    registry.mark_model_unavailable(self.provider_name, model)
+                else:
+                    logger.warning(
+                        f"[GroqProvider] Model '{payload['model']}' returned HTTP {response.status_code}: {response.text[:200]}. "
+                        "Routing to fallback without marking model unavailable."
+                    )
                 await cb.record_failure("model_invalid", no_trip=True)  # bad model ID, not broken provider
                 metrics.record_call_failure(self.provider_name, model, "model_invalid", response.status_code)
                 raise ProviderModelUnavailableError(
@@ -417,7 +426,7 @@ class GroqProvider(BaseLLMProvider):
             "stream":      True,
         }
 
-        if tools:
+        if tools and "gemma" not in model.lower():
             formatted_tools = []
             for t in tools:
                 formatted_tools.append({
@@ -469,17 +478,28 @@ class GroqProvider(BaseLLMProvider):
                             )
 
                         elif response.status_code in (400, 404):
-                            # BUG FIX: logger was undefined here in the original file
-                            logger.warning(
-                                f"[GroqProvider] Streaming model '{payload['model']}' "
-                                f"returned HTTP {response.status_code}. "
-                                "Marking model unavailable and routing to fallback."
+                            error_body = (await response.aread()).decode('utf-8', errors='ignore')
+                            is_decommissioned_or_not_found = (
+                                response.status_code == 404
+                                or any(kw in error_body.lower() for kw in ("decommissioned", "not found", "model_not_found", "unknown model"))
                             )
-                            registry.mark_model_unavailable(self.provider_name, model)
+                            if is_decommissioned_or_not_found:
+                                logger.warning(
+                                    f"[GroqProvider] Streaming model '{payload['model']}' "
+                                    f"returned HTTP {response.status_code} (model unavailable/decommissioned). "
+                                    "Marking model unavailable and routing to fallback."
+                                )
+                                registry.mark_model_unavailable(self.provider_name, model)
+                            else:
+                                logger.warning(
+                                    f"[GroqProvider] Streaming model '{payload['model']}' "
+                                    f"returned HTTP {response.status_code}: {error_body[:200]}. "
+                                    "Routing to fallback without marking model unavailable."
+                                )
                             await cb.record_failure("model_invalid", no_trip=True)  # bad model ID, not broken provider
                             metrics.record_call_failure(self.provider_name, model, "model_invalid", response.status_code)
                             raise ProviderModelUnavailableError(
-                                f"Groq streaming error {response.status_code} for model '{model}'."
+                                f"Groq streaming error {response.status_code} for model '{model}': {error_body[:300]}"
                             )
 
                         elif response.status_code in (500, 502, 503, 504):

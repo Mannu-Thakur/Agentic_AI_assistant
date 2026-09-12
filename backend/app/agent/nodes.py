@@ -2485,7 +2485,7 @@ async def grade_documents_node(
         if not is_private and (
             intent in (INTENT_WEB_SEARCH, INTENT_NEWS, INTENT_CURRENT_EVENTS, INTENT_FINANCE, INTENT_COMPLEX) or
             _freshness_in_empty or
-            intent in (INTENT_NORMAL_CHAT, INTENT_DOCUMENT_QA)
+            (intent == INTENT_DOCUMENT_QA and not is_private and _freshness_in_empty)
         ):
             if last_query:
                 logger.info(
@@ -2676,7 +2676,7 @@ async def grade_documents_node(
 
     # HYBRID QUERY FIX: also trigger web search if there are public sub-questions,
     # even when the overall query is private (is_private_doc_query=True)
-    if has_public_sub_questions and not should_search_web and intent not in (INTENT_MCP_TOOL, INTENT_CODE_EXECUTION, INTENT_MATH, INTENT_MEMORY_WRITE, INTENT_VISION):
+    if has_public_sub_questions and not should_search_web and intent not in (INTENT_NORMAL_CHAT, INTENT_MCP_TOOL, INTENT_CODE_EXECUTION, INTENT_MATH, INTENT_MEMORY_WRITE, INTENT_VISION):
         should_search_web = True
         logger.info(
             f"CRAG: Hybrid query detected — triggering web search for "

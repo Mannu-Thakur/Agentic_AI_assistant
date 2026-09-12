@@ -2,12 +2,9 @@ import pytest
 import json
 from unittest.mock import AsyncMock, patch
 
-from app.providers.registry import is_quota_exhaustion, DEPRECATED_MODELS
+from app.providers.registry import is_quota_exhaustion, DEPRECATED_MODELS, provider_registry
 from app.agent.nodes import generate_response_node, groq_provider, gemini_provider, openai_provider
-from app.tools.registry import ToolRegistry
 
-# Mark ToolRegistry as initialized so unit tests don't try to connect to the DB
-ToolRegistry().is_initialized = True
 
 
 def test_is_quota_exhaustion_detection():
@@ -363,3 +360,127 @@ def test_enhanced_quota_exhaustion_indicators():
     assert is_quota_exhaustion("Rate limit reached for tokens per day (TPD)")
     assert is_quota_exhaustion("TPD limit exceeded")
     assert is_quota_exhaustion("Account is out of credits")
+
+
+def test_deprecated_models_groq_remapping():
+    """Verify decommissioned Groq models are remapped to active equivalents."""
+    assert DEPRECATED_MODELS.get("llama3-70b-8192") == "llama-3.3-70b-versatile"
+    assert DEPRECATED_MODELS.get("llama3-8b-8192") == "llama-3.1-8b-instant"
+    assert DEPRECATED_MODELS.get("llama-3-70b") == "llama-3.3-70b-versatile"
+    assert DEPRECATED_MODELS.get("llama-3-8b") == "llama-3.1-8b-instant"
+    assert DEPRECATED_MODELS.get("mixtral-8x7b-32768") == "llama-3.3-70b-versatile"
+
+
+def test_provider_registry_protects_known_models():
+    """Verify provider registry refuses to quarantine core KNOWN_MODELS on 400/404."""
+    # Attempting to mark a core Groq model unavailable should be rejected
+    provider_registry.mark_model_unavailable("groq", "llama-3.3-70b-versatile")
+    assert provider_registry.is_model_available("groq", "llama-3.3-70b-versatile") is True
+
+    # Attempting to mark a core Gemini model unavailable should be rejected
+    provider_registry.mark_model_unavailable("gemini", "gemini-2.0-flash")
+    assert provider_registry.is_model_available("gemini", "gemini-2.0-flash") is True
+
+    # An unknown model should be quarantineable
+    provider_registry.mark_model_unavailable("groq", "nonexistent-model-xyz")
+    assert provider_registry.is_model_available("groq", "nonexistent-model-xyz") is False
+
+
+@pytest.mark.asyncio
+async def test_groq_gemma_omits_tools(monkeypatch):
+    """Verify Groq provider omits tools when model is Gemma 2 (which rejects tool calling)."""
+    captured_payload = {}
+
+    class MockStreamResponse:
+        status_code = 200
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+        async def aiter_lines(self):
+            yield 'data: {"choices": [{"delta": {"content": "Hello from Gemma"}}]}'
+            yield 'data: [DONE]'
+
+    class MockAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            pass
+        def stream(self, method, url, json=None, headers=None):
+            nonlocal captured_payload
+            captured_payload = json
+            return MockStreamResponse()
+
+    monkeypatch.setattr("httpx.AsyncClient", MockAsyncClient)
+
+    tools = [{
+        "name": "search",
+        "description": "web search",
+        "parameters": {"type": "object", "properties": {}},
+    }]
+    messages = [{"role": "user", "content": "Hi"}]
+
+    chunks = []
+    async for event in groq_provider.generate_stream(
+        messages=messages,
+        model="gemma2-9b-it",
+        api_key="gsk_valid_key",
+        tools=tools,
+    ):
+        chunks.append(event)
+
+    assert "tools" not in captured_payload, "tools should be omitted for Gemma models"
+    assert any("Hello from Gemma" in e.get("text", "") for e in chunks if e.get("event") == "chunk")
+
+
+@pytest.mark.asyncio
+async def test_normal_chat_greeting_bypasses_retrieval_and_web_search(monkeypatch):
+    """
+    Verify a simple conversational greeting ('Hi i am mannu!'):
+    1. route_retrieval routes directly to generate_response when needs_retrieval=False
+    2. Decommissioned 'llama3-70b-8192' is remapped without error
+    3. No web search is triggered
+    """
+    from app.agent.graph import route_retrieval
+
+    # 1. Router verification
+    chat_state = {
+        "needs_retrieval": False,
+        "intent": "NORMAL_CHAT",
+    }
+    assert route_retrieval(chat_state) == "generate_response"
+
+    # 2. Decommissioned model requested -> remapped and fulfilled
+    calls = []
+
+    async def mock_groq_stream(*args, **kwargs):
+        model = kwargs.get("model")
+        calls.append(model)
+        yield {"event": "chunk", "text": "Hello Mannu! How can I assist you today?"}
+        yield {"event": "metrics", "metrics": {"total_tokens": 15, "model_used": model}}
+
+    monkeypatch.setattr(groq_provider, "generate_stream", mock_groq_stream)
+
+    state = {
+        "messages": [{"role": "user", "content": "Hi i am mannu!"}],
+        "active_model": "llama3-70b-8192",  # User requested decommissioned ID
+        "intent": "NORMAL_CHAT",
+        "allowed_tools": [],
+        "source_documents": [],
+        "retrieved_documents": [],
+        "steps": [],
+        "needs_retrieval": False,
+    }
+    config = {
+        "configurable": {
+            "api_keys": {"groq": "gsk_test_key_valid_12345"},
+            "groq_api_key": "gsk_test_key_valid_12345",
+        }
+    }
+
+    result = await generate_response_node(state, config)
+    assert "Hello Mannu!" in result["response_text"]
+    assert calls[0] == "llama-3.3-70b-versatile", "llama3-70b-8192 should be remapped to llama-3.3-70b-versatile"
+

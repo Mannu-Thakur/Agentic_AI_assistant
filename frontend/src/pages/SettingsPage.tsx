@@ -120,9 +120,7 @@ const ALL_MODELS = [
   // ── Groq (Free, Fast) ─────────────────────────────────────────────────────
   { id: 'llama-3.3-70b-versatile',     label: 'Llama 3.3 70B',         provider: 'Groq',          apiProvider: 'groq',   badge: 'Fast & Free' },
   { id: 'llama-3.1-8b-instant',        label: 'Llama 3.1 8B Instant',  provider: 'Groq',          apiProvider: 'groq',   badge: 'Fastest Free' },
-  { id: 'llama3-70b-8192',             label: 'Llama 3 70B',           provider: 'Groq',          apiProvider: 'groq',   badge: '' },
   { id: 'gemma2-9b-it',                label: 'Gemma 2 9B',            provider: 'Groq',          apiProvider: 'groq',   badge: '' },
-  { id: 'mixtral-8x7b-32768',          label: 'Mixtral 8x7B',          provider: 'Groq',          apiProvider: 'groq',   badge: '' },
 ];
 
 

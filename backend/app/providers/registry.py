@@ -43,7 +43,12 @@ DEPRECATED_MODELS: Dict[str, str] = {
     # ── Gemini — retired legacy models ───────────────────────────────────────
     "gemini-1.0-pro":                      "gemini-2.0-flash",
     "gemini-pro":                          "gemini-2.0-flash",
-    # ── Groq — deprecated model IDs ──────────────────────────────────────────
+    # ── Groq — deprecated / decommissioned model IDs ──────────────────────────
+    "llama3-70b-8192":                     "llama-3.3-70b-versatile",
+    "llama3-8b-8192":                      "llama-3.1-8b-instant",
+    "llama-3-70b":                         "llama-3.3-70b-versatile",
+    "llama-3-8b":                          "llama-3.1-8b-instant",
+    "llama-3.1-70b-versatile":             "llama-3.3-70b-versatile",
     "llama-4-scout-17b-16e-instruct":      "llama-3.3-70b-versatile",
     "meta-llama/llama-4-scout-17b-16e-instruct": "llama-3.3-70b-versatile",
     "llama2-70b-4096":                     "llama-3.3-70b-versatile",
@@ -253,17 +258,31 @@ class ProviderRegistry:
 
     def mark_model_unavailable(self, provider: str, model_id: str) -> None:
         """
-        Mark a model ID as unavailable for a provider (e.g. after HTTP 400/404).
+        Mark a model ID as unavailable for a provider (e.g. after HTTP 404).
+        Protected core models in KNOWN_MODELS are NEVER quarantined.
         Subsequent calls to is_model_available() will return False for this pair.
         """
+        # Protect known core models from being quarantined
+        known = KNOWN_MODELS.get(provider, [])
+        if model_id in known or any(model_id == km or model_id.endswith(f"/{km}") for km in known):
+            logger.warning(
+                f"[ProviderRegistry] Refusing to mark core known model '{model_id}' "
+                f"as unavailable for provider '{provider}'."
+            )
+            return
+
         self._unavailable_models.setdefault(provider, set()).add(model_id)
         logger.warning(
             f"[ProviderRegistry] Model '{model_id}' marked UNAVAILABLE "
-            f"for provider '{provider}' (HTTP 400/404 received)."
+            f"for provider '{provider}'."
         )
 
     def is_model_available(self, provider: str, model_id: str) -> bool:
         """Return False if this model was previously marked unavailable."""
+        # Core known models are always considered available
+        known = KNOWN_MODELS.get(provider, [])
+        if model_id in known or any(model_id == km or model_id.endswith(f"/{km}") for km in known):
+            return True
         return model_id not in self._unavailable_models.get(provider, set())
 
     # ── Provider availability ─────────────────────────────────────────────────
