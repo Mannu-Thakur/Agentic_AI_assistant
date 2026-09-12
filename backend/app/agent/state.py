@@ -172,3 +172,7 @@ class AgentState(TypedDict):
     # Surface impossible or corrupt execution combinations to the Dev HUD
     inconsistencies: List[str]
 
+    # ── Client Context (passed via HTTP headers, NOT polluted into user message)
+    client_time: Optional[str]
+    client_location: Optional[str]
+

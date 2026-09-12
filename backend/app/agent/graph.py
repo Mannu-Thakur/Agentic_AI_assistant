@@ -104,15 +104,19 @@ def route_after_classify(state: AgentState) -> str:
         return "clarification"
     intent = state.get("intent", INTENT_NORMAL_CHAT)
     is_private = state.get("is_private_doc_query", False)
+    images = state.get("images") or []
     if intent == INTENT_MEMORY_WRITE:
         return "memory_write"
-    if intent in (INTENT_WEB_SEARCH, INTENT_NEWS, INTENT_CURRENT_EVENTS) and not is_private:
+    # If images are present and intent is WEB_SEARCH, do not execute text-only search directly
+    # because the entity name/context is inside the image. Routing through check_retrieval ->
+    # generate_response allows the vision LLM to inspect the image and call tavily_search dynamically.
+    if intent in (INTENT_WEB_SEARCH, INTENT_NEWS, INTENT_CURRENT_EVENTS) and not is_private and not images:
         return "execute_web_search"
     if intent in (
         INTENT_NORMAL_CHAT,
         INTENT_DOCUMENT_QA,
         INTENT_VISION,
-    ):
+    ) or (images and intent in (INTENT_WEB_SEARCH, INTENT_NEWS, INTENT_CURRENT_EVENTS)):
         return "check_retrieval"
     return "plan"
 

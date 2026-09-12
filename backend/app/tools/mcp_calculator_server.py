@@ -4,6 +4,14 @@ import math
 import os
 import ast
 
+if sys.platform == "win32" and sys.version_info >= (3, 7):
+    try:
+        sys.stdin.reconfigure(encoding="utf-8")
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 # Database file in the same folder
 STORE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp_store.json")
 

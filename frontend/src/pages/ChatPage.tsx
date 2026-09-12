@@ -245,12 +245,13 @@ function sanitizeAssistantContent(str: string): string {
 }
 
 function parseUserMessageFiles(content: string) {
-  let cleanPrompt = decodeHtmlEntities(content);
+  let cleanPrompt = decodeHtmlEntities(content || '');
   let refTitle: string | null = null;
 
   // Strip injected System Context and User Location Context tags
-  cleanPrompt = cleanPrompt.replace(/\[System Context:[^\]]*\]\n?/gi, '');
-  cleanPrompt = cleanPrompt.replace(/\[User Location Context:[^\]]*\]\n?/gi, '');
+  cleanPrompt = cleanPrompt.replace(/\[System Context:[^\]]*\]\s*/gi, '');
+  cleanPrompt = cleanPrompt.replace(/\[System Context\]\s*/gi, '');
+  cleanPrompt = cleanPrompt.replace(/\[User Location Context:[^\]]*\]\s*/gi, '');
   cleanPrompt = cleanPrompt.replace(/function\s*=>\s*\{[^{}]*"query"[^{}]*\}\s*(?:<\/function>)?/gi, '');
   cleanPrompt = cleanPrompt.replace(/<\/?function\b[^>]*>/gi, '');
   cleanPrompt = cleanPrompt.replace(/<>?\s*\{[^{}]*"query"[^{}]*\}\s*<\/>?/gi, '');
@@ -1461,12 +1462,9 @@ export default function ChatPage() {
       let payloadContent = language && language !== 'Auto-detect' ? `${trimmed}\n\n(Note: Please reply in ${language})` : trimmed;
       const isLocationOn = localStorage.getItem('omni_location_enabled') !== 'false';
       const userLoc = localStorage.getItem('omni_user_location');
-      if (isLocationOn && userLoc && userLoc !== 'Your Location' && userLoc.trim().length > 0) {
-        payloadContent = `[User Location Context: ${userLoc}]\n${payloadContent}`;
-      }
       const _now = new Date();
-      const _dateCtx = `[System Context: The current date and time is ${_now.toLocaleString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true })} (UTC${_now.getTimezoneOffset() <= 0 ? '+' : '-'}${String(Math.floor(Math.abs(_now.getTimezoneOffset()) / 60)).padStart(2,'0')}:${String(Math.abs(_now.getTimezoneOffset()) % 60).padStart(2,'0')})]`;
-      payloadContent = `${_dateCtx}\n${payloadContent}`;
+      const _clientTime = `${_now.toLocaleString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true })} (UTC${_now.getTimezoneOffset() <= 0 ? '+' : '-'}${String(Math.floor(Math.abs(_now.getTimezoneOffset()) / 60)).padStart(2,'0')}:${String(Math.abs(_now.getTimezoneOffset()) % 60).padStart(2,'0')})`;
+
       if (connectedChat) {
         let refMsgs = useChatStore.getState().messageCache[connectedChat.id];
         if (!refMsgs) {
@@ -1490,7 +1488,13 @@ export default function ChatPage() {
         Authorization: `Bearer ${token}`,
         'x-api-keys': JSON.stringify(allKeys),
         'x-telemetry-enabled': String(isTelemetryOn),
+        'x-client-time': _clientTime,
+        'x-client-timezone': Intl.DateTimeFormat().resolvedOptions().timeZone || '',
       };
+      if (isLocationOn && userLoc && userLoc !== 'Your Location' && userLoc.trim().length > 0) {
+        headersInit['x-client-location'] = userLoc.trim();
+      }
+
 
       let res = await fetch(`${BASE_URL}/chats/${chatId}/messages`, {
         method: 'POST',
@@ -1662,7 +1666,7 @@ export default function ChatPage() {
   const handleStartEdit = (msg: import('../types/chat').Message) => {
     setEditingMsgId(msg.id);
     const { prompt: userPrompt } = parseUserMessageFiles(msg.content);
-    setEditValue(decodeHtmlEntities(userPrompt || msg.content));
+    setEditValue(decodeHtmlEntities(userPrompt !== undefined ? userPrompt : ''));
 
     let initialImages: { id: string; base64: string; mimeType: string; previewUrl: string }[] = [];
     if (msg.images && msg.images.length > 0) {
@@ -1838,14 +1842,17 @@ export default function ChatPage() {
 
     try {
       const _editNow = new Date();
-      const _editDateCtx = `[System Context: The current date and time is ${_editNow.toLocaleString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true })} (UTC${_editNow.getTimezoneOffset() <= 0 ? '+' : '-'}${String(Math.floor(Math.abs(_editNow.getTimezoneOffset()) / 60)).padStart(2,'0')}:${String(Math.abs(_editNow.getTimezoneOffset()) % 60).padStart(2,'0')})]`;
-      const payloadContent = `${_editDateCtx}\n${language && language !== 'Auto-detect' ? `${newText}\n\n(Note: Please reply in ${language})` : newText}`;
+      const _editClientTime = `${_editNow.toLocaleString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true })} (UTC${_editNow.getTimezoneOffset() <= 0 ? '+' : '-'}${String(Math.floor(Math.abs(_editNow.getTimezoneOffset()) / 60)).padStart(2,'0')}:${String(Math.abs(_editNow.getTimezoneOffset()) % 60).padStart(2,'0')})`;
+      const payloadContent = language && language !== 'Auto-detect' ? `${newText}\n\n(Note: Please reply in ${language})` : newText;
       const allKeys = ProviderKeyManager.getAllKeys();
       const headersInit: Record<string, string> = {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`,
         'x-api-keys': JSON.stringify(allKeys),
+        'x-client-time': _editClientTime,
+        'x-client-timezone': Intl.DateTimeFormat().resolvedOptions().timeZone || '',
       };
+
 
       let res = await fetch(`${BASE_URL}/chats/${activeChatId}/messages`, {
         method: 'POST',
@@ -1976,16 +1983,19 @@ export default function ChatPage() {
 
     try {
       const _retryNow = new Date();
-      const _retryDateCtx = `[System Context: The current date and time is ${_retryNow.toLocaleString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true })} (UTC${_retryNow.getTimezoneOffset() <= 0 ? '+' : '-'}${String(Math.floor(Math.abs(_retryNow.getTimezoneOffset()) / 60)).padStart(2,'0')}:${String(Math.abs(_retryNow.getTimezoneOffset()) % 60).padStart(2,'0')})]`;
-      const payloadContent = `${_retryDateCtx}\n${language && language !== 'Auto-detect' ? `${retryText}\n\n(Note: Please reply in ${language})` : retryText}`;
+      const _retryClientTime = `${_retryNow.toLocaleString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true })} (UTC${_retryNow.getTimezoneOffset() <= 0 ? '+' : '-'}${String(Math.floor(Math.abs(_retryNow.getTimezoneOffset()) / 60)).padStart(2,'0')}:${String(Math.abs(_retryNow.getTimezoneOffset()) % 60).padStart(2,'0')})`;
+      const payloadContent = language && language !== 'Auto-detect' ? `${retryText}\n\n(Note: Please reply in ${language})` : retryText;
       const allKeys = ProviderKeyManager.getAllKeys();
       const headersInit: Record<string, string> = {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`,
+        'x-client-time': _retryClientTime,
+        'x-client-timezone': Intl.DateTimeFormat().resolvedOptions().timeZone || '',
       };
       if (Object.keys(allKeys).length > 0) {
         headersInit['x-api-keys'] = JSON.stringify(allKeys);
       }
+
 
       const res = await fetch(`${BASE_URL}/chats/${activeChatId}/messages`, {
         method: 'POST',

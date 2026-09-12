@@ -545,7 +545,7 @@ def _build_comparison_table(sections_found: list) -> str:
     Build a Markdown comparison table for known concept pairs found in image notes.
     Returns empty string if no relevant pairs are found.
     """
-    has_models    = any(s[0] in ("MODELS", "LANGCHAIN") for s in sections_found)
+    has_models    = "LANGCHAIN" in {s[0] for s in sections_found} and any(s[0] in ("MODELS", "LANGCHAIN") for s in sections_found)
     has_prompts   = any(s[0] == "PROMPTS" for s in sections_found)
     has_chains    = any(s[0] == "CHAINS"  for s in sections_found)
 
@@ -580,7 +580,7 @@ def _build_section_breakdown(corrected_lines: list, sections_found: list) -> str
     # ── Determine which sections are present ──────────────────────────────────
     present = {s[0] for s in sections_found}
 
-    if "MODELS" in present or "LANGCHAIN" in present:
+    if "LANGCHAIN" in present and "MODELS" in present:
         output_parts.append(
             "## 🧠 Models\n\n"
             "> In **LangChain**, models are core interfaces through which you interact with AI models.\n\n"
@@ -635,63 +635,29 @@ def _build_section_breakdown(corrected_lines: list, sections_found: list) -> str
     return "\n\n".join(output_parts)
 
 
+def _format_ocr_text_to_markdown(text: str) -> str:
+    """Format extracted text cleanly into Markdown paragraphs."""
+    if not text:
+        return ""
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    return "\n".join(lines)
+
+
 def _reconstruct_ocr_diagram_and_notes(raw_ocr_text: str, image_index: int = 1) -> str:
     """
-    Production-grade offline OCR Intelligence Engine.
-
-    Converts garbled handwritten/OCR text into fully structured Markdown output:
-      1. Auto-corrects OCR typos using the master correction dictionary.
-      2. Detects section headings (Models / Prompts / Chains / etc.).
-      3. Builds a Mermaid flowchart diagram (`flowchart TD`).
-      4. Builds Markdown comparison tables for concept pairs.
-      5. Generates per-section in-depth breakdowns with bullet points.
-
-    Works 100% offline — no cloud LLM required.
+    Format extracted OCR text cleanly into Markdown paragraphs or lists.
+    Never fabricates diagrams or notes not present in the source.
     """
     if not raw_ocr_text or not raw_ocr_text.strip():
         return ""
-
-    # ── Step 1: Auto-correct OCR misreadings ──────────────────────────────────
-    corrected = _apply_ocr_corrections(raw_ocr_text)
-    corrected_lines = [l.strip() for l in corrected.splitlines() if l.strip()]
-
-    # ── Step 2: Detect sections ───────────────────────────────────────────────
-    sections_found = _detect_sections(corrected_lines)
-
-    # ── Step 3: Build Mermaid diagram ─────────────────────────────────────────
-    mermaid_block = _build_mermaid_diagram(corrected, sections_found)
-
-    # ── Step 4: Build comparison tables ───────────────────────────────────────
-    comparison_table = _build_comparison_table(sections_found)
-
-    # ── Step 5: Build section-by-section breakdown ────────────────────────────
-    section_breakdown = _build_section_breakdown(corrected_lines, sections_found)
-
-    # ── Step 6: Assemble final Markdown output ────────────────────────────────
-    parts = [f"## 📷 Image {image_index} — Handwritten Notes Analysis\n"]
-
-    if mermaid_block:
-        parts.append("## 🗺️ Diagram Structure\n")
-        parts.append(mermaid_block)
-        parts.append("")
-
-    if section_breakdown:
-        parts.append(section_breakdown)
-
-    if comparison_table:
-        parts.append(comparison_table)
-
-    # Deduplicate and clean
-    output = "\n\n".join(parts)
-    output = re.sub(r"\n{4,}", "\n\n\n", output).strip()
-    return output
+    lines = [l.strip() for l in raw_ocr_text.splitlines() if l.strip()]
+    return "\n".join(lines)
 
 
 def _perform_local_ocr_on_images(images: list) -> str:
     """
     Extract text from base64 image payloads using local multi-engine OCR
-    (EasyOCR / Tesseract), then run the OCR Intelligence Engine to produce
-    structured Markdown with Mermaid diagrams, tables, and headings.
+    (EasyOCR / Tesseract) cleanly without injecting hallucinated diagrams or fake notes.
     """
     import base64
     from app.services.parser_service import ParserService
@@ -704,25 +670,21 @@ def _perform_local_ocr_on_images(images: list) -> str:
             raw_bytes = base64.b64decode(b64)
             res = ParserService.extract_text_image_bytes(raw_bytes)
             if res and res.text and res.text.strip():
-                # ── Run the intelligence reconstruction engine ──────────────
-                reconstructed = _reconstruct_ocr_diagram_and_notes(
-                    res.text.strip(), image_index=idx
-                )
-                if reconstructed:
-                    ocr_outputs.append(reconstructed)
-                else:
-                    # Fallback to basic markdown formatting if reconstruction returned nothing
+                clean_text = res.text.strip()
+                if clean_text not in ("[No readable text found in image]", "") and not clean_text.startswith("[OCR"):
+                    clean_lines = [l.strip() for l in clean_text.splitlines() if l.strip()]
+                    formatted_text = "\n".join(clean_lines)
                     ocr_outputs.append(
-                        f"### 📷 Image {idx} (Extracted Text)\n\n"
-                        + _format_ocr_text_to_markdown(res.text.strip())
+                        f"Image {idx} Extracted Text:\n{formatted_text}"
                     )
         except Exception as exc:
-            logger.warning(f"[Local OCR Intelligence] Error processing image {idx}: {exc}")
+            logger.warning(f"[Local OCR] Error processing image {idx}: {exc}")
     return "\n\n---\n\n".join(ocr_outputs)
 
 
 # Backward compatibility alias
 _perform_tesseract_ocr_on_images = _perform_local_ocr_on_images
+
 
 
 
@@ -1203,6 +1165,88 @@ async def clarification_node(
     }
 
 
+def _heuristic_fallback_intent(
+    query: str,
+    images_present: bool = False,
+    is_private_doc_query: bool = False,
+    has_active_docs: bool = False,
+) -> Tuple[str, bool, Optional[str], Optional[str]]:
+    """
+    Zero-dependency deterministic fallback intent classifier invoked when external
+    LLM providers fail, time out, or hit HTTP 429 quota exhaustion.
+    Ensures the assistant NEVER loses tool-routing capability during upstream outages.
+    """
+    if images_present:
+        return INTENT_VISION, False, None, None
+
+    q = (query or "").strip().lower()
+    if not q:
+        return INTENT_NORMAL_CHAT, False, None, None
+
+    import re as _re
+
+    # 1. MEMORY_WRITE
+    mem_m = _re.search(
+        r"\b(remember that|note that|don't forget that|dont forget that|save that|store this|make a note that)\b",
+        q,
+        _re.IGNORECASE,
+    )
+    if mem_m:
+        content = query[mem_m.end():].strip(" :,-")
+        return INTENT_MEMORY_WRITE, False, content or query, "fact"
+
+    # 2. DOCUMENT_QA
+    if is_private_doc_query or has_active_docs or _re.search(
+        r"\b(uploaded resume|uploaded pdf|uploaded document|uploaded file|my resume|in my pdf|my uploaded)\b",
+        q,
+        _re.IGNORECASE,
+    ):
+        return INTENT_DOCUMENT_QA, True, None, None
+
+    # 3. CODE_EXECUTION
+    if _re.search(
+        r"\b(run this python|execute (this|a)? python|python sandbox|run python code|execute (a|this)? script|plot y\s*=|using matplotlib|simulate rolling)\b",
+        q,
+        _re.IGNORECASE,
+    ):
+        return INTENT_CODE_EXECUTION, False, None, None
+
+    # 4. MCP_TOOL: Math, Expense, Reminder, Email
+    is_expense = bool(_re.search(
+        r"\b(spent|expense|expenses|kharch|kharcha|kharche|tanka|rupees|rs\b|bought|pizza|burger|groceries|auto fare|uber ride|fast food|add \d+)\b",
+        q,
+        _re.IGNORECASE,
+    ))
+    is_math = bool(_re.search(
+        r"\b(calculate|what is \d+|evaluate|square root of|\bcompute\b|\bminus \d+|\bplus \d+|\d+\s*[\+\-\*\/%]\s*\d+)\b",
+        q,
+        _re.IGNORECASE,
+    ))
+    is_reminder = bool(_re.search(
+        r"\b(remind me|reminder|calendar alert|set an alert)\b",
+        q,
+        _re.IGNORECASE,
+    ))
+    is_email = bool(_re.search(
+        r"\b(send (an )?email|email to)\b",
+        q,
+        _re.IGNORECASE,
+    ))
+
+    if is_expense or is_math or is_reminder or is_email:
+        return INTENT_MCP_TOOL, False, None, None
+
+    # 5. WEB_SEARCH
+    if _re.search(
+        r"\b(who is|weather in|price of|latest news|news on|read (the )?webpage|fetch (the )?webpage|https?:\/\/|forecast in)\b",
+        q,
+        _re.IGNORECASE,
+    ):
+        return INTENT_WEB_SEARCH, False, None, None
+
+    return INTENT_NORMAL_CHAT, False, None, None
+
+
 async def classify_intent_node(
     state: AgentState, config: RunnableConfig = None
 ) -> Dict[str, Any]:
@@ -1338,14 +1382,14 @@ async def classify_intent_node(
     memory_write_content  = None
     memory_write_category = None
 
-    # ── Image fast-path (no LLM needed — images make it VISION) ──────────────
-    if images_present:
+    # ── Image handling: if image is attached with NO text query, default to VISION
+    if images_present and not last_query_clean:
         intent = INTENT_VISION
-        logger.info("classify_intent_node: images present → VISION")
+        logger.info("classify_intent_node: images present without text → VISION")
 
-    # ── LLM Intent Classification (runs for ALL non-vision queries) ───────────
-    # This is now the ONLY routing decision — no keyword overrides before or after.
-    if last_query_clean and intent != INTENT_VISION:
+    # ── LLM Intent Classification (runs for all queries with text) ───────────
+    # This evaluates the user request taking into account whether images are attached.
+    if last_query_clean:
         await _notify_step(config, "Analyzing query intent & context...")
         prompt = INTENT_CLASSIFIER_PROMPT.format(
             query=last_query_clean,
@@ -1367,8 +1411,20 @@ async def classify_intent_node(
             _llm_tool_hints = parsed.get("tool_hints") or []
             logger.debug(f"classify_intent_node: tool_hints from LLM: {_llm_tool_hints}")
         else:
-            # LLM call failed → safe fallback
-            intent = INTENT_DOCUMENT_QA if (is_private_doc_query or state.get("active_documents")) else INTENT_NORMAL_CHAT
+            # LLM call failed or rate-limited → intelligent deterministic fallback
+            fb_intent, fb_priv, fb_mem_content, fb_mem_cat = _heuristic_fallback_intent(
+                last_query_clean,
+                images_present=images_present,
+                is_private_doc_query=is_private_doc_query,
+                has_active_docs=bool(state.get("active_documents")),
+            )
+            intent = fb_intent
+            if fb_priv:
+                is_private_doc_query = True
+            if fb_mem_content and not memory_write_content:
+                memory_write_content = fb_mem_content
+                memory_write_category = fb_mem_cat
+            logger.info(f"classify_intent_node: LLM judge unavailable → heuristic fallback routed to: {intent}")
 
     # ── DB-backed document signal check (semantic, not keyword-based) ─────────
     # query_matches_user_signals uses embeddings and user-uploaded filenames from DB.
@@ -1428,7 +1484,7 @@ async def classify_intent_node(
         except Exception as init_exc:
             logger.warning(f"ToolRegistry initialization warning in classify_intent_node: {init_exc}")
 
-    _NO_TOOL_INTENTS = {INTENT_MEMORY_WRITE, INTENT_NORMAL_CHAT, INTENT_DOCUMENT_QA, INTENT_VISION}
+    _NO_TOOL_INTENTS = {INTENT_MEMORY_WRITE, INTENT_NORMAL_CHAT, INTENT_DOCUMENT_QA}
     from app.agent.prompts import INTENT_TOOL_WHITELIST
     all_registered = set(registry.local_tools.keys()) | set(registry.mcp_tools_schemas.keys())
 
@@ -3001,50 +3057,82 @@ async def generate_response_node(
     _selected_key = _best_api_key(keys, model)
     has_valid_key_for_selected_model = bool(_selected_key) and not str(_selected_key).startswith("mock_")
     if images and not is_vision_capable_model:
-        # User selected a non-vision model (e.g. llama-3.1-8b-instant) — perform local multi-engine OCR!
-        logger.info(f"generate_response_node: '{model}' is not vision-capable — executing local multi-engine OCR (EasyOCR / Tesseract)")
-        ocr_text = _perform_local_ocr_on_images(images)
-        if ocr_text:
-            ocr_note = f"*(Extracted handwritten notes & diagram using Local OCR — processing with **{model}**)*\n\n"
+        # Check if user has a vision-capable key available (Gemini Flash or GPT-4o)
+        gemini_key = keys.get("gemini") or keys.get("google") or getattr(settings, "GEMINI_API_KEY", None) or os.environ.get("GEMINI_API_KEY")
+        openai_key = keys.get("openai") or getattr(settings, "OPENAI_API_KEY", None) or os.environ.get("OPENAI_API_KEY")
+
+        if gemini_key and not str(gemini_key).startswith("mock_"):
+            logger.info(f"generate_response_node: '{model}' is not vision-capable — routing to Gemini Flash for native vision processing")
+            model = "gemini-3.6-flash"
+            provider = gemini_provider
+            provider_api_key = gemini_key
+            is_vision_capable_model = True
             if on_token:
                 try:
-                    await on_token(ocr_note)
+                    await on_token("*(Selected model has no vision capability — analyzing image with **Gemini Flash**)*\n\n")
                 except Exception:
                     pass
-            # Append OCR text into message state for the user's selected model
-            for msg in reversed(messages):
-                if hasattr(msg, "type") and getattr(msg, "type") in ("human", "user"):
-                    msg.content = f"{msg.content}\n\n[Extracted Image Text & Reconstructed Diagram (Local OCR)]:\n{ocr_text}"
-                    break
-                elif isinstance(msg, dict) and msg.get("role") in ("human", "user"):
-                    msg["content"] = f"{msg.get('content', '')}\n\n[Extracted Image Text & Reconstructed Diagram (Local OCR)]:\n{ocr_text}"
-                    break
+        elif openai_key and not str(openai_key).startswith("mock_"):
+            logger.info(f"generate_response_node: '{model}' is not vision-capable — routing to GPT-4o for native vision processing")
+            model = "gpt-4o"
+            provider = openai_provider
+            provider_api_key = openai_key
+            is_vision_capable_model = True
+            if on_token:
+                try:
+                    await on_token("*(Selected model has no vision capability — analyzing image with **GPT-4o**)*\n\n")
+                except Exception:
+                    pass
         else:
-            # Local OCR produced no text — try Cloud Vision auto-fallback as backup
-            gemini_key = keys.get("gemini") or keys.get("google") or getattr(settings, "GEMINI_API_KEY", None) or os.environ.get("GEMINI_API_KEY")
-            openai_key = keys.get("openai") or getattr(settings, "OPENAI_API_KEY", None) or os.environ.get("OPENAI_API_KEY")
-            if gemini_key and not str(gemini_key).startswith("mock_"):
-                keys["gemini"] = gemini_key
-                keys["google"] = gemini_key
-                model = "gemini-3.6-flash"
-                provider = gemini_provider
-                provider_api_key = gemini_key
+            # Neither Gemini nor OpenAI vision is available — execute clean local OCR
+            logger.info(f"generate_response_node: '{model}' is not vision-capable — executing local multi-engine OCR (EasyOCR / Tesseract)")
+            ocr_text = _perform_local_ocr_on_images(images)
+            if ocr_text:
+                ocr_note = f"*(Selected model has no vision capability. Extracted text using Local OCR — processing with **{model}**)*\n\n"
                 if on_token:
                     try:
-                        await on_token("*(Local OCR found no text — analyzing image with Gemini Flash)*\n\n")
+                        await on_token(ocr_note)
                     except Exception:
                         pass
-            elif openai_key and not str(openai_key).startswith("mock_"):
-                keys["openai"] = openai_key
-                model = "gpt-4o"
-                provider = openai_provider
-                provider_api_key = openai_key
-                if on_token:
-                    try:
-                        await on_token("*(Local OCR found no text — analyzing image with GPT-4o)*\n\n")
-                    except Exception:
-                        pass
-            images = []
+                # Append OCR text into message state cleanly
+                for msg in reversed(messages):
+                    if hasattr(msg, "type") and getattr(msg, "type") in ("human", "user"):
+                        raw_c = (msg.content or "").strip()
+                        if not raw_c:
+                            msg.content = f"[Attached Image Content (Extracted via Local OCR)]:\n{ocr_text}\n\nPlease analyze and explain what this image shows based on the extracted content."
+                        else:
+                            msg.content = f"{raw_c}\n\n[Attached Image Content (Extracted via Local OCR)]:\n{ocr_text}"
+                        break
+                    elif isinstance(msg, dict) and msg.get("role") in ("human", "user"):
+                        raw_c = (msg.get("content") or "").strip()
+                        if not raw_c:
+                            msg["content"] = f"[Attached Image Content (Extracted via Local OCR)]:\n{ocr_text}\n\nPlease analyze and explain what this image shows based on the extracted content."
+                        else:
+                            msg["content"] = f"{raw_c}\n\n[Attached Image Content (Extracted via Local OCR)]:\n{ocr_text}"
+                        break
+            else:
+                for msg in reversed(messages):
+                    if hasattr(msg, "type") and getattr(msg, "type") in ("human", "user"):
+                        raw_c = (msg.content or "").strip()
+                        if not raw_c:
+                            msg.content = "Please analyze the attached image."
+                        break
+                    elif isinstance(msg, dict) and msg.get("role") in ("human", "user"):
+                        raw_c = (msg.get("content") or "").strip()
+                        if not raw_c:
+                            msg["content"] = "Please analyze the attached image."
+                        break
+
+    if images and is_vision_capable_model:
+        for msg in reversed(messages):
+            if hasattr(msg, "type") and getattr(msg, "type") in ("human", "user"):
+                if not (msg.content or "").strip():
+                    msg.content = "Please analyze and explain what is shown in the attached image."
+                break
+            elif isinstance(msg, dict) and msg.get("role") in ("human", "user"):
+                if not (msg.get("content") or "").strip():
+                    msg["content"] = "Please analyze and explain what is shown in the attached image."
+                break
 
     if intent in (INTENT_WEB_SEARCH, INTENT_NEWS, INTENT_CURRENT_EVENTS):
         await _notify_step(config, "Searching the web for current information...")
@@ -3071,7 +3159,10 @@ async def generate_response_node(
         no_doc_answer=no_doc_answer,
         detected_language=detected_language,
         language_mode=language_mode,
+        client_time=state.get("client_time"),
+        client_location=state.get("client_location"),
     )
+
 
     raw_messages = [{"role": "system", "content": sys_prompt}]
     for msg in messages:
@@ -3131,9 +3222,11 @@ async def generate_response_node(
             top_k=6,
             api_key=keys.get("gemini_api_key")
         )
+        if not tool_schemas and allowed_tools:
+            # Fallback to whitelisted tools if semantic router returned empty (e.g. short query or offline embeddings)
+            tool_schemas = registry.get_tool_schemas_for_intent(allowed_tools)
         logger.info(
-            f"generate_response_node: semantic router selected {len(tool_schemas)} tools "
-            f"for intent={intent}: {[t['name'] for t in tool_schemas]}"
+            f"generate_response_node: tools provided {len(tool_schemas)} for intent={intent}: {[t['name'] for t in tool_schemas]}"
         )
     else:
         tool_schemas = []   # Pure generation — no tools offered
@@ -3588,17 +3681,14 @@ async def generate_response_node(
             # structured Markdown with Mermaid diagrams and tables.
             _ocr_rescue_system_directive = (
                 "\n\n[SYSTEM — OCR RESCUE DIRECTIVE]\n"
-                "The vision API is unavailable. The following text was extracted via local OCR from a "
-                "handwritten note or diagram image. It may contain OCR character errors.\n"
+                "The vision API is unavailable. The following text was extracted via local OCR from an "
+                "attached document or image. It may contain OCR character errors.\n"
                 "YOU MUST:\n"
-                "1. Auto-correct all obvious OCR typos (e.g. 'Lanachans'→'LangChain', "
-                "'PR@MPTs'→'PROMPTS', 'Enbeele'→'Embedding', 'CxAINS'→'CHAINS', "
-                "'lims'→'LLMs', 'Dyhanic'→'Dynamic', 'Saman-tc'→'Semantic', 'veefor'→'vector').\n"
-                "2. Output a Mermaid `flowchart TD` block showing the hierarchy/relationships.\n"
-                "3. Output organized headings (# Models, # Prompts, # Chains) with bullet points.\n"
-                "4. Output a Markdown comparison table for any listed model/concept types.\n"
-                "5. NEVER dump raw OCR text. NEVER write 'Based on the OCR...' or meta-phrases.\n"
-                "6. Start IMMEDIATELY with the Mermaid diagram, then headings, then table.\n"
+                "1. Silently auto-correct all obvious OCR typos using context and domain knowledge.\n"
+                "2. Directly answer the user's specific question using the extracted text.\n"
+                "3. DIAGRAMS & FLOWCHARTS: If the content represents a flowchart, hierarchy, workflow, architecture, or multi-step process, or if the user asked for a diagram: output a clean Mermaid `flowchart TD` block showing the relationships.\n"
+                "4. COMPARISON TABLES: If comparing multiple entities, types, or specifications: output a clean Markdown comparison table.\n"
+                "5. Deliver a direct, curated answer tailored strictly to the user's request without meta-commentary about OCR.\n"
                 "[END DIRECTIVE]\n\n"
             )
             for m in reversed(raw_messages):

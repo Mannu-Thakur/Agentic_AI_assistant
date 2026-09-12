@@ -1,3 +1,4 @@
+import os
 import json
 import asyncio
 import logging
@@ -22,13 +23,18 @@ class McpStdioClient:
         """
         logger.info(f"Connecting to MCP Stdio server: {self.command} with args {self.args}")
         try:
+            sub_env = dict(os.environ)
+            sub_env["PYTHONIOENCODING"] = "utf-8"
+            if self.env:
+                sub_env.update(self.env)
+
             self.proc = await asyncio.create_subprocess_exec(
                 self.command,
                 *self.args,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=self.env
+                env=sub_env
             )
             self.is_connected = True
             

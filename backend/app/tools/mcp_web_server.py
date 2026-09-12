@@ -15,6 +15,14 @@ import re
 import html
 from typing import Dict, Any, Optional
 
+if sys.platform == "win32" and sys.version_info >= (3, 7):
+    try:
+        sys.stdin.reconfigure(encoding="utf-8")
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 def send_response(req_id: Any, result: Optional[Dict[str, Any]] = None, error: Optional[Dict[str, Any]] = None):
     resp = {
         "jsonrpc": "2.0",
@@ -39,7 +47,15 @@ def handle_web_search(query: str, max_results: int = 5) -> str:
     """Unified multi-provider web search for MCP server with DDG fallback."""
     try:
         from app.services.web_search import unified_web_search, format_for_llm
-        results = asyncio.run(unified_web_search(query))
+        from app.core.config import settings
+        keys = {}
+        if getattr(settings, "TAVILY_API_KEY", None):
+            keys["tavily"] = settings.TAVILY_API_KEY
+        if getattr(settings, "SERPAPI_API_KEY", None):
+            keys["serpapi"] = settings.SERPAPI_API_KEY
+        if getattr(settings, "EXA_API_KEY", None):
+            keys["exa"] = settings.EXA_API_KEY
+        results = asyncio.run(unified_web_search(query, api_keys=keys, max_results=max_results))
         if results:
             return format_for_llm(results[:max_results])
     except Exception as exc:

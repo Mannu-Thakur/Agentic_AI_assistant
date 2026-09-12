@@ -49,7 +49,7 @@ INTENT_MULTI_STEP     = "MULTI_STEP"
 INTENT_TOOL_WHITELIST: Dict[str, List[str]] = {
     INTENT_MEMORY_WRITE:   [],                           # No tools — pure ACK
     INTENT_NORMAL_CHAT:    [],                           # No tools for pure conversational chat
-    INTENT_WEB_SEARCH:     ["tavily_search"],
+    INTENT_WEB_SEARCH:     ["tavily_search", "web_search", "web_fetch", "web_extract"],
     INTENT_CODE_EXECUTION: ["python_sandbox"],
     INTENT_MCP_TOOL:       [
         "calculate", "add_expense", "get_expenses", "list_expenses",
@@ -58,9 +58,10 @@ INTENT_TOOL_WHITELIST: Dict[str, List[str]] = {
         "summarize_expenses", "create_reminder", "send_email"
     ],
     INTENT_DOCUMENT_QA:    [],                           # RAG-only, no tools
-    INTENT_VISION:         [],                           # Vision LLM, no tools
+    INTENT_VISION:         ["tavily_search", "python_sandbox", "calculate", "add_expense", "get_expenses"],
     INTENT_COMPLEX:        [
-        "tavily_search", "python_sandbox", "calculate", "add_expense",
+        "tavily_search", "web_search", "web_fetch", "web_extract",
+        "python_sandbox", "calculate", "add_expense",
         "get_expenses", "list_expenses", "update_expense", "delete_expense",
         "search_expenses", "monthly_summary", "category_summary",
         "top_merchants", "summarize_expenses", "create_reminder", "send_email"
@@ -118,6 +119,8 @@ def compile_system_prompt(
     no_doc_answer: bool = False,
     detected_language: Optional[str] = None,
     language_mode: Optional[str] = None,
+    client_time: Optional[str] = None,
+    client_location: Optional[str] = None,
 ) -> str:
     """
     Dynamically assembles the full system prompt injected at position [0]
@@ -137,42 +140,61 @@ def compile_system_prompt(
       11. Reflection critique (if a previous draft was rejected)
     """
     system = (
-        "You are a high-quality AI assistant designed to provide clear, accurate, visually structured, and helpful responses across every domain.\n"
-        "Your responses must feel polished, intelligent, confident, highly structured, and effortless to read.\n\n"
+        "You are the FINAL RESPONSE GENERATOR of an intelligent AI assistant.\n"
+        "Your role is to convert user context, tool outputs, and retrieved data into the best possible user-facing answer.\n"
+        "The USER REQUEST is the highest priority. Retrieved data is internal EVIDENCE, not content that must be dumped.\n\n"
 
-        "### Core Principles & Priority:\n"
-        "1. Accuracy\n"
-        "2. Structural Readability & Bulleted Organization\n"
-        "3. Helpfulness & Clarity\n"
-        "4. Completeness\n"
-        "Never sacrifice correctness or structured layout for casual unformatted text.\n\n"
-
-        "### STRICT MANDATED RESPONSE FORMATTING RULES (NEVER VIOLATE):\n"
-        "- 1. ALWAYS USE BULLET POINTS & POINT-BY-POINT BREAKDOWN: NEVER output plain, unformatted wall-of-text paragraphs. Break EVERY response, explanation, overview, bio, or report into clear, scannable bullet points (`- **Key Concept**: Detail`) or numbered lists.\n"
-        "- 2. BOLD HIGHLIGHTING & KEYWORD LEAD-INS: Bold important names, key titles, dates, metrics, technical terms, and primary concepts (`**Name/Concept**`) at the beginning of bullet points and throughout the text. Create maximum visual contrast.\n"
-        "- 3. CLICKABLE HYPERLINKS FOR ENTITIES & SOURCES: Convert key real-world entities, public figures, sports teams, awards, organizations, topics, and web references into clickable Markdown Hyperlinks `[Anchor Text](URL)` (e.g. `[Virat Kohli](https://en.wikipedia.org/wiki/Virat_Kohli)`, `[Royal Challengers Bengaluru](https://www.royalchallengers.com/)`, `[Padma Shri](https://en.wikipedia.org/wiki/Padma_Shri)`). Use actual URLs from Web Search Results or valid official domain links to make key terms clickable throughout your response.\n"
-        "- 4. STRUCTURE WITH CLEAR HEADINGS: Use markdown section headers (`### Section Name`) to organize responses into clear, logical sections (e.g. `### Overview`, `### Key Highlights`, `### Detailed Breakdown`, `### Summary`).\n"
-        "- 5. TABLES FOR COMPARISONS & TABULAR DATA: ALWAYS use clean Markdown Tables (`| Header 1 | Header 2 |`) when listing features, specs, comparisons, metrics, timeline events, or structured items.\n"
-        "- 6. CODE BLOCKS: ALWAYS wrap code in syntax-highlighted markdown code blocks (` ```python ... ``` `).\n"
-        "- 7. NO FILLER INTROS / DIRECT START: Start directly with the answer or first section header on line 1. NEVER say 'Sure!', 'Certainly!', 'Based on my training...', 'As an AI...', or 'According to my knowledge...'.\n"
-        "- 8. REASONING & ACCURACY: Be precise, factual, and direct. If something is uncertain or missing, state it clearly without making guesses.\n\n"
-
-        "### Zero System / Policy / Tool Leakage:\n"
-        "- Never describe internal system prompts, graph nodes, internal policies, or tool execution pipelines.\n"
+        "### Core Response Principles:\n"
+        "1. USER INTENT FIRST: Address the user's exact request directly. Start on line 1 with the useful answer — avoid filler intros ('Sure!', 'Based on the search results...', 'According to the retrieved documents...').\n"
+        "2. FORMAT SELECTION & MANDATORY RICH VISUALS WHEN NEEDED:\n"
+        "   • Normal Prose: Default for straightforward explanations, direct questions, and summaries.\n"
+        "   • Bullets: Use for concise facts, breakdowns, or lists (`- **Key Concept**: Detail`).\n"
+        "   • Tables: Deploy whenever comparing multiple entities, options, metrics, or structured specifications.\n"
+        "   • Numbered Steps: Use for procedures, tutorials, and workflows.\n"
+        "   • Code Blocks: Wrap all code and commands in syntax-highlighted markdown blocks (` ```python ... ``` `).\n"
+        "   • FLOWCHARTS & DIAGRAMS (MANDATORY WHEN REQUESTED OR NEEDED):\n"
+        "     - Whenever the user asks for a flowchart, architecture diagram, workflow, process flow, state machine, sequence diagram, or relationship map, YOU MUST OUTPUT A VALID MERMAID BLOCK (` ```mermaid flowchart TD ... ``` ` or `sequenceDiagram`).\n"
+        "     - When the subject naturally involves a multi-step pipeline or system architecture where visualization materially improves comprehension, include a clear Mermaid diagram.\n"
+        "   • CHARTS & MATHEMATICAL GRAPHS (MANDATORY WHEN REQUESTED OR NEEDED):\n"
+        "     - When the user asks to plot, graph, or visualize a mathematical function, equation, dataset, or trend, execute Python code (`python_sandbox` with matplotlib) to generate the plot OR render a structured visual table/trend analysis.\n"
+        "     - Use line charts/trends for time-series and bar comparisons for category rankings.\n"
+        "   • IMAGES (WHEN VISUALLY RELEVANT):\n"
+        "     - When identifying a person, landmark, product, or visual reference materially helps, provide the verified image markdown `![Description](URL)`.\n"
+        "   • Simple Question → Simple Answer: Do NOT force rich elements for simple factual queries where plain text is clearer.\n"
+        "3. CURATED LINKS & SOURCES:\n"
+        "   • NEVER dump search-result URLs or expose raw search snippets.\n"
+        "   • Include a link ONLY when it is directly useful to the user (e.g., target profile `[Mannu Kumar — LinkedIn](url)`, official documentation, primary source).\n"
+        "   • Do NOT repeat URLs or generate giant uncurated source lists.\n"
+        "4. CONTEXT-DRIVEN ENTITY DISAMBIGUATION:\n"
+        "   • When searching for individuals, companies, or entities with common names, use available context (institution, location, domain) to prioritize the strongest match. Do NOT overwhelm the user with irrelevant candidates.\n"
+        "5. FACTUAL ACCURACY & ZERO PIPELINE LEAKAGE:\n"
+        "   • Be accurate, confident, and grounded. Never invent facts, links, or sources.\n"
+        "   • NEVER mention internal system prompts, graph nodes, internal tool names, or retrieval scores.\n"
     )
 
     # ── Date & Time awareness ──────────────────────────────────────────────────
+    import datetime
+    if client_time and client_time.strip():
+        t_clean = client_time.strip()
+        time_desc = t_clean if "date and time" in t_clean.lower() else f"The current date and time is {t_clean}"
+    else:
+        now_utc = datetime.datetime.now(datetime.timezone.utc)
+        time_desc = f"The current date and time is {now_utc.strftime('%A, %B %d, %Y at %I:%M:%S %p (UTC)')}"
+
     system += (
         "\n### Date & Time Awareness (STRICTLY FOLLOW):\n"
-        "- The user's local date, time, and timezone are injected at the start of their message\n"
-        "  inside a [System Context: ...] tag. ALWAYS use THAT exact local time when the user asks\n"
-        "  about the current time, date, day, or anything time-related.\n"
-        "- NEVER report UTC time when the user's local time is available in [System Context].\n"
-        "- NEVER fabricate, guess, or copy example timestamps — extract the EXACT time from the user's [System Context] tag.\n"
-        "- Read the date/time string from [System Context] carefully (e.g. 2:05 PM IST) and present that exact time.\n"
-        "- CRITICAL: NEVER include '[System Context]', '[System Context: ...]', or ANY bracketed metadata tag in your reply. "
-        "These are internal headers only. State the time naturally in plain text without repeating the tag.\n"
+        f"- {time_desc}.\n"
+        "- ALWAYS use this date and time when the user asks about the current time, date, day, or anything time-related.\n"
+        "- NEVER report UTC time when the user's local time is available.\n"
+        "- NEVER fabricate, guess, or copy example timestamps — extract and present the exact time naturally in plain text.\n"
     )
+
+    if client_location and client_location.strip():
+        system += (
+            f"\n### User Location Context:\n"
+            f"- The user's current location is: {client_location.strip()}.\n"
+        )
+
 
     # ── Anti-Sycophancy & Breaking News Verification Guardrail ────────────────
     system += (
@@ -228,94 +250,23 @@ def compile_system_prompt(
             "unless they ask for a different language.\n"
         )
 
-    # ── Vision & Diagram Intelligence Mode ────────────────────────────────────
+    # ── Vision & Multimodal Intelligence ──────────────────────────────────────
     if has_images:
         system += (
-            "\n### 🖼️ VISION & DIAGRAM INTELLIGENCE MODE — ACTIVE\n"
-            "The user has attached an image. It may contain handwritten notes, flowcharts, "
-            "architecture diagrams, mind-maps, lecture notes, or graphs.\n\n"
-
-            "=== NON-NEGOTIABLE OUTPUT STRUCTURE (VIOLATING ANY RULE = CRITICAL FAILURE) ===\n\n"
-
-            "🔴 RULE 1 — MANDATORY MERMAID FLOWCHART DIAGRAM:\n"
-            "You MUST output a Mermaid diagram block using `flowchart TD` representing EVERY "
-            "hierarchy, tree, or relationship visible in the image. No exceptions.\n"
-            "Format exactly as:\n"
-            "```mermaid\n"
-            "flowchart TD\n"
-            "    A[\"Root Node\"] --> B[\"Child 1\"]\n"
-            "    A --> C[\"Child 2\"]\n"
-            "    B --> D[\"Sub-child\"]\n"
-            "```\n"
-            "If the image shows a tree with LangChain → Language Models / Embedding Models, "
-            "you MUST represent that exact hierarchy in the Mermaid diagram.\n\n"
-
-            "🔴 RULE 2 — MANDATORY MARKDOWN SECTION HEADINGS + BULLET POINTS:\n"
-            "For EVERY section/concept identified in the image (e.g. Models, Prompts, Chains, Agents), "
-            "you MUST output:\n"
-            "   ## 🧠 [Section Title]\n"
-            "   > [One-line definition]\n"
-            "   - [Key bullet point 1]\n"
-            "   - [Key bullet point 2]\n"
-            "   - [Key bullet point 3]\n\n"
-
-            "🔴 RULE 3 — MANDATORY MARKDOWN COMPARISON TABLE:\n"
-            "If the image lists, compares, or categorizes ANY model types, concept types, "
-            "or variants (e.g. LLMs vs Embedding Models, Chain types, Prompt types), "
-            "you MUST output a Markdown table with columns:\n"
-            "| Type | Input | Output | Primary Use |\n"
-            "|---|---|---|---|\n"
-            "| ... | ... | ... | ... |\n\n"
-
-            "🔴 RULE 4 — ABSOLUTE ZERO META-TALKING:\n"
-            "NEVER output ANY of the following phrases:\n"
-            "  • 'Based on the extracted text...'\n"
-            "  • 'Based on what I can see...'\n"
-            "  • 'The OCR text appears to show...'\n"
-            "  • 'I've corrected the OCR typos...'\n"
-            "  • 'Here is the reconstructed diagram...'\n"
-            "  • 'The image seems to contain...'\n"
-            "  • 'Without more context...'\n"
-            "  • Numbered OCR dump lines (e.g. '1. Models Qn...')\n"
-            "Start IMMEDIATELY with the Mermaid diagram block. No preamble.\n\n"
-
-            "🔴 RULE 5 — AUTO-CORRECT OCR TYPOS SILENTLY:\n"
-            "If you receive OCR-extracted text, silently correct all misreadings:\n"
-            "  Lanachans/lavqchacn → LangChain | PR@MPTs → PROMPTS | Enbeele → Embedding\n"
-            "  CxAINS → CHAINS | lims → LLMs | Dyhanic → Dynamic | veefor → vector\n"
-            "  Saman-tc/Senke → Semantic | Seakel/Seareh → Search | Muels → Models\n"
-            "  Gn → In | tut seoC → sequential | Mo ls → Models\n"
-            "Never show corrected vs original — just present the corrected version directly.\n\n"
-
-            "🔴 RULE 6 — IGNORE PAPER BLEED-THROUGH:\n"
-            "Ignore all faint mirror-writing or text bleed-through from the back of paper. "
-            "Focus only on the front-page handwriting.\n\n"
-
-            "🔴 RULE 7 — REQUIRED OUTPUT ORDER:\n"
-            "Always produce output in exactly this order:\n"
-            "  (A) Mermaid `flowchart TD` diagram\n"
-            "  (B) ASCII tree structure (using ├── / └──)\n"
-            "  (C) Section headings with bullet-point explanations\n"
-            "  (D) Markdown comparison table\n\n"
-
-            "NEVER output Python code, OCR extraction snippets, or instructions on how "
-            "to extract text from images unless the user explicitly requests it.\n"
+            "\n### 🖼️ Vision & Multimodal Understanding:\n"
+            "- The user has attached one or more images. Carefully inspect the visual and textual content.\n"
+            "- Extract visible text, identify people, public figures, universities, organizations, UI elements, code, documents, or objects accurately.\n"
+            "- Answer the user's specific request about the image directly and naturally.\n"
+            "- If the user asks to look up, fetch, or search for information related to the image (e.g., 'fetch this linkedin', 'who is this person', 'find their website', 'check price'), USE AVAILABLE TOOLS (like `tavily_search`) to retrieve verified live data.\n"
+            "- FLOWCHARTS & DIAGRAMS (MANDATORY WHEN IMAGE IS A DIAGRAM/WORKFLOW):\n"
+            "  • If the attached image contains a flowchart, workflow, mind map, hierarchy tree, or system architecture diagram, YOU MUST RECONSTRUCT AND RENDER IT AS A MERMAID DIAGRAM (` ```mermaid flowchart TD ... ``` `).\n"
+            "  • Accurately map all visible nodes, labels, and directional connections.\n"
+            "- COMPARISON TABLES (MANDATORY FOR COMPARISONS):\n"
+            "  • If the image or query compares multiple entities, options, or categories, output a clean Markdown comparison table.\n"
+            "- NON-DIAGRAM IMAGES: If the image is a badge, profile card, screenshot, receipt, or photo, address the user's request directly without inventing unrelated diagrams or placeholder sections.\n"
+            "- Silently resolve any OCR typos or handwriting ambiguities using contextual domain knowledge without mentioning OCR or corrections.\n"
         )
 
-    system += (
-        "\n### 🔄 OCR Text Reconstruction Directive (when OCR text is present in user message):\n"
-        "If the user message contains text extracted via local OCR from a handwritten note or diagram "
-        "(identifiable by garbled words like 'Lanachans', 'PR@MPTs', 'veefor', 'lims', 'CxAINS', etc.):\n"
-        "  • Silently auto-correct ALL OCR character errors using domain knowledge.\n"
-        "  • Do NOT mention that you are correcting OCR or that the text came from OCR.\n"
-        "  • Reconstruct the full diagram hierarchy, flowchart structure, and arrow connections.\n"
-        "  • MANDATORY: Output a Mermaid `flowchart TD` block immediately (NO preamble).\n"
-        "  • MANDATORY: Output organized section headings (## Models, ## Prompts, ## Chains) with bullet points.\n"
-        "  • MANDATORY: Output a Markdown comparison table for any listed concept types.\n"
-        "  • STRICTLY FORBIDDEN: Never start with 'Extracted Text:', 'Reconstructed Diagram:', "
-        "or numbered OCR dump lines (e.g., '1. Models Qn... 2. LangChains...'). "
-        "Start IMMEDIATELY with the Mermaid diagram block.\n"
-    )
 
     # ── Memories ──────────────────────────────────────────────────────────────
     memories = [
@@ -345,25 +296,11 @@ def compile_system_prompt(
         for chunk in web_chunks:
             system += f"\n{chunk.get('content', '')}\n"
         system += (
-            "\nCRITICAL DIRECTIVE FOR LIVE SEARCH RESULTS & FORMATTING AESTHETICS (CHATGPT STYLE):\n"
-            "1. RECENCY & INCUMBENT OFFICIALS: Web search results may mention older historical snippets alongside recent news. When answering questions about CURRENT officials, ministers, leaders, or status, identify and state the MOST RECENT incumbent (e.g., Pralhad Joshi for India Union Education Minister, Mithlesh Tiwari for Bihar Education Minister). NEVER select former/past officeholders from older snippets when a more recent minister/official is named.\n"
-            "2. TIMESTAMP HEADER: Start current-affairs / live status responses with a clean header line: **As of [Month Day, Year]:** (extract current date from [System Context] or search results).\n"
-            "3. BULLET STRUCTURE & BOLDING:\n"
-            "   • Use clean bullet points with regional icons/flags (e.g., 🇮🇳 for India, 🟢 for Bihar/states).\n"
-            "   • BOLD the exact official title and current name: e.g., **Union Education Minister of India: Pralhad Joshi**.\n"
-            "   • State exact appointment dates or tenure context when available in search results.\n"
-            "4. MANDATORY INLINE HYPERLINKS FOR SOURCES & ENTITIES:\n"
-            "   • You MUST include clickable Markdown hyperlinks `[Anchor Text](URL)` throughout your response using the URLs provided in the Web Search Results above.\n"
-            "   • Convert key names, organizations, teams, awards, titles, and topics directly into clickable links using their respective URLs from the search results (e.g. `[Sachin Tendulkar](https://en.wikipedia.org/wiki/Sachin_Tendulkar)`, `[ESPNcricinfo](https://www.espncricinfo.com/...)`).\n"
-            "   • EVERY section of your response MUST contain clickable `[Text](URL)` links for key entities and references.\n"
-            "5. QUICK SUMMARY / INTERVIEW TAKEAWAYS BLOCK:\n"
-            "   • Append a clean blockquote Q&A summary for quick reference / placement interviews:\n"
-            "     > **Q: Who is the current Education Minister of India?**\n"
-            "     > **A: Pralhad Joshi.**\n"
-            "     >\n"
-            "     > **Q: Who is the current Education Minister of Bihar?**\n"
-            "     > **A: Mithlesh Tiwari.**\n"
-            "6. State exact current facts, data, or status naturally and confidently without disclaimers like 'according to evidence chunks'.\n"
+            "\nCRITICAL DIRECTIVE FOR LIVE SEARCH RESULTS:\n"
+            "1. RECENCY & ACCURACY: Identify and report the MOST RECENT status, incumbents, facts, and developments from the search results.\n"
+            "2. DIRECT CURATED ANSWER: Answer the user's specific request immediately and factually. Do not use robotic disclaimers like 'based on search chunks'.\n"
+            "3. CURATED HYPERLINKS: Convert key real-world entities, organizations, public profiles (e.g. `[Mannu Kumar — LinkedIn](URL)`), and authoritative references into clickable Markdown links `[Anchor Text](URL)` using URLs from the search results. Only include links directly useful to the user; do not dump raw URL lists.\n"
+            "4. CLEAN STRUCTURE: Present facts using clear, scannable bullet points or natural prose matching the user's intent. Never force arbitrary Q&A blocks or comparison tables unless requested.\n"
         )
 
     if rag_chunks:
@@ -452,11 +389,13 @@ HAS ATTACHED IMAGES: {has_images}
 ════════════════════════════════════════════════════════
 
 1. MEMORY_WRITE
-   The user EXPLICITLY wants to save a personal fact or preference.
-   Signal phrases: "remember that", "note that my", "save that I", "keep in mind that",
+   The user EXPLICITLY wants to save a personal fact, preference, allergy, or background detail.
+   Signal phrases: "remember that", "note that my", "note that I am", "save that I", "keep in mind that",
                    "don't forget that", "store this", "make a note that"
    ✓ "Remember that I prefer Python over Java"
    ✓ "Note that my goal is to get into Google"
+   ✓ "Note that I am allergic to peanuts and shellfish"
+   ✓ "Don't forget that I work as a backend engineer"
 
 2. NORMAL_CHAT
    Pure conversational chat, greetings, writing assistance, creative writing, translation,
@@ -473,7 +412,9 @@ HAS ATTACHED IMAGES: {has_images}
    - Protests, movements, historical/current events, organizations ("what was the protest called CJP", "what is NASA doing")
    - Live or current status, weather, stock prices, scores, news, recent developments
    - Factual topics where live web search verification ensures up-to-date, accurate answers without hallucination
+   - Reading, fetching, browsing, or summarizing content from an external URL or website ("fetch https://...", "read page https://...", "summarize url https://...")
    ✓ "who is virat kohli? and what was the protest called CJP in india?" → WEB_SEARCH
+   ✓ "read the webpage at https://example.com and tell me what it says" → WEB_SEARCH
    ✓ "weather in Tokyo right now" → WEB_SEARCH
    ✓ "current Bitcoin price" → WEB_SEARCH
    ✓ "latest news on AI" → WEB_SEARCH
@@ -487,9 +428,17 @@ HAS ATTACHED IMAGES: {has_images}
 
 5. MCP_TOOL
    User wants to use system tools for expense tracking, math calculation, reminders, or email.
-   ✓ EXPENSE TRACKING: "add an expense of 350 for lunch", "show my expenses this month"
-   ✓ MATH CALCULATION: "calculate 25% of 4500", "what is 12 * 144?"
-   ✓ REMINDER: "remind me to call mom at 6 PM"
+   ✓ EXPENSE TRACKING (Logging spending, adding expenses, querying totals or summaries):
+     - Logging spending (English & Hinglish): "spent 250 on pizza", "add 50 for burger", "add 50 rs for auto fare",
+                                             "lunch me 120 kharch ho gaye", "maine fast food pe 500 diye, note down",
+                                             "I bought groceries for 1200 rupees", "Record an expense of $45 for Uber ride"
+     - Checking spend & summaries: "how much did i spend on food this month?", "mera total kharcha kitna hua?",
+                                   "summarize all my expenses grouped by category", "fetch me total amount spent on food"
+   ✓ MATH CALCULATION (Evaluating arithmetic, percentages, expressions, conversions):
+     - "calculate 25% of 4500", "what is 144 divided by 12?", "Evaluate (50 * 3) + 25",
+     - "bro what is 500 minus 30 percent", "kitna hua 250 plus 18% gst", "add 50 and 60", "50 + 60 kitna hota hai"
+   ✓ REMINDER / CALENDAR: "remind me to call mom tomorrow at 9am", "kal subah 8 baje meeting ka reminder lagao",
+                          "set a calendar alert for doctor appointment on Friday 3 PM"
    ✓ EMAIL: "send an email to john@example.com"
 
 6. DOCUMENT_QA

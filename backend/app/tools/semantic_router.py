@@ -42,8 +42,8 @@ def _is_tool_schema_eligible(tool: Dict[str, Any], query: str) -> bool:
     if req_params:
         query_text = query.lower()
 
-        # Schema requires math expression / numeric code parameter
-        if any(p in ("expression", "code", "script") for p in req_params):
+        # Schema requires math expression parameter (for arithmetic calculator)
+        if any(p == "expression" for p in req_params):
             if not any(c.isdigit() or c in "+-*/%^" for c in query):
                 return False
 

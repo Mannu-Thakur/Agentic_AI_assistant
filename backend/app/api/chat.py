@@ -28,9 +28,11 @@ def resolve_provider_from_model(model: str) -> str:
     m = (model or "").lower().strip()
     if m.startswith("openrouter/"):
         return "openrouter"
+    if "gemma" in m:
+        return "groq"
     if "gemini" in m or "google" in m:
         return "google"
-    if "llama" in m or "mixtral" in m or "gemma" in m or "groq" in m or "gpt-oss" in m or m.startswith("qwen/"):
+    if "llama" in m or "mixtral" in m or "groq" in m or "gpt-oss" in m or m.startswith("qwen/"):
         return "groq"
     if "gpt" in m or "o1-" in m or "o3-" in m or "o4-" in m:
         return "openai"
@@ -210,8 +212,23 @@ async def stream_agent_message(
     await ChatService.delete_messages_after(db, chat_id, schema.parent_message_id)
 
     import re as _re
-    clean_save_content = _re.sub(r"\[System Context:[^\]]*\]\n?", "", schema.content)
-    clean_save_content = _re.sub(r"\[User Location Context:[^\]]*\]\n?", "", clean_save_content).strip() or schema.content
+    client_time_header = request.headers.get("x-client-time")
+    client_location_header = request.headers.get("x-client-location")
+
+    # If client passed legacy [System Context: ...] in content, extract it if header is not present
+    if not client_time_header and schema.content:
+        sc_match = _re.search(r"\[System Context:\s*([^\]]+)\]", schema.content)
+        if sc_match:
+            client_time_header = sc_match.group(1).strip()
+
+    if not client_location_header and schema.content:
+        loc_match = _re.search(r"\[User Location Context:\s*([^\]]+)\]", schema.content)
+        if loc_match:
+            client_location_header = loc_match.group(1).strip()
+
+    clean_save_content = _re.sub(r"\[System Context:[^\]]*\]\s*", "", schema.content or "")
+    clean_save_content = _re.sub(r"\[System Context\]\s*", "", clean_save_content)
+    clean_save_content = _re.sub(r"\[User Location Context:[^\]]*\]\s*", "", clean_save_content).strip()
 
     images_payload = (
         [img.model_dump() for img in schema.images] if schema.images else None
@@ -337,10 +354,13 @@ async def stream_agent_message(
 
     langchain_messages = []
     for msg in db_messages_trimmed:
+      c = _re.sub(r"\[System Context:[^\]]*\]\s*", "", msg.content or "")
+      c = _re.sub(r"\[System Context\]\s*", "", c)
+      c = _re.sub(r"\[User Location Context:[^\]]*\]\s*", "", c).strip()
       if msg.role == "user":
-        langchain_messages.append(HumanMessage(content=msg.content))
+        langchain_messages.append(HumanMessage(content=c))
       elif msg.role == "assistant":
-        langchain_messages.append(AIMessage(content=msg.content))
+        langchain_messages.append(AIMessage(content=c))
 
     _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tiff", ".heic", ".heif"}
     uploaded_file_paths = [
@@ -383,7 +403,10 @@ async def stream_agent_message(
         "memory_status":         {},
         "web_status":            {},
         "inconsistencies":       [],
+        "client_time":           client_time_header,
+        "client_location":       client_location_header,
     }
+
   except HTTPException:
     raise
   except Exception as preflight_err:

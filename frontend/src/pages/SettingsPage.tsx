@@ -231,6 +231,18 @@ const SectionCard = memo(function SectionCard({
 // -- Ingestion Progress ----------------------------------------
 // -------------------------------------------------------------
 
+const cleanErrorMessage = (raw: string): string => {
+  if (!raw) return 'An unexpected error occurred during ingestion.';
+  if (raw.includes('PERMISSION_DENIED') || raw.includes('denied access')) {
+    return 'Google AI Studio denied project access for the configured Gemini key. The backend automatically switches to local neural embeddings on retry.';
+  }
+  const jsonMatch = raw.match(/\{.*"message"\s*:\s*"([^"]+)".*\}/s);
+  if (jsonMatch && jsonMatch[1]) {
+    return jsonMatch[1];
+  }
+  return raw.replace(/^RuntimeError:\s*/i, '').replace(/^Indexing failed:\s*/i, '');
+};
+
 const IngestionProgress = memo(function IngestionProgress({
   filename, currentStep, done, error,
 }: {
@@ -252,9 +264,10 @@ const IngestionProgress = memo(function IngestionProgress({
       </div>
 
       {error && (
-        <p className="text-[10px] text-rose-400 bg-rose-950/20 border border-rose-900/30 rounded-lg px-3 py-2 leading-relaxed">
-          {error}
-        </p>
+        <div className="bg-rose-950/20 border border-rose-900/30 rounded-lg px-3 py-2.5 text-[10px] text-rose-300 leading-relaxed">
+          <p className="font-semibold text-rose-400 mb-0.5">Indexing Notice</p>
+          <p>{cleanErrorMessage(error)}</p>
+        </div>
       )}
 
       {!error && (
@@ -1826,7 +1839,7 @@ export default function SettingsPage() {
                         <span className="text-[10px] font-semibold text-foreground">
                           {uploading ? 'Processing...' : 'Click to select a file'}
                         </span>
-                        <span className="text-[9px] text-foreground-3 mt-1">PDF, DOCX, TXT, XLSX "” up to 20 MB</span>
+                        <span className="text-[9px] text-foreground-3 mt-1">PDF, DOCX, TXT, XLSX &bull; up to 20 MB</span>
                         <input
                           type="file"
                           className="hidden"
@@ -1886,7 +1899,7 @@ export default function SettingsPage() {
                             )}
                             {doc.status === 'failed' && (
                               <div className="flex items-center gap-2">
-                                <Tooltip content={doc.error_message || 'Document indexing failed. Click Retry to re-index.'} side="top">
+                                <Tooltip content={doc.error_message ? cleanErrorMessage(doc.error_message) : 'Document indexing failed. Click Retry to re-index.'} side="top">
                                   <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/25 cursor-help shadow-xs">
                                     <XCircle className="w-3 h-3" />Failed
                                   </span>
