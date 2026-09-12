@@ -28,13 +28,11 @@ def resolve_provider_from_model(model: str) -> str:
     m = (model or "").lower().strip()
     if m.startswith("openrouter/"):
         return "openrouter"
-    if "gemini" in m:
+    if "gemini" in m or "google" in m:
         return "google"
-    if "llama" in m or "mixtral" in m or "gemma" in m or "groq" in m:
+    if "llama" in m or "mixtral" in m or "gemma" in m or "groq" in m or "gpt-oss" in m or m.startswith("qwen/"):
         return "groq"
-    if "google" in m:
-        return "google"
-    if "gpt" in m or "o1-" in m:
+    if "gpt" in m or "o1-" in m or "o3-" in m or "o4-" in m:
         return "openai"
     if "claude" in m:
         return "anthropic"
@@ -280,6 +278,8 @@ async def stream_agent_message(
         pass
 
     # ── Real-time provider resolution: look up which provider owns this model ──
+    from app.providers.registry import provider_registry
+    schema.model = provider_registry.remap_model(schema.model)
     resolved_prov = None
     for k in api_keys:
         if k.status == "VERIFIED" and k.available_models:
@@ -302,14 +302,14 @@ async def stream_agent_message(
     # ── Auto Key Fallback: if requested provider key missing, fallback to any valid available key ──
     if not key_found:
         available_fallback = None
-        if (user_keys.get("openai") or settings.OPENAI_API_KEY) and not str(settings.OPENAI_API_KEY or "").startswith("mock_"):
-            available_fallback = ("openai", user_keys.get("openai") or settings.OPENAI_API_KEY, "gpt-4o-mini")
-        elif (user_keys.get("google") or user_keys.get("gemini") or settings.GEMINI_API_KEY) and not str(settings.GEMINI_API_KEY or "").startswith("mock_"):
-            available_fallback = ("google", user_keys.get("google") or user_keys.get("gemini") or settings.GEMINI_API_KEY, "gemini-2.0-flash")
+        if (user_keys.get("google") or user_keys.get("gemini") or settings.GEMINI_API_KEY) and not str(settings.GEMINI_API_KEY or "").startswith("mock_"):
+            available_fallback = ("google", user_keys.get("google") or user_keys.get("gemini") or settings.GEMINI_API_KEY, "gemini-3.6-flash")
         elif (user_keys.get("groq") or settings.GROQ_API_KEY) and not str(settings.GROQ_API_KEY or "").startswith("mock_"):
-            available_fallback = ("groq", user_keys.get("groq") or settings.GROQ_API_KEY, "llama-3.3-70b-versatile")
+            available_fallback = ("groq", user_keys.get("groq") or settings.GROQ_API_KEY, "openai/gpt-oss-120b")
+        elif (user_keys.get("openai") or settings.OPENAI_API_KEY) and not str(settings.OPENAI_API_KEY or "").startswith("mock_"):
+            available_fallback = ("openai", user_keys.get("openai") or settings.OPENAI_API_KEY, "gpt-4o-mini")
         elif (user_keys.get("openrouter") or settings.OPENROUTER_API_KEY) and not str(settings.OPENROUTER_API_KEY or "").startswith("mock_"):
-            available_fallback = ("openrouter", user_keys.get("openrouter") or settings.OPENROUTER_API_KEY, "google/gemini-2.0-flash")
+            available_fallback = ("openrouter", user_keys.get("openrouter") or settings.OPENROUTER_API_KEY, "google/gemini-3.6-flash")
         
         if available_fallback:
             resolved_prov, final_key, schema.model = available_fallback

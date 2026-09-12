@@ -312,5 +312,28 @@ def run_schema_migrations() -> None:
                     conn.execute(text("UPDATE api_keys SET provider_name = 'google' WHERE provider_name = 'gemini'"))
                     logger.info("[schema] Normalized 'gemini' provider to 'google' in api_keys table")
 
+        # 5. Add new preference columns to user_preferences table
+        if inspector.has_table("user_preferences"):
+            existing_pref_cols = {col["name"] for col in inspector.get_columns("user_preferences")}
+            pref_cols = [
+                ("temperature", "FLOAT DEFAULT 0.7"),
+                ("max_tokens", "INTEGER DEFAULT 2048"),
+                ("streaming", "BOOLEAN DEFAULT 1"),
+                ("font_size", "VARCHAR(20) DEFAULT 'md'"),
+                ("compact_mode", "BOOLEAN DEFAULT 0"),
+                ("contrast_mode", "VARCHAR(20) DEFAULT 'normal'"),
+                ("accent_color", "VARCHAR(20) DEFAULT 'blue'"),
+                ("language", "VARCHAR(20) DEFAULT 'en'"),
+                ("higher_intelligence", "BOOLEAN DEFAULT 1"),
+                ("enable_dictation", "BOOLEAN DEFAULT 1"),
+                ("improve_model", "BOOLEAN DEFAULT 1"),
+                ("features", "TEXT"),
+            ]
+            with engine.begin() as conn:
+                for col_name, col_type in pref_cols:
+                    if col_name not in existing_pref_cols:
+                        conn.execute(text(f"ALTER TABLE user_preferences ADD COLUMN {col_name} {col_type}"))
+                        logger.info(f"[schema] Added column user_preferences.{col_name}")
+
     except Exception as exc:
         logger.warning(f"[schema] Migration warning: {exc}")

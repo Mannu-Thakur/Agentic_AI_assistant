@@ -289,12 +289,10 @@ from app.agent.doc_signals import (
 def get_provider(model: str):
     if model.startswith("openrouter/"):
         return openrouter_provider
-    elif "gemini" in model:
+    elif "gemini" in model or "google" in model:
         return gemini_provider
-    elif "llama" in model or "mixtral" in model or "gemma" in model or "groq" in model:
+    elif "gpt-oss" in model or "groq" in model or "llama" in model or "mixtral" in model or "gemma" in model or model.startswith("qwen/"):
         return groq_provider
-    elif "google" in model:
-        return gemini_provider
     elif "gpt" in model or "o1-" in model or "o3-" in model or "o4-" in model:
         # If OpenAI key is set, use direct OpenAIProvider; otherwise OpenRouter
         openai_key = getattr(settings, "OPENAI_API_KEY", None) or os.environ.get("OPENAI_API_KEY")
@@ -792,6 +790,8 @@ def _best_api_key(keys: dict, model: str) -> Optional[str]:
         return keys.get("openrouter")
     if "gemini" in model or "google" in model:
         return keys.get("gemini") or keys.get("google") or keys.get("openrouter")
+    if "gpt-oss" in model or "groq" in model or "llama" in model or "mixtral" in model or "gemma" in model or model.startswith("qwen/"):
+        return keys.get("groq") or keys.get("openrouter")
     if "gpt" in model or "o1-" in model or "o3-" in model or "o4-" in model:
         return keys.get("openai") or keys.get("openrouter")
     if "claude" in model:
@@ -802,8 +802,6 @@ def _best_api_key(keys: dict, model: str) -> Optional[str]:
         return keys.get("alibaba") or keys.get("openrouter")
     if "glm" in model:
         return keys.get("glm") or keys.get("openrouter")
-    if "llama" in model or "mixtral" in model or "gemma" in model or "groq" in model:
-        return keys.get("groq") or keys.get("openrouter")
     # Unknown model name — fall back to any available key in priority order
     return (
         keys.get("gemini") or keys.get("google") or
@@ -1004,11 +1002,11 @@ async def _call_llm_judge(prompt: str, config: dict) -> Optional[dict]:
     messages = [{"role": "user", "content": prompt}]
 
     candidates = [
-        (groq_provider,       "groq",       "llama-3.1-8b-instant"),
-        (groq_provider,       "groq",       "llama-3.3-70b-versatile"),
-        (gemini_provider,     "gemini",     "gemini-2.0-flash"),
+        (groq_provider,       "groq",       "openai/gpt-oss-20b"),
+        (groq_provider,       "groq",       "openai/gpt-oss-120b"),
+        (gemini_provider,     "gemini",     "gemini-3.6-flash"),
         (openai_provider,     "openai",     "gpt-4o-mini"),
-        (openrouter_provider, "openrouter", "google/gemini-2.0-flash"),
+        (openrouter_provider, "openrouter", "google/gemini-3.6-flash"),
     ]
 
     for provider, key_name, model in candidates:
@@ -1071,11 +1069,11 @@ async def _call_llm_text(prompt: str, config: dict, max_tokens: int = 256) -> Op
     messages = [{"role": "user", "content": prompt}]
 
     candidates = [
-        (groq_provider,       "groq",       "llama-3.1-8b-instant"),
-        (groq_provider,       "groq",       "llama-3.3-70b-versatile"),
-        (gemini_provider,     "gemini",     "gemini-2.0-flash"),
+        (groq_provider,       "groq",       "openai/gpt-oss-20b"),
+        (groq_provider,       "groq",       "openai/gpt-oss-120b"),
+        (gemini_provider,     "gemini",     "gemini-3.6-flash"),
         (openai_provider,     "openai",     "gpt-4o-mini"),
-        (openrouter_provider, "openrouter", "google/gemini-2.0-flash"),
+        (openrouter_provider, "openrouter", "google/gemini-3.6-flash"),
     ]
 
     for provider, key_name, model in candidates:
@@ -1552,9 +1550,9 @@ async def memory_write_node(
             messages_for_ack = [{"role": "user", "content": prompt}]
 
             for provider, key_name, model in [
-                (groq_provider,       "groq",       "llama-3.3-70b-versatile"),
-                (gemini_provider,     "gemini",     "gemini-2.0-flash"),
-                (openrouter_provider, "openrouter", "google/gemini-2.0-flash"),
+                (gemini_provider,     "gemini",     "gemini-3.6-flash"),
+                (groq_provider,       "groq",       "openai/gpt-oss-120b"),
+                (openrouter_provider, "openrouter", "google/gemini-3.6-flash"),
             ]:
                 api_key = keys.get(key_name)
                 if not api_key:
@@ -3028,7 +3026,7 @@ async def generate_response_node(
             if gemini_key and not str(gemini_key).startswith("mock_"):
                 keys["gemini"] = gemini_key
                 keys["google"] = gemini_key
-                model = "gemini-2.0-flash"
+                model = "gemini-3.6-flash"
                 provider = gemini_provider
                 provider_api_key = gemini_key
                 if on_token:
@@ -3149,9 +3147,11 @@ async def generate_response_node(
 
     # ── Provider & fallback setup (logging, overrides and fallback checks) ────
     # actual_model_id strips the "openrouter/" prefix for provider routing logic
+    from app.providers.registry import provider_registry
     actual_model_id  = model[11:] if model.startswith("openrouter/") else model
-    provider         = get_provider(model)
-    provider_api_key = _best_api_key(keys, model)
+    actual_model_id  = provider_registry.remap_model(actual_model_id)
+    provider         = get_provider(actual_model_id)
+    provider_api_key = _best_api_key(keys, actual_model_id)
 
     def mask_key(k: Optional[str]) -> str:
         if not k:
@@ -3179,15 +3179,17 @@ async def generate_response_node(
     # Tier 0: Primary requested model and provider
     # Tier 1: Intra-provider candidates (same key, lighter / higher-rate-limit models)
     # Tier 2: Cross-provider candidates across all configured valid keys
+    from app.providers.registry import provider_registry
     actual_model_id = model[11:] if model.startswith("openrouter/") else model
-    primary_prov_inst = get_provider(model)
+    actual_model_id = provider_registry.remap_model(actual_model_id)
+    primary_prov_inst = get_provider(actual_model_id)
     model_lower = (actual_model_id or "").lower()
 
     if model.startswith("openrouter/"):
         primary_prov_name = "openrouter"
     elif "gemini" in model_lower or "google" in model_lower:
         primary_prov_name = "gemini"
-    elif any(x in model_lower for x in ("llama", "mixtral", "gemma", "groq")):
+    elif any(x in model_lower for x in ("llama", "mixtral", "gemma", "groq", "gpt-oss")) or model_lower.startswith("qwen/"):
         primary_prov_name = "groq"
     elif any(x in model_lower for x in ("gpt", "o1-", "o3-", "o4-")):
         primary_prov_name = "openai" if (keys.get("openai") and not str(keys.get("openai")).startswith("mock_")) else "openrouter"
@@ -3244,40 +3246,39 @@ async def generate_response_node(
 
     # 1. Tier 1 — Intra-provider fallback (same provider, lighter / higher-rate-limit models)
     if primary_prov_name == "gemini" and gemini_key:
-        for m in ("gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash", "gemini-2.5-flash"):
+        for m in ("gemini-3.6-flash", "gemini-flash-latest", "gemini-flash-lite-latest", "gemini-3.1-flash-lite", "gemini-3.5-flash"):
             candidates.append(("gemini", gemini_provider, m, gemini_key))
     elif primary_prov_name == "groq" and groq_key:
-        # Llama 3.1 8B Instant has 30,000 TPM and 30 RPM (5x headroom over 70B's 6,000 TPM limit)
-        for m in ("llama-3.1-8b-instant", "llama-3.3-70b-versatile", "gemma2-9b-it"):
+        for m in ("openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b", "groq/compound-mini"):
             candidates.append(("groq", groq_provider, m, groq_key))
     elif primary_prov_name == "openai" and openai_key:
         for m in ("gpt-4o-mini", "gpt-4o"):
             candidates.append(("openai", openai_provider, m, openai_key))
     elif primary_prov_name in ("openrouter", "anthropic", "deepseek") and openrouter_key:
-        for m in ("google/gemini-2.0-flash", "meta-llama/llama-3.3-70b-instruct", "openai/gpt-4o-mini"):
+        for m in ("google/gemini-3.6-flash", "openai/gpt-4o-mini"):
             candidates.append(("openrouter", openrouter_provider, m, openrouter_key))
 
     # 2. Tier 2 — Cross-provider cascades
     cross_providers = []
     if primary_prov_name == "gemini":
         cross_providers = [
-            ("groq", groq_provider, ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"], groq_key),
+            ("groq", groq_provider, ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b"], groq_key),
             ("openai", openai_provider, ["gpt-4o-mini", "gpt-4o"], openai_key),
-            ("openrouter", openrouter_provider, ["google/gemini-2.0-flash", "meta-llama/llama-3.3-70b-instruct"], openrouter_key),
+            ("openrouter", openrouter_provider, ["google/gemini-3.6-flash"], openrouter_key),
         ]
     elif primary_prov_name == "groq":
         cross_providers = [
-            ("gemini", gemini_provider, ["gemini-2.0-flash", "gemini-2.0-flash-lite"], gemini_key),
+            ("gemini", gemini_provider, ["gemini-3.6-flash", "gemini-flash-latest", "gemini-flash-lite-latest"], gemini_key),
             ("openai", openai_provider, ["gpt-4o-mini", "gpt-4o"], openai_key),
-            ("openrouter", openrouter_provider, ["meta-llama/llama-3.3-70b-instruct", "google/gemini-2.0-flash"], openrouter_key),
+            ("openrouter", openrouter_provider, ["google/gemini-3.6-flash"], openrouter_key),
         ]
     elif primary_prov_name == "openai":
         cross_providers = [
-            ("gemini", gemini_provider, ["gemini-2.0-flash", "gemini-2.0-flash-lite"], gemini_key),
-            ("groq", groq_provider, ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"], groq_key),
+            ("gemini", gemini_provider, ["gemini-3.6-flash", "gemini-flash-latest"], gemini_key),
+            ("groq", groq_provider, ["openai/gpt-oss-120b", "openai/gpt-oss-20b"], groq_key),
             ("openrouter", openrouter_provider, [
                 actual_model_id if "/" in actual_model_id else f"openai/{actual_model_id}",
-                "google/gemini-2.0-flash"
+                "google/gemini-3.6-flash"
             ], openrouter_key),
         ]
     else:
@@ -3292,11 +3293,10 @@ async def generate_response_node(
         cross_providers = [
             ("openrouter", openrouter_provider, [
                 or_primary,
-                "google/gemini-2.0-flash",
-                "meta-llama/llama-3.3-70b-instruct",
+                "google/gemini-3.6-flash",
             ], openrouter_key),
-            ("gemini", gemini_provider, ["gemini-2.0-flash", "gemini-2.0-flash-lite"], gemini_key),
-            ("groq", groq_provider, ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"], groq_key),
+            ("gemini", gemini_provider, ["gemini-3.6-flash", "gemini-flash-latest"], gemini_key),
+            ("groq", groq_provider, ["openai/gpt-oss-120b", "openai/gpt-oss-20b"], groq_key),
             ("openai", openai_provider, ["gpt-4o-mini"], openai_key),
         ]
 
@@ -3312,8 +3312,8 @@ async def generate_response_node(
                 candidates.insert(0, ("openai", openai_provider, "gpt-4o", openai_key))
         # Guarantee: Gemini Flash via system key (best for handwriting/vision)
         if gemini_key and not str(gemini_key).startswith("mock_"):
-            if not any("gemini-2.0-flash" in m and p == "gemini" for p, _, m, _ in candidates):
-                candidates.append(("gemini", gemini_provider, "gemini-2.0-flash", gemini_key))
+            if not any("gemini-3.6-flash" in m and p == "gemini" for p, _, m, _ in candidates):
+                candidates.append(("gemini", gemini_provider, "gemini-3.6-flash", gemini_key))
         # Guarantee: OpenAI GPT-4o via system key through OpenRouter
         if openrouter_key and not str(openrouter_key).startswith("mock_"):
             if not any("gpt-4o" in m and p == "openrouter" for p, _, m, _ in candidates):
@@ -3611,14 +3611,14 @@ async def generate_response_node(
                     break
             images = []
             rescue_attempts = []
+            if keys.get("gemini") or keys.get("google"):
+                rescue_attempts.append((gemini_provider, "gemini-3.6-flash", keys.get("gemini") or keys.get("google")))
+            if keys.get("groq"):
+                rescue_attempts.append((groq_provider, "openai/gpt-oss-120b", keys["groq"]))
             if keys.get("openai"):
                 rescue_attempts.append((openai_provider, "gpt-4o-mini", keys["openai"]))
-            if keys.get("gemini") or keys.get("google"):
-                rescue_attempts.append((gemini_provider, "gemini-2.0-flash", keys.get("gemini") or keys.get("google")))
-            if keys.get("groq"):
-                rescue_attempts.append((groq_provider, "llama-3.3-70b-versatile", keys["groq"]))
             if keys.get("openrouter"):
-                rescue_attempts.append((openrouter_provider, "meta-llama/llama-3.3-70b-instruct", keys["openrouter"]))
+                rescue_attempts.append((openrouter_provider, "google/gemini-3.6-flash", keys["openrouter"]))
 
             for r_prov, r_mod, r_key in rescue_attempts:
                 try:
@@ -3692,7 +3692,7 @@ async def generate_response_node(
             elif att.get("is_rate_limit"):
                 has_rate_limit = True
                 attempt_summaries.append(f"• **{p_name}** (`{m_name}`): Rate limit (RPM/TPM) reached")
-            elif any(w in err_text.lower() for w in ["api key", "missing", "invalid", "401", "403", "credentials"]):
+            elif any(w in err_text.lower() for w in ["invalid api key", "missing api key", "api_key_invalid", "invalid_api_key", "invalid key", "missing key", "unauthorized", "authentication", "forbidden", "401", "403"]):
                 has_auth_error = True
                 attempt_summaries.append(f"• **{p_name}** (`{m_name}`): Invalid or missing API key")
             else:

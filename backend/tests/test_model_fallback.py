@@ -26,23 +26,23 @@ def test_is_quota_exhaustion_detection():
 
 
 def test_deprecated_models_preserves_valid_gemini_models():
-    """Verify that modern Gemini models (2.5, 2.0, 1.5) are NOT prematurely remapped or collapsed."""
-    assert "gemini-2.5-flash" not in DEPRECATED_MODELS
-    assert "gemini-2.5-pro" not in DEPRECATED_MODELS
-    assert "gemini-2.0-flash" not in DEPRECATED_MODELS
-    assert "gemini-2.0-flash-lite" not in DEPRECATED_MODELS
-    assert "gemini-1.5-flash" not in DEPRECATED_MODELS
+    """Verify modern Gemini models are active and obsolete ones are remapped to gemini-3.6-flash."""
+    assert "gemini-3.6-flash" not in DEPRECATED_MODELS
+    assert "gemini-flash-latest" not in DEPRECATED_MODELS
+    assert "gemini-3.1-flash-lite" not in DEPRECATED_MODELS
 
     # Truly retired models are remapped
-    assert DEPRECATED_MODELS.get("gemini-1.0-pro") == "gemini-2.0-flash"
-    assert DEPRECATED_MODELS.get("gemini-pro") == "gemini-2.0-flash"
+    assert DEPRECATED_MODELS.get("gemini-1.0-pro") == "gemini-3.6-flash"
+    assert DEPRECATED_MODELS.get("gemini-pro") == "gemini-3.6-flash"
+    assert DEPRECATED_MODELS.get("gemini-2.0-flash") == "gemini-3.6-flash"
+    assert DEPRECATED_MODELS.get("gemini-2.5-flash") == "gemini-3.6-flash"
 
 
 @pytest.mark.asyncio
 async def test_intra_provider_groq_fallback_on_tpm_limit(monkeypatch):
     """
-    When Groq llama-3.3-70b-versatile hits a 6K TPM limit (HTTP 429),
-    the fallback engine should seamlessly fall back to llama-3.1-8b-instant (30K TPM)
+    When Groq openai/gpt-oss-120b hits a 6K TPM limit (HTTP 429),
+    the fallback engine should seamlessly fall back to openai/gpt-oss-20b
     on the exact same key and succeed.
     """
     calls = []
@@ -50,19 +50,19 @@ async def test_intra_provider_groq_fallback_on_tpm_limit(monkeypatch):
     async def mock_groq_stream(*args, **kwargs):
         model = kwargs.get("model")
         calls.append(model)
-        if model == "llama-3.3-70b-versatile":
+        if model == "openai/gpt-oss-120b":
             if False:
                 yield {}
-            raise Exception("429 Rate limit reached for model `llama-3.3-70b-versatile` on tokens per minute (TPM): Limit 6000")
-        elif model == "llama-3.1-8b-instant":
-            yield {"event": "chunk", "text": "Response from Llama 3.1 8B Instant."}
-            yield {"event": "metrics", "metrics": {"total_tokens": 25, "model_used": "llama-3.1-8b-instant"}}
+            raise Exception("429 Rate limit reached for model `openai/gpt-oss-120b` on tokens per minute (TPM): Limit 6000")
+        elif model == "openai/gpt-oss-20b":
+            yield {"event": "chunk", "text": "Response from GPT-OSS 20B."}
+            yield {"event": "metrics", "metrics": {"total_tokens": 25, "model_used": "openai/gpt-oss-20b"}}
 
     monkeypatch.setattr(groq_provider, "generate_stream", mock_groq_stream)
 
     state = {
         "messages": [{"role": "user", "content": "Explain quantum computing."}],
-        "active_model": "llama-3.3-70b-versatile",
+        "active_model": "openai/gpt-oss-120b",
         "intent": "NORMAL_CHAT",
         "allowed_tools": [],
         "source_documents": [],
@@ -77,37 +77,37 @@ async def test_intra_provider_groq_fallback_on_tpm_limit(monkeypatch):
     }
 
     result = await generate_response_node(state, config)
-    assert "llama-3.3-70b-versatile" in calls
-    assert "llama-3.1-8b-instant" in calls
-    assert "Response from Llama 3.1 8B Instant." in result["response_text"]
+    assert "openai/gpt-oss-120b" in calls
+    assert "openai/gpt-oss-20b" in calls
+    assert "Response from GPT-OSS 20B." in result["response_text"]
     assert "Note: Selected model" in result["response_text"]
-    assert "llama-3.1-8b-instant" in result["response_text"]
+    assert "openai/gpt-oss-20b" in result["response_text"]
 
 
 @pytest.mark.asyncio
 async def test_intra_provider_gemini_fallback_on_rpm_limit(monkeypatch):
     """
-    When Gemini 2.0 Flash encounters a transient 15 RPM rate limit (HTTP 429),
-    the engine should fall back to gemini-2.0-flash-lite (30 RPM) on the same key.
+    When Gemini 3.6 Flash encounters a transient 15 RPM rate limit (HTTP 429),
+    the engine should fall back to gemini-flash-latest on the same key.
     """
     calls = []
 
     async def mock_gemini_stream(*args, **kwargs):
         model = kwargs.get("model")
         calls.append(model)
-        if model == "gemini-2.0-flash":
+        if model == "gemini-3.6-flash":
             if False:
                 yield {}
             raise Exception("Gemini streaming API rate limit exceeded (HTTP 429). 15 RPM reached.")
-        elif model == "gemini-2.0-flash-lite":
-            yield {"event": "chunk", "text": "Response from Gemini 2.0 Flash Lite."}
-            yield {"event": "metrics", "metrics": {"total_tokens": 30, "model_used": "gemini-2.0-flash-lite"}}
+        elif model == "gemini-flash-latest":
+            yield {"event": "chunk", "text": "Response from Gemini Flash Latest."}
+            yield {"event": "metrics", "metrics": {"total_tokens": 30, "model_used": "gemini-flash-latest"}}
 
     monkeypatch.setattr(gemini_provider, "generate_stream", mock_gemini_stream)
 
     state = {
         "messages": [{"role": "user", "content": "Hello!"}],
-        "active_model": "gemini-2.0-flash",
+        "active_model": "gemini-3.6-flash",
         "intent": "NORMAL_CHAT",
         "allowed_tools": [],
         "source_documents": [],
@@ -122,9 +122,9 @@ async def test_intra_provider_gemini_fallback_on_rpm_limit(monkeypatch):
     }
 
     result = await generate_response_node(state, config)
-    assert "gemini-2.0-flash" in calls
-    assert "gemini-2.0-flash-lite" in calls
-    assert "Response from Gemini 2.0 Flash Lite." in result["response_text"]
+    assert "gemini-3.6-flash" in calls
+    assert "gemini-flash-latest" in calls
+    assert "Response from Gemini Flash Latest." in result["response_text"]
 
 
 @pytest.mark.asyncio
@@ -155,7 +155,7 @@ async def test_cross_provider_fallback_on_account_quota_exhaustion(monkeypatch):
 
     state = {
         "messages": [{"role": "user", "content": "Tell me a fun fact."}],
-        "active_model": "gemini-2.0-flash",
+        "active_model": "gemini-3.6-flash",
         "intent": "NORMAL_CHAT",
         "allowed_tools": [],
         "source_documents": [],
@@ -176,8 +176,8 @@ async def test_cross_provider_fallback_on_account_quota_exhaustion(monkeypatch):
     result = await generate_response_node(state, config)
     # Gemini was called once, saw daily quota exhausted, and skipped remaining Gemini models
     assert len(gemini_calls) == 1
-    assert "gemini-2.0-flash" in gemini_calls
-    assert "gemini-2.0-flash-lite" not in gemini_calls  # Smart skip in action!
+    assert "gemini-3.6-flash" in gemini_calls
+    assert "gemini-flash-latest" not in gemini_calls  # Smart skip in action!
     assert len(groq_calls) >= 1
     assert "Cross-provider rescue response from Groq!" in result["response_text"]
 
@@ -196,14 +196,14 @@ async def test_all_providers_failed_generates_detailed_diagnostic(monkeypatch):
     async def mock_groq_fail(*args, **kwargs):
         if False:
             yield {}
-        raise Exception("429 Rate limit reached for model `llama-3.3-70b-versatile` on TPM limit")
+        raise Exception("429 Rate limit reached for model `openai/gpt-oss-120b` on TPM limit")
 
     monkeypatch.setattr(gemini_provider, "generate_stream", mock_gemini_fail)
     monkeypatch.setattr(groq_provider, "generate_stream", mock_groq_fail)
 
     state = {
         "messages": [{"role": "user", "content": "Help me."}],
-        "active_model": "gemini-2.0-flash",
+        "active_model": "gemini-3.6-flash",
         "intent": "NORMAL_CHAT",
         "allowed_tools": [],
         "source_documents": [],
@@ -250,7 +250,7 @@ async def test_openrouter_model_normalization_and_fallback_metrics(monkeypatch):
             if False:
                 yield {}
             raise Exception("429 Rate limit exceeded on claude-3.5-sonnet")
-        elif model == "google/gemini-2.0-flash":
+        elif model == "google/gemini-3.6-flash":
             yield {"event": "chunk", "text": "OpenRouter Gemini Flash response."}
             yield {"event": "metrics", "metrics": {"total_tokens": 40, "model_used": model}}
 
@@ -277,16 +277,16 @@ async def test_openrouter_model_normalization_and_fallback_metrics(monkeypatch):
     # 1. No double prefixing like anthropic/anthropic/...
     assert "anthropic/anthropic/claude-3.5-sonnet" not in calls
     assert "anthropic/claude-3.5-sonnet" in calls
-    assert "google/gemini-2.0-flash" in calls
+    assert "google/gemini-3.6-flash" in calls
 
     # 2. Result state correctness
     assert "OpenRouter Gemini Flash response." in result["response_text"]
-    assert result["model_used"] == "google/gemini-2.0-flash"
-    assert result["active_model"] == "google/gemini-2.0-flash"
+    assert result["model_used"] == "google/gemini-3.6-flash"
+    assert result["active_model"] == "google/gemini-3.6-flash"
     assert result["provider_used"] == "openrouter"
 
     # 3. provider_metrics recorded the fallback
-    recent_fallbacks = [fb for fb in provider_metrics._fallback_log if fb.get("to_model") == "google/gemini-2.0-flash"]
+    recent_fallbacks = [fb for fb in provider_metrics._fallback_log if fb.get("to_model") == "google/gemini-3.6-flash"]
     assert len(recent_fallbacks) >= 1
 
 
@@ -305,7 +305,7 @@ async def test_stream_interruption_handles_gracefully(monkeypatch):
 
     state = {
         "messages": [{"role": "user", "content": "Tell a story."}],
-        "active_model": "gemini-2.0-flash",
+        "active_model": "gemini-3.6-flash",
         "intent": "NORMAL_CHAT",
         "allowed_tools": [],
         "source_documents": [],
@@ -327,10 +327,10 @@ async def test_stream_interruption_handles_gracefully(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_judge_prefers_llama_8b_instant(monkeypatch):
+async def test_judge_prefers_gpt_oss_20b(monkeypatch):
     """
-    Verify _call_llm_judge tries llama-3.1-8b-instant first for fast,
-    high-TPM headroom query evaluations.
+    Verify _call_llm_judge tries openai/gpt-oss-20b first for fast,
+    high-TPM headroom query evaluations on Groq.
     """
     from app.agent.nodes import _call_llm_judge
 
@@ -352,7 +352,7 @@ async def test_judge_prefers_llama_8b_instant(monkeypatch):
 
     res = await _call_llm_judge("Is this valid?", config)
     assert res == {"verdict": "PASS"}
-    assert called_models[0] == "llama-3.1-8b-instant"
+    assert called_models[0] == "openai/gpt-oss-20b"
 
 
 def test_enhanced_quota_exhaustion_indicators():
@@ -364,22 +364,23 @@ def test_enhanced_quota_exhaustion_indicators():
 
 def test_deprecated_models_groq_remapping():
     """Verify decommissioned Groq models are remapped to active equivalents."""
-    assert DEPRECATED_MODELS.get("llama3-70b-8192") == "llama-3.3-70b-versatile"
-    assert DEPRECATED_MODELS.get("llama3-8b-8192") == "llama-3.1-8b-instant"
-    assert DEPRECATED_MODELS.get("llama-3-70b") == "llama-3.3-70b-versatile"
-    assert DEPRECATED_MODELS.get("llama-3-8b") == "llama-3.1-8b-instant"
-    assert DEPRECATED_MODELS.get("mixtral-8x7b-32768") == "llama-3.3-70b-versatile"
+    assert DEPRECATED_MODELS.get("llama3-70b-8192") == "openai/gpt-oss-120b"
+    assert DEPRECATED_MODELS.get("llama3-8b-8192") == "openai/gpt-oss-20b"
+    assert DEPRECATED_MODELS.get("llama-3-70b") == "openai/gpt-oss-120b"
+    assert DEPRECATED_MODELS.get("llama-3-8b") == "openai/gpt-oss-20b"
+    assert DEPRECATED_MODELS.get("llama-3.3-70b-versatile") == "openai/gpt-oss-120b"
+    assert DEPRECATED_MODELS.get("mixtral-8x7b-32768") == "openai/gpt-oss-120b"
 
 
 def test_provider_registry_protects_known_models():
     """Verify provider registry refuses to quarantine core KNOWN_MODELS on 400/404."""
     # Attempting to mark a core Groq model unavailable should be rejected
-    provider_registry.mark_model_unavailable("groq", "llama-3.3-70b-versatile")
-    assert provider_registry.is_model_available("groq", "llama-3.3-70b-versatile") is True
+    provider_registry.mark_model_unavailable("groq", "openai/gpt-oss-120b")
+    assert provider_registry.is_model_available("groq", "openai/gpt-oss-120b") is True
 
     # Attempting to mark a core Gemini model unavailable should be rejected
-    provider_registry.mark_model_unavailable("gemini", "gemini-2.0-flash")
-    assert provider_registry.is_model_available("gemini", "gemini-2.0-flash") is True
+    provider_registry.mark_model_unavailable("gemini", "gemini-3.6-flash")
+    assert provider_registry.is_model_available("gemini", "gemini-3.6-flash") is True
 
     # An unknown model should be quarantineable
     provider_registry.mark_model_unavailable("groq", "nonexistent-model-xyz")
@@ -482,5 +483,5 @@ async def test_normal_chat_greeting_bypasses_retrieval_and_web_search(monkeypatc
 
     result = await generate_response_node(state, config)
     assert "Hello Mannu!" in result["response_text"]
-    assert calls[0] == "llama-3.3-70b-versatile", "llama3-70b-8192 should be remapped to llama-3.3-70b-versatile"
+    assert calls[0] == "openai/gpt-oss-120b", "llama3-70b-8192 should be remapped to openai/gpt-oss-120b"
 

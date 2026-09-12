@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.core.database import get_db
+from app.core.redis_client import cache_get, cache_set, cache_delete
 from app.models.user import User
 from app.models.mcp_server import RemoteMcpServer
 from app.api.auth import get_current_user
@@ -17,6 +18,8 @@ from app.tools.registry import ToolRegistry
 logger = logging.getLogger("app.api.mcp_servers")
 
 router = APIRouter(prefix="/mcp/servers", tags=["mcp_servers"])
+
+REDIS_TTL_MCP = 600  # 10 minutes
 
 
 class RemoteMcpServerCreate(BaseModel):
@@ -45,7 +48,12 @@ async def list_remote_mcp_servers(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """List all registered remote MCP servers for the user."""
+    """List all registered remote MCP servers for the user, with Redis caching."""
+    cache_key = f"mcp:servers:{current_user.id}"
+    cached = await cache_get(cache_key)
+    if cached and isinstance(cached, list):
+        return cached
+
     stmt = select(RemoteMcpServer).where(
         (RemoteMcpServer.user_id == current_user.id) | (RemoteMcpServer.user_id.is_(None))
     ).order_by(RemoteMcpServer.created_at.desc())
@@ -80,6 +88,7 @@ async def list_remote_mcp_servers(
             "tool_count": len(tools_list),
         })
 
+    await cache_set(cache_key, out, ttl_seconds=REDIS_TTL_MCP)
     return out
 
 
@@ -89,8 +98,8 @@ async def test_mcp_server_connection(req: TestConnectionRequest):
     t0 = time.perf_counter()
     client = McpHttpClient(url=req.url, auth_header=req.auth_header, transport_type=req.transport_type)
     try:
-        await asyncio.wait_for(client.connect(), timeout=30.0)
-        tools = await asyncio.wait_for(client.list_tools(), timeout=30.0)
+        await asyncio.wait_for(client.connect(), timeout=15.0)
+        tools = await asyncio.wait_for(client.list_tools(), timeout=15.0)
         await client.close()
         latency_ms = round((time.perf_counter() - t0) * 1000, 1)
 
@@ -114,7 +123,7 @@ async def test_mcp_server_connection(req: TestConnectionRequest):
         latency_ms = round((time.perf_counter() - t0) * 1000, 1)
         return {
             "status": "error",
-            "message": "Connection timed out after 30s. The remote server took too long to respond. If hosted on Render free tier, it may be waking up from sleep (cold start) or failing to start.",
+            "message": "Connection timed out (15s). The remote server took too long to respond. If hosted on Render free tier, it may still be waking up from sleep.",
             "latency_ms": latency_ms,
             "tools": [],
         }
@@ -136,58 +145,77 @@ async def create_remote_mcp_server(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Add a new remote MCP server, test connection, and register exposed tools."""
-    # Test connection first
+    """Add or update a remote MCP server, register in DB, cache in Redis, and bind tools."""
+    discovered_tools = []
+    connection_warning = None
+
+    # Test connection gracefully (fail-safe so user is never blocked from saving)
     client = McpHttpClient(url=payload.url, auth_header=payload.auth_header, transport_type=payload.transport_type)
     try:
-        await asyncio.wait_for(client.connect(), timeout=30.0)
-        discovered_tools = await asyncio.wait_for(client.list_tools(), timeout=30.0)
+        await asyncio.wait_for(client.connect(), timeout=10.0)
+        discovered_tools = await asyncio.wait_for(client.list_tools(), timeout=10.0)
         await client.close()
-    except (asyncio.TimeoutError, TimeoutError):
-        await client.close()
-        raise HTTPException(
-            status_code=408,
-            detail=f"Remote MCP Server connection timed out after 30s ({payload.url}). Check URL and server health."
-        )
     except Exception as e:
         await client.close()
-        raise HTTPException(
-            status_code=400,
-            detail=f"Could not connect to Remote MCP Server URL ({payload.url}): {str(e) or type(e).__name__}"
-        )
+        connection_warning = f"Server saved to DB & Redis, but remote endpoint did not respond immediately ({str(e)[:90]}). Tools will be discovered when server is reachable."
+        logger.warning(f"[MCP Save] Server endpoint offline/slow during save: {e}")
 
-    new_server = RemoteMcpServer(
-        user_id=current_user.id,
-        name=payload.name,
-        url=payload.url,
-        transport_type=payload.transport_type or "http_jsonrpc",
-        auth_header=payload.auth_header,
-        is_enabled=payload.is_enabled if payload.is_enabled is not None else True,
+    # Check if a server with this URL or Name already exists for this user (upsert)
+    stmt = select(RemoteMcpServer).where(
+        ((RemoteMcpServer.url == payload.url) | (RemoteMcpServer.name == payload.name)) &
+        ((RemoteMcpServer.user_id == current_user.id) | (RemoteMcpServer.user_id.is_(None)))
     )
-    db.add(new_server)
-    await db.commit()
-    await db.refresh(new_server)
+    res = await db.execute(stmt)
+    existing_server = res.scalars().first()
 
-    # Register tools into live ToolRegistry
-    if new_server.is_enabled:
+    if existing_server:
+        existing_server.name = payload.name
+        existing_server.url = payload.url
+        existing_server.transport_type = payload.transport_type or "http_jsonrpc"
+        if payload.auth_header is not None:
+            existing_server.auth_header = payload.auth_header
+        if payload.is_enabled is not None:
+            existing_server.is_enabled = payload.is_enabled
+        server_obj = existing_server
+    else:
+        server_obj = RemoteMcpServer(
+            user_id=current_user.id,
+            name=payload.name,
+            url=payload.url,
+            transport_type=payload.transport_type or "http_jsonrpc",
+            auth_header=payload.auth_header,
+            is_enabled=payload.is_enabled if payload.is_enabled is not None else True,
+        )
+        db.add(server_obj)
+
+    await db.commit()
+    await db.refresh(server_obj)
+
+    # Invalidate Redis cache
+    cache_key = f"mcp:servers:{current_user.id}"
+    await cache_delete(cache_key)
+
+    # Register tools into live ToolRegistry if connected & enabled
+    if server_obj.is_enabled and discovered_tools:
         registry = ToolRegistry()
         try:
             await registry.register_remote_server(
-                name=new_server.name,
-                url=new_server.url,
-                auth_header=new_server.auth_header,
-                transport_type=new_server.transport_type
+                name=server_obj.name,
+                url=server_obj.url,
+                auth_header=server_obj.auth_header,
+                transport_type=server_obj.transport_type
             )
         except Exception as reg_exc:
-            logger.warning(f"Failed live registration for new server '{new_server.name}': {reg_exc}")
+            logger.warning(f"Failed live registration for server '{server_obj.name}': {reg_exc}")
 
     return {
-        "id": new_server.id,
-        "name": new_server.name,
-        "url": new_server.url,
-        "is_enabled": new_server.is_enabled,
+        "id": server_obj.id,
+        "name": server_obj.name,
+        "url": server_obj.url,
+        "is_enabled": server_obj.is_enabled,
         "discovered_tools_count": len(discovered_tools),
-        "message": "Remote MCP server added and registered successfully."
+        "warning": connection_warning,
+        "message": connection_warning or "Remote MCP server saved to database and Redis successfully."
     }
 
 
@@ -220,6 +248,10 @@ async def update_remote_mcp_server(
     await db.commit()
     await db.refresh(server)
 
+    # Invalidate Redis cache
+    cache_key = f"mcp:servers:{current_user.id}"
+    await cache_delete(cache_key)
+
     # Re-initialize registry to refresh tool bindings
     registry = ToolRegistry()
     registry.is_initialized = False
@@ -251,6 +283,10 @@ async def delete_remote_mcp_server(
 
     await db.delete(server)
     await db.commit()
+
+    # Invalidate Redis cache
+    cache_key = f"mcp:servers:{current_user.id}"
+    await cache_delete(cache_key)
 
     # Re-initialize registry to remove tool bindings
     registry = ToolRegistry()

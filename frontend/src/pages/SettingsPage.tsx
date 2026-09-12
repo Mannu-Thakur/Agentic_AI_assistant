@@ -14,7 +14,8 @@ import {
   RefreshCw, ArrowLeft, FolderClosed, UploadCloud, CheckCircle2,
   XCircle, FileText, FileCode, Sparkles, Calendar, Info, ChevronRight,
   Database, Layers, Scissors, HardDrive, Plus, Monitor,
-  Sun, Moon, Globe, Type, Archive, Link2, RotateCcw
+  Sun, Moon, Globe, Type, Archive, Link2, RotateCcw,
+  Copy, CheckCheck, Radio, PlusCircle
 } from 'lucide-react';
 import { apiRequest, BASE_URL } from '../services/api';
 import { ProviderKeyManager } from '../services/providerKeyManager';
@@ -112,15 +113,29 @@ const INGESTION_STEPS: IngestionStep[] = [
 // and their availability varies. Users with those keys can use the API key settings.
 const ALL_MODELS = [
   // ── Google Gemini (Direct) ─────────────────────────────────────────────────
-  { id: 'gemini-2.5-pro',              label: 'Gemini 2.5 Pro',        provider: 'Google Gemini', apiProvider: 'google', badge: 'Best Quality' },
-  { id: 'gemini-2.5-flash',            label: 'Gemini 2.5 Flash',      provider: 'Google Gemini', apiProvider: 'google', badge: 'Recommended' },
-  { id: 'gemini-2.0-flash',            label: 'Gemini 2.0 Flash',      provider: 'Google Gemini', apiProvider: 'google', badge: '' },
-  { id: 'gemini-2.0-flash-lite',       label: 'Gemini 2.0 Flash Lite', provider: 'Google Gemini', apiProvider: 'google', badge: 'Fastest' },
+  { id: 'gemini-3.6-flash',            label: 'Gemini 3.6 Flash',      provider: 'Google Gemini', apiProvider: 'google', badge: 'Recommended' },
+  { id: 'gemini-flash-latest',         label: 'Gemini Flash (Latest)', provider: 'Google Gemini', apiProvider: 'google', badge: 'Stable' },
+  { id: 'gemini-3.1-flash-lite',       label: 'Gemini 3.1 Flash Lite', provider: 'Google Gemini', apiProvider: 'google', badge: 'Fastest' },
 
   // ── Groq (Free, Fast) ─────────────────────────────────────────────────────
-  { id: 'llama-3.3-70b-versatile',     label: 'Llama 3.3 70B',         provider: 'Groq',          apiProvider: 'groq',   badge: 'Fast & Free' },
-  { id: 'llama-3.1-8b-instant',        label: 'Llama 3.1 8B Instant',  provider: 'Groq',          apiProvider: 'groq',   badge: 'Fastest Free' },
-  { id: 'gemma2-9b-it',                label: 'Gemma 2 9B',            provider: 'Groq',          apiProvider: 'groq',   badge: '' },
+  { id: 'openai/gpt-oss-120b',         label: 'GPT-OSS 120B',          provider: 'Groq',          apiProvider: 'groq',   badge: 'Fast & Free' },
+  { id: 'openai/gpt-oss-20b',          label: 'GPT-OSS 20B',           provider: 'Groq',          apiProvider: 'groq',   badge: 'Fastest Free' },
+  { id: 'qwen/qwen3.8-27b',            label: 'Qwen 3.8 27B',          provider: 'Groq',          apiProvider: 'groq',   badge: 'Reasoning' },
+];
+
+const MCP_TRANSPORT_OPTIONS: SelectOption[] = [
+  {
+    value: 'http_jsonrpc',
+    label: 'HTTP POST (JSON-RPC 2.0)',
+    description: 'Standard stateless JSON-RPC over HTTP',
+    icon: Zap,
+  },
+  {
+    value: 'http_sse',
+    label: 'Server-Sent Events (SSE)',
+    description: 'Streaming event stream transport',
+    icon: Radio,
+  },
 ];
 
 
@@ -778,6 +793,7 @@ export default function SettingsPage() {
   const [mcpTestResult, setMcpTestResult]         = useState<any | null>(null);
   const [isTestingMcp, setIsTestingMcp]           = useState(false);
   const [isSavingMcp, setIsSavingMcp]             = useState(false);
+  const [copiedServerId, setCopiedServerId]       = useState<string | null>(null);
 
   // Data fetching
   const fetchDocuments = useCallback(async () => {
@@ -816,6 +832,13 @@ export default function SettingsPage() {
     else if (tab === 'mcpservers') fetchMcpServers();
   }, [tab, fetchDocuments, fetchMemories, fetchMcpServers]);
 
+  const handleCopyMcpUrl = useCallback((id: string, url: string) => {
+    navigator.clipboard.writeText(url);
+    setCopiedServerId(id);
+    addToast('Server URL copied to clipboard!', 'success');
+    setTimeout(() => setCopiedServerId(null), 2000);
+  }, [addToast]);
+
   const handleTestMcpConnection = async () => {
     if (!mcpUrl.trim()) {
       addToast('Please enter a remote MCP server URL to test.', 'error');
@@ -852,7 +875,7 @@ export default function SettingsPage() {
     }
     setIsSavingMcp(true);
     try {
-      await apiRequest('/mcp/servers', {
+      const res = await apiRequest('/mcp/servers', {
         method: 'POST',
         json: {
           name: mcpName.trim(),
@@ -861,7 +884,11 @@ export default function SettingsPage() {
           transport_type: mcpTransport,
         }
       });
-      addToast('Remote MCP Server added and tools registered successfully!', 'success');
+      if (res?.warning) {
+        addToast(res.warning, 'info');
+      } else {
+        addToast('Remote MCP Server added and tools registered successfully!', 'success');
+      }
       setMcpName('');
       setMcpUrl('');
       setMcpAuth('');
@@ -914,7 +941,31 @@ export default function SettingsPage() {
     if (fontSize === 'lg') root.classList.add('font-lg');
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // â”€â”€ Providers / Models â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // Hydrate user preferences from backend & Redis on mount
+  useEffect(() => {
+    apiRequest('/preferences')
+      .then((prefs) => {
+        if (prefs) {
+          if (typeof prefs.temperature === 'number') {
+            setTemperatureState(prefs.temperature);
+            localStorage.setItem('llm_temperature', String(prefs.temperature));
+          }
+          if (typeof prefs.max_tokens === 'number') {
+            setMaxTokensState(prefs.max_tokens);
+            localStorage.setItem('llm_max_tokens', String(prefs.max_tokens));
+          }
+          if (typeof prefs.streaming === 'boolean') {
+            setStreamingState(prefs.streaming);
+            localStorage.setItem('llm_streaming', String(prefs.streaming));
+          }
+        }
+      })
+      .catch((err) => {
+        console.warn('Could not hydrate preferences from backend:', err);
+      });
+  }, []);
+
+  // ── Providers / Models ──────────────────────────────────────────────
   const fetchProviders = useCallback(async () => {
     setKeysLoading(true);
     try {
@@ -956,14 +1007,29 @@ export default function SettingsPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [keysLoading, readyModels.length]);
 
-  // â”€â”€ Handlers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  const handleSaveGeneration = useCallback(() => {
+  // ── Handlers ────────────────────────────────────────────────────────
+  const handleSaveGeneration = useCallback(async () => {
     localStorage.setItem('llm_temperature', String(temperature));
     localStorage.setItem('llm_max_tokens', String(maxTokens));
     localStorage.setItem('llm_streaming', String(streaming));
     setSaved(true);
-    setTimeout(() => setSaved(false), 2500);
-  }, [temperature, maxTokens, streaming]);
+    try {
+      await apiRequest('/preferences', {
+        method: 'PUT',
+        json: {
+          temperature,
+          max_tokens: maxTokens,
+          streaming,
+        },
+      });
+      addToast('Generation parameters saved to database & cache.', 'success');
+    } catch (err: any) {
+      console.warn('Could not sync preferences to backend:', err);
+      addToast('Preferences saved locally (offline mode).', 'info');
+    } finally {
+      setTimeout(() => setSaved(false), 2500);
+    }
+  }, [temperature, maxTokens, streaming, addToast]);
 
   const handleDeleteConversations = useCallback(() => {
     if (!deleteConfirm) { setDeleteConfirm(true); return; }
@@ -1140,19 +1206,24 @@ export default function SettingsPage() {
       setMemories((prev) => [newMemory, ...prev]);
       setMemContent('');
       setMemImportance(5);
+      addToast('Semantic memory recorded successfully!', 'success');
     } catch (err: unknown) {
-      setMemError((err as Error).message || 'Failed to record memory');
+      const msg = (err as Error).message || 'Failed to record memory';
+      setMemError(msg);
+      addToast(msg, 'error');
     }
-  }, [memContent, memCategory, memImportance]);
+  }, [memContent, memCategory, memImportance, addToast]);
 
   const handleDeleteMemory = useCallback(async (id: string) => {
     try {
       await apiRequest(`/memories/${id}`, { method: 'DELETE' });
       setMemories((prev) => prev.filter((m) => m.id !== id));
+      addToast('Memory removed from registry.', 'success');
     } catch (err) {
       console.error('Failed to delete memory:', err);
+      addToast('Failed to delete memory.', 'error');
     }
-  }, []);
+  }, [addToast]);
 
   // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Render
@@ -1382,17 +1453,17 @@ export default function SettingsPage() {
               </div>
             )}
 
-            {/* â”€â”€ AI Models tab â”€â”€ */}
+            {/* ── AI Models tab ── */}
             {tab === 'models' && (
               <div className="flex flex-col xl:flex-row gap-6 h-full items-stretch">
 
                 {/* Models selector */}
-                <div className="w-full xl:w-[320px] bg-background rounded-2xl border border-border p-4 flex flex-col max-h-[580px] overflow-hidden flex-shrink-0">
+                <div className="w-full xl:w-[320px] bg-background rounded-2xl border border-border p-4 flex flex-col flex-shrink-0">
                   <h3 className="text-xs font-bold uppercase tracking-wider text-foreground-3 mb-3 flex items-center gap-1.5">
                     <Cpu className="w-3.5 h-3.5 text-foreground-3" />
                     Available Models
                   </h3>
-                  <div className="flex-1 overflow-y-auto pr-1 space-y-2">
+                  <div className="space-y-2">
                     {availableModelsList.length === 0 ? (
                       <div className="text-center py-8 px-4 text-foreground-3 text-xs leading-relaxed border border-dashed border-border rounded-xl bg-background">
                         No models configured. Enter an API key on the right and click "Verify &amp; Save" to retrieve models.
@@ -1444,8 +1515,8 @@ export default function SettingsPage() {
                 </div>
 
                 {/* Provider key config */}
-                <div className="flex-1 flex flex-col min-w-0 max-h-[580px] overflow-hidden">
-                  <div className="flex-1 overflow-y-auto pr-1">
+                <div className="flex-1 flex flex-col min-w-0">
+                  <div className="pr-1">
                     <div className="space-y-6">
                       <div>
                         <h2 className="text-base font-bold text-foreground flex items-center gap-2">
@@ -1756,7 +1827,7 @@ export default function SettingsPage() {
                       <span className="text-[10px] text-foreground-3 font-medium">{documents.length} document{documents.length !== 1 ? 's' : ''}</span>
                     </div>
 
-                    <div className="space-y-2.5 max-h-[460px] overflow-y-auto pr-1">
+                    <div className="space-y-2.5">
                       {documents.map((doc) => (
                         <div
                           key={doc.id}
@@ -1902,7 +1973,7 @@ export default function SettingsPage() {
                       <span className="text-[10px] text-foreground-3 font-medium">{memories.length} entr{memories.length !== 1 ? 'ies' : 'y'}</span>
                     </div>
 
-                    <div className="space-y-2.5 max-h-[460px] overflow-y-auto pr-1">
+                    <div className="space-y-2.5">
                       {memories.map((m) => (
                         <div
                           key={m.id}
@@ -1959,112 +2030,136 @@ export default function SettingsPage() {
             {/* ── Remote MCP Servers tab ── */}
             {tab === 'mcpservers' && (
               <div className="space-y-6">
-                <SectionCard title="Remote MCP Server Integration">
-                  <div className="p-4 rounded-xl bg-surface-2 border border-border/60 space-y-2">
-                    <div className="flex items-center gap-2 text-primary font-semibold text-sm">
-                      <Sparkles className="w-4 h-4" />
-                      <span>Deploy & Connect Custom Tools</span>
+                {/* Hero Banner */}
+                <div className="p-5 rounded-2xl bg-gradient-to-br from-primary/10 via-surface-2 to-surface border border-primary/20 space-y-2.5 shadow-sm">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2.5 text-foreground font-semibold text-sm">
+                      <div className="w-8 h-8 rounded-xl bg-primary/20 border border-primary/30 flex items-center justify-center text-primary shadow-xs">
+                        <Radio className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <h3 className="text-sm font-bold text-foreground">Remote MCP Server Integration</h3>
+                        <p className="text-[11px] text-foreground-3">Connect external tools and agent workflows via Model Context Protocol</p>
+                      </div>
                     </div>
-                    <p className="text-xs text-foreground-3 leading-relaxed">
-                      Connect your deployed Model Context Protocol (MCP) servers by providing their HTTP or SSE endpoint URL.
-                      The agent performs automatic tool discovery on startup, registers available functions, and routes chat tool calls directly to your remote server.
-                    </p>
+                    <span className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-semibold bg-primary/15 text-primary border border-primary/30">
+                      <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
+                      MCP 2024-11-05 Spec
+                    </span>
                   </div>
-                </SectionCard>
+                  <p className="text-xs text-foreground-2 leading-relaxed">
+                    Connect your deployed Model Context Protocol (MCP) servers by providing their HTTP or SSE endpoint URL.
+                    The agent automatically performs tool discovery, validates JSON schemas, and registers capabilities with database &amp; Redis persistence.
+                  </p>
+                </div>
 
+                {/* Add Remote MCP Server Form */}
                 <SectionCard title="Add Remote MCP Server">
-                  <div className="space-y-4">
+                  <div className="space-y-5 p-1">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div>
-                        <label className="block text-xs font-semibold text-foreground-2 mb-1">Server Name *</label>
+                        <label className="block text-xs font-semibold text-foreground-2 mb-1.5">
+                          Server Name <span className="text-rose-400">*</span>
+                        </label>
                         <input
                           type="text"
                           value={mcpName}
                           onChange={(e) => setMcpName(e.target.value)}
-                          placeholder="e.g. My Custom Weather Tool"
-                          className="w-full px-3 py-2 rounded-xl border border-border bg-background text-foreground text-xs focus:ring-2 focus:ring-primary/50 outline-none"
+                          placeholder="e.g. Weather &amp; Geocoding Tool"
+                          className="w-full px-3.5 py-2.5 rounded-xl border border-border bg-background text-foreground text-xs focus:ring-2 focus:ring-primary/40 focus:border-primary outline-none transition-all shadow-inner"
                         />
                       </div>
                       <div>
-                        <label className="block text-xs font-semibold text-foreground-2 mb-1">Server Endpoint URL *</label>
+                        <label className="block text-xs font-semibold text-foreground-2 mb-1.5">
+                          Server Endpoint URL <span className="text-rose-400">*</span>
+                        </label>
                         <input
                           type="url"
                           value={mcpUrl}
                           onChange={(e) => setMcpUrl(e.target.value)}
-                          placeholder="https://my-mcp-tool.vercel.app/mcp"
-                          className="w-full px-3 py-2 rounded-xl border border-border bg-background text-foreground text-xs focus:ring-2 focus:ring-primary/50 outline-none"
+                          placeholder="https://my-mcp-server.onrender.com/mcp"
+                          className="w-full px-3.5 py-2.5 rounded-xl border border-border bg-background text-foreground text-xs font-mono focus:ring-2 focus:ring-primary/40 focus:border-primary outline-none transition-all shadow-inner"
                         />
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
                       <div>
-                        <label className="block text-xs font-semibold text-foreground-2 mb-1">Authorization Header / Token (Optional)</label>
+                        <label className="block text-xs font-semibold text-foreground-2 mb-1.5">
+                          Authorization Header / Token <span className="text-foreground-3 text-[10px] font-normal">(Optional)</span>
+                        </label>
                         <input
                           type="password"
                           value={mcpAuth}
                           onChange={(e) => setMcpAuth(e.target.value)}
                           placeholder="Bearer secret-token or API key"
-                          className="w-full px-3 py-2 rounded-xl border border-border bg-background text-foreground text-xs focus:ring-2 focus:ring-primary/50 outline-none"
+                          className="w-full px-3.5 py-2.5 rounded-xl border border-border bg-background text-foreground text-xs font-mono focus:ring-2 focus:ring-primary/40 focus:border-primary outline-none transition-all shadow-inner"
                         />
                       </div>
                       <div>
-                        <label className="block text-xs font-semibold text-foreground-2 mb-1">Transport Protocol</label>
-                        <select
+                        <label className="block text-xs font-semibold text-foreground-2 mb-1.5">
+                          Transport Protocol
+                        </label>
+                        <CustomSelect
+                          options={MCP_TRANSPORT_OPTIONS}
                           value={mcpTransport}
-                          onChange={(e) => setMcpTransport(e.target.value)}
-                          className="w-full px-3 py-2 rounded-xl border border-border bg-background text-foreground text-xs focus:ring-2 focus:ring-primary/50 outline-none"
-                        >
-                          <option value="http_jsonrpc">HTTP POST (JSON-RPC 2.0)</option>
-                          <option value="http_sse">Server-Sent Events (SSE / Stream)</option>
-                        </select>
+                          onChange={(val) => setMcpTransport(val)}
+                        />
                       </div>
                     </div>
 
                     {/* Action buttons */}
-                    <div className="flex items-center gap-3 pt-2">
+                    <div className="flex flex-wrap items-center gap-3 pt-2">
                       <button
                         type="button"
                         onClick={handleTestMcpConnection}
-                        disabled={isTestingMcp}
-                        className="flex items-center gap-1.5 px-4 py-2 rounded-xl border border-border bg-surface-2 hover:bg-surface-3 text-foreground text-xs font-semibold disabled:opacity-50 transition-all cursor-pointer active:scale-95"
+                        disabled={isTestingMcp || !mcpUrl.trim()}
+                        className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-border bg-surface-2 hover:bg-surface-3 text-foreground text-xs font-semibold disabled:opacity-50 transition-all cursor-pointer active:scale-95 shadow-xs"
                       >
-                        {isTestingMcp ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5 text-primary" />}
-                        <span>Test Connection</span>
+                        {isTestingMcp ? <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" /> : <RefreshCw className="w-3.5 h-3.5 text-primary" />}
+                        <span>{isTestingMcp ? 'Testing Connection...' : 'Test Connection'}</span>
                       </button>
 
                       <button
                         type="button"
                         onClick={handleAddMcpServer}
-                        disabled={isSavingMcp}
-                        className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-primary text-primary-foreground text-xs font-bold hover:brightness-110 disabled:opacity-50 transition-all shadow-sm cursor-pointer active:scale-95"
+                        disabled={isSavingMcp || !mcpName.trim() || !mcpUrl.trim()}
+                        className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-primary text-primary-foreground text-xs font-bold hover:brightness-110 disabled:opacity-50 transition-all shadow-sm cursor-pointer active:scale-95"
                       >
-                        {isSavingMcp ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
-                        <span>Save & Register Server</span>
+                        {isSavingMcp ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <PlusCircle className="w-3.5 h-3.5" />}
+                        <span>{isSavingMcp ? 'Registering Server...' : 'Save & Register Server'}</span>
                       </button>
                     </div>
 
-
                     {/* Test result card */}
                     {mcpTestResult && (
-                      <div className={`p-4 rounded-xl border text-xs space-y-2 ${mcpTestResult.status === 'success' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : 'bg-rose-500/10 border-rose-500/30 text-rose-400'}`}>
+                      <div className={`p-4 rounded-xl border text-xs space-y-2.5 animate-fade-in ${
+                        mcpTestResult.status === 'success'
+                          ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                          : 'bg-rose-500/10 border-rose-500/30 text-rose-400'
+                      }`}>
                         <div className="flex items-center justify-between font-bold">
                           <div className="flex items-center gap-2">
-                            {mcpTestResult.status === 'success' ? <CheckCircle2 className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
-                            <span>{mcpTestResult.status === 'success' ? 'Connection Successful' : 'Connection Failed'}</span>
+                            {mcpTestResult.status === 'success' ? <CheckCircle2 className="w-4 h-4 text-emerald-400" /> : <XCircle className="w-4 h-4 text-rose-400" />}
+                            <span className="text-xs">{mcpTestResult.status === 'success' ? 'Connection Successful' : 'Connection Failed'}</span>
                           </div>
-                          <span className="text-[11px] opacity-80">{mcpTestResult.latency_ms}ms latency</span>
+                          {mcpTestResult.latency_ms !== undefined && (
+                            <span className="text-[11px] font-mono opacity-80">{mcpTestResult.latency_ms}ms latency</span>
+                          )}
                         </div>
-                        <p className="text-[11px] opacity-90">{mcpTestResult.message}</p>
+                        <p className="text-[11px] leading-relaxed opacity-90">{mcpTestResult.message}</p>
                         
                         {mcpTestResult.tools && mcpTestResult.tools.length > 0 && (
-                          <div className="pt-2">
-                            <span className="font-semibold block mb-1">Exposed Tools ({mcpTestResult.tools.length}):</span>
-                            <div className="flex flex-wrap gap-1.5">
+                          <div className="pt-2 border-t border-emerald-500/20 space-y-1.5">
+                            <span className="font-semibold text-[11px] block">Discovered Tools ({mcpTestResult.tools.length}):</span>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
                               {mcpTestResult.tools.map((t: any) => (
-                                <span key={t.name} className="px-2 py-1 rounded-md bg-emerald-500/20 text-emerald-300 font-mono text-[10px] border border-emerald-500/30">
-                                  ⚡ {t.name}
-                                </span>
+                                <div key={t.name} className="px-2.5 py-1.5 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300">
+                                  <div className="font-mono text-[11px] font-bold truncate">⚡ {t.name}</div>
+                                  {t.description && (
+                                    <div className="text-[10px] opacity-80 truncate" title={t.description}>{t.description}</div>
+                                  )}
+                                </div>
                               ))}
                             </div>
                           </div>
@@ -2074,62 +2169,129 @@ export default function SettingsPage() {
                   </div>
                 </SectionCard>
 
+                {/* Configured Remote MCP Servers */}
                 <SectionCard title="Configured Remote MCP Servers">
                   {isLoadingMcp ? (
-                    <div className="flex items-center justify-center py-10 text-foreground-3 text-xs gap-2">
+                    <div className="flex items-center justify-center py-12 text-foreground-3 text-xs gap-2">
                       <Loader2 className="w-4 h-4 animate-spin text-primary" />
                       <span>Loading MCP servers...</span>
                     </div>
                   ) : mcpServers.length === 0 ? (
-                    <div className="text-center py-12 border border-dashed border-border rounded-2xl bg-background text-foreground-3">
-                      <Link2 className="w-8 h-8 mx-auto mb-2 text-foreground-3 opacity-40" />
-                      <p className="text-xs font-semibold">No Remote MCP Servers Connected</p>
-                      <p className="text-[11px] text-foreground-3 mt-1">Paste your deployed MCP server endpoint URL above to register custom tools.</p>
+                    <div className="text-center py-12 border border-dashed border-border rounded-2xl bg-background text-foreground-3 space-y-2">
+                      <Link2 className="w-8 h-8 mx-auto text-foreground-3 opacity-40" />
+                      <p className="text-xs font-semibold text-foreground">No Remote MCP Servers Connected</p>
+                      <p className="text-[11px] text-foreground-3 max-w-sm mx-auto">
+                        Enter your server URL above and click "Save &amp; Register Server" to connect custom tool endpoints.
+                      </p>
                     </div>
                   ) : (
-                    <div className="space-y-3">
+                    <div className="space-y-4">
                       {mcpServers.map((srv) => (
-                        <div key={srv.id} className="p-4 rounded-xl border border-border bg-background hover:border-border/80 transition-all">
-                          <div className="flex items-start justify-between gap-4">
-                            <div className="space-y-1">
-                              <div className="flex items-center gap-2">
-                                <h4 className="text-xs font-bold text-foreground">{srv.name}</h4>
-                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${srv.is_enabled ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' : 'bg-zinc-500/15 text-zinc-400 border border-zinc-500/30'}`}>
-                                  {srv.is_enabled ? 'Active' : 'Disabled'}
-                                </span>
-                              </div>
-                              <p className="text-[11px] font-mono text-foreground-3 break-all">{srv.url}</p>
+                        <div
+                          key={srv.id}
+                          className="p-5 rounded-2xl border border-border bg-background hover:border-border/80 transition-all space-y-3.5 shadow-sm"
+                        >
+                          {/* Top row: Name, status badge, protocol, toggle, and delete */}
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <h4 className="text-xs font-bold text-foreground">{srv.name}</h4>
+                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                srv.is_enabled
+                                  ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                                  : 'bg-zinc-500/15 text-zinc-400 border border-zinc-500/30'
+                              }`}>
+                                {srv.is_enabled ? 'Active' : 'Disabled'}
+                              </span>
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-mono text-foreground-3 bg-surface-2 border border-border">
+                                {srv.transport_type === 'http_sse' ? 'SSE Stream' : 'HTTP JSON-RPC'}
+                              </span>
                             </div>
 
-                            <div className="flex items-center gap-2">
-                              {/* Toggle switch */}
-                              <button
-                                type="button"
-                                onClick={() => handleToggleMcpServer(srv.id, srv.is_enabled)}
-                                className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${srv.is_enabled ? 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20' : 'bg-surface-2 text-foreground-3 hover:bg-surface-3'}`}
-                              >
-                                {srv.is_enabled ? 'Disable' : 'Enable'}
-                              </button>
+                            <div className="flex items-center gap-3">
+                              {/* Animated Toggle Switch */}
+                              <div className="flex items-center gap-2">
+                                <span className="text-[11px] font-medium text-foreground-3">
+                                  {srv.is_enabled ? 'Enabled' : 'Disabled'}
+                                </span>
+                                <Toggle
+                                  label={`Toggle ${srv.name}`}
+                                  checked={srv.is_enabled}
+                                  onChange={() => handleToggleMcpServer(srv.id, srv.is_enabled)}
+                                />
+                              </div>
 
                               {/* Delete button */}
                               <button
                                 type="button"
                                 onClick={() => handleDeleteMcpServer(srv.id)}
-                                className="p-1.5 rounded-lg border border-border bg-surface-2 text-foreground-3 hover:text-rose-400 hover:bg-rose-500/10 hover:border-rose-500/20 transition-all"
+                                className="p-2 rounded-xl border border-border bg-surface-2 text-foreground-3 hover:text-rose-400 hover:bg-rose-500/10 hover:border-rose-500/20 transition-all cursor-pointer"
+                                title="Delete MCP Server"
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>
                             </div>
                           </div>
 
+                          {/* URL row with copy button */}
+                          <div className="flex items-center gap-2 p-2.5 rounded-xl bg-surface-2 border border-border/80">
+                            <span className="text-[11px] font-mono text-foreground-2 truncate flex-1 select-all">
+                              {srv.url}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleCopyMcpUrl(srv.id, srv.url)}
+                              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-surface-3 hover:bg-surface-1 border border-border text-[11px] font-medium text-foreground transition-all cursor-pointer flex-shrink-0"
+                              title="Copy URL"
+                            >
+                              {copiedServerId === srv.id ? (
+                                <>
+                                  <CheckCheck className="w-3 h-3 text-emerald-400" />
+                                  <span className="text-emerald-400 font-semibold">Copied</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Copy className="w-3 h-3 text-foreground-3" />
+                                  <span>Copy</span>
+                                </>
+                              )}
+                            </button>
+                          </div>
+
+                          {/* Discovered Tools Grid */}
                           {srv.discovered_tools && srv.discovered_tools.length > 0 && (
-                            <div className="mt-3 pt-3 border-t border-border/60">
-                              <span className="text-[10px] font-semibold text-foreground-3 block mb-1.5">Exposed Tools ({srv.discovered_tools.length}):</span>
-                              <div className="flex flex-wrap gap-1.5">
+                            <div className="pt-3 border-t border-border/60 space-y-2">
+                              <div className="flex items-center justify-between">
+                                <span className="text-[11px] font-bold text-foreground-2 flex items-center gap-1.5">
+                                  <Zap className="w-3.5 h-3.5 text-primary" />
+                                  Discovered Tools ({srv.discovered_tools.length})
+                                </span>
+                                <span className="text-[10px] text-foreground-3">
+                                  Ready for AI function calling
+                                </span>
+                              </div>
+                              
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
                                 {srv.discovered_tools.map((t) => (
-                                  <div key={t.name} className="px-2 py-1 rounded-md bg-surface-2 border border-border text-[11px] flex items-center gap-1.5">
-                                    <span className="font-mono text-primary font-bold text-[10px]">⚡ {t.name}</span>
-                                    {t.description && <span className="text-foreground-3 text-[10px] max-w-[200px] truncate">— {t.description}</span>}
+                                  <div
+                                    key={t.name}
+                                    className="p-3 rounded-xl bg-surface-2 border border-border/70 flex flex-col justify-between gap-1.5 hover:border-primary/40 transition-colors"
+                                  >
+                                    <div className="flex items-center justify-between gap-2">
+                                      <span className="font-mono text-xs font-bold text-primary truncate flex items-center gap-1.5">
+                                        <span>⚡</span>
+                                        <span>{t.name}</span>
+                                      </span>
+                                      <span className="text-[9px] font-semibold text-foreground-3 px-1.5 py-0.5 rounded bg-surface-3 border border-border/50 uppercase tracking-wider">
+                                        Tool
+                                      </span>
+                                    </div>
+                                    {t.description ? (
+                                      <p className="text-[11px] text-foreground-3 line-clamp-2 leading-relaxed" title={t.description}>
+                                        {t.description}
+                                      </p>
+                                    ) : (
+                                      <p className="text-[10px] text-foreground-3 italic">No description provided</p>
+                                    )}
                                   </div>
                                 ))}
                               </div>

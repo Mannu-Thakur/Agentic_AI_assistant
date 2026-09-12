@@ -12,6 +12,7 @@ from app.schemas.auth import UserOut
 from app.schemas.api_key import ApiKeyCreate, ApiKeyOut, ProviderOut
 from app.models.user import ApiKey
 from app.core.security import encrypt_api_key, decrypt_api_key
+from app.core.redis_client import cache_get, cache_set, cache_delete
 
 router = APIRouter(prefix="/api-keys", tags=["API Keys"])
 providers_router = APIRouter(prefix="/providers", tags=["Providers"])
@@ -448,6 +449,9 @@ async def save_api_key(
     await db.commit()
     await db.refresh(db_key)
 
+    await cache_delete(f"user:providers:{current_user.id}")
+    await cache_delete(f"user:keys:{current_user.id}")
+
     raw_key = schema.api_key
     masked_key = f"{raw_key[:4]}...{raw_key[-4:]}" if len(raw_key) > 8 else "****"
 
@@ -485,6 +489,8 @@ async def delete_api_key(
 
     await db.delete(existing_key)
     await db.commit()
+    await cache_delete(f"user:providers:{current_user.id}")
+    await cache_delete(f"user:keys:{current_user.id}")
     return {"detail": f"API key for {provider_name} successfully deleted."}
 
 

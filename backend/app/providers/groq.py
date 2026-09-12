@@ -183,7 +183,7 @@ class GroqProvider(BaseLLMProvider):
     async def generate(
         self,
         messages: List[Dict[str, Any]],
-        model: str = "llama-3.1-8b-instant",
+        model: str = "openai/gpt-oss-120b",
         temperature: float = 0.7,
         max_tokens: int = 2048,
         tools: Optional[List[Dict[str, Any]]] = None,
@@ -210,6 +210,7 @@ class GroqProvider(BaseLLMProvider):
             )
 
         # ── Deprecated model remapping ────────────────────────────────────────
+        raw_model = model
         model = registry.remap_model(model)
 
         # ── Model availability check ──────────────────────────────────────────
@@ -231,7 +232,7 @@ class GroqProvider(BaseLLMProvider):
             "stream":      False,
         }
 
-        if tools and "gemma" not in model.lower():
+        if tools and "gemma" not in model.lower() and "gemma" not in raw_model.lower():
             formatted_tools = []
             for t in tools:
                 formatted_tools.append({
@@ -378,7 +379,7 @@ class GroqProvider(BaseLLMProvider):
     async def generate_stream(
         self,
         messages: List[Dict[str, Any]],
-        model: str = "llama-3.1-8b-instant",
+        model: str = "openai/gpt-oss-120b",
         temperature: float = 0.7,
         max_tokens: int = 2048,
         tools: Optional[List[Dict[str, Any]]] = None,
@@ -405,6 +406,7 @@ class GroqProvider(BaseLLMProvider):
             )
 
         # ── Deprecated model remapping ────────────────────────────────────────
+        raw_model = model
         model = registry.remap_model(model)
 
         # ── Model availability check ──────────────────────────────────────────
@@ -426,7 +428,7 @@ class GroqProvider(BaseLLMProvider):
             "stream":      True,
         }
 
-        if tools and "gemma" not in model.lower():
+        if tools and "gemma" not in model.lower() and "gemma" not in raw_model.lower():
             formatted_tools = []
             for t in tools:
                 formatted_tools.append({

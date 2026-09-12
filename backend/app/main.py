@@ -182,6 +182,7 @@ if settings.BACKEND_CORS_ORIGINS:
         expose_headers=["X-Request-ID", "X-Process-Time", "X-Trace-ID"],
     )
 
+from app.api import preferences
 from app.resume.routes import router as resume_router
 
 app.include_router(auth.router,        prefix=settings.API_V1_STR)
@@ -193,6 +194,7 @@ app.include_router(api_keys.providers_router, prefix=settings.API_V1_STR)
 app.include_router(health_router.router, prefix=settings.API_V1_STR)
 app.include_router(admin.router,        prefix=settings.API_V1_STR)
 app.include_router(mcp_servers.router,  prefix=settings.API_V1_STR)
+app.include_router(preferences.router,  prefix=settings.API_V1_STR)
 app.include_router(metrics_router.router, prefix=settings.API_V1_STR)
 app.include_router(resume_router,       prefix=settings.API_V1_STR)
 

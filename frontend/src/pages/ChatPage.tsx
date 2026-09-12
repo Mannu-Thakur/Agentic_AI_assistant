@@ -930,14 +930,13 @@ export default function ChatPage() {
   // which floods the picker with 300+ OpenRouter entries.
   const CURATED_MODELS = [
     // Google Gemini (Direct)
-    { id: 'gemini-2.5-pro',          name: 'Gemini 2.5 Pro',        provider: 'Google Gemini', apiProvider: 'google',   icon: Sparkles, badge: 'Best Quality', desc: 'Most capable Gemini model' },
-    { id: 'gemini-2.5-flash',        name: 'Gemini 2.5 Flash',      provider: 'Google Gemini', apiProvider: 'google',   icon: Cpu,      badge: 'Recommended',  desc: 'Fast & capable — best all-rounder' },
-    { id: 'gemini-2.0-flash',        name: 'Gemini 2.0 Flash',      provider: 'Google Gemini', apiProvider: 'google',   icon: Cpu,      badge: '',             desc: 'Previous generation Flash' },
-    { id: 'gemini-2.0-flash-lite',   name: 'Gemini 2.0 Flash Lite', provider: 'Google Gemini', apiProvider: 'google',   icon: Cpu,      badge: 'Fastest',      desc: 'Lightest & fastest Gemini' },
+    { id: 'gemini-3.6-flash',        name: 'Gemini 3.6 Flash',      provider: 'Google Gemini', apiProvider: 'google',   icon: Sparkles, badge: 'Recommended',  desc: 'Fast, intelligent & highly capable' },
+    { id: 'gemini-flash-latest',     name: 'Gemini Flash (Latest)', provider: 'Google Gemini', apiProvider: 'google',   icon: Cpu,      badge: 'Stable',       desc: 'Evergreen latest Gemini Flash' },
+    { id: 'gemini-3.1-flash-lite',   name: 'Gemini 3.1 Flash Lite', provider: 'Google Gemini', apiProvider: 'google',   icon: Cpu,      badge: 'Fastest',      desc: 'Lightweight & ultra-low latency' },
     // Groq (Free, Fast)
-    { id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B',         provider: 'Groq',          apiProvider: 'groq',     icon: Cpu,      badge: 'Fast & Free',  desc: 'Best open-source model on Groq' },
-    { id: 'llama-3.1-8b-instant',    name: 'Llama 3.1 8B Instant',  provider: 'Groq',          apiProvider: 'groq',     icon: Cpu,      badge: 'Fastest Free', desc: 'Ultra-fast small model' },
-    { id: 'gemma2-9b-it',            name: 'Gemma 2 9B',            provider: 'Groq',          apiProvider: 'groq',     icon: Cpu,      badge: '',             desc: 'Google Gemma 2 on Groq' },
+    { id: 'openai/gpt-oss-120b',     name: 'GPT-OSS 120B',          provider: 'Groq',          apiProvider: 'groq',     icon: Cpu,      badge: 'Fast & Free',  desc: 'High-intelligence 120B model on Groq LPU' },
+    { id: 'openai/gpt-oss-20b',      name: 'GPT-OSS 20B',           provider: 'Groq',          apiProvider: 'groq',     icon: Cpu,      badge: 'Fastest Free', desc: 'Ultra-fast low-latency model on Groq' },
+    { id: 'qwen/qwen3.8-27b',        name: 'Qwen 3.8 27B',          provider: 'Groq',          apiProvider: 'groq',     icon: Cpu,      badge: 'Reasoning',    desc: 'Capable coding & reasoning on Groq' },
   ];
 
   const verifiedProviderSet = new Set(
@@ -958,9 +957,13 @@ export default function ChatPage() {
     onOpenSearch: () => setGlobalSearchOpen(true),
     onShowShortcuts: () => setShortcutsOpen(true),
     onEscape: () => {
-      setShortcutsOpen(false);
       setGlobalSearchOpen(false);
-    }
+      setShortcutsOpen(false);
+      setModelDropdownOpen(false);
+      setMenuOpen(false);
+      setFilesModalOpen(false);
+      setShareModalOpen(false);
+    },
   });
 
   // Listen to custom sidebar search event — focus inline sidebar search input
@@ -976,16 +979,12 @@ export default function ChatPage() {
     return () => window.removeEventListener('omni:open-search', handleOpenSearchEvent);
   }, []);
 
-  // ── Fetch verified API Keys / Providers — runs once on mount ─────────────
-  // Populates the shared store so SettingsPage stays in sync.
-  // If providers are already cached in localStorage (keysLoading=false) we only
-  // refresh in the background — we never block the UI on this request.
+  // ── Pre-fetch API Keys on mount so model picker is instantly ready ──
   useEffect(() => {
     async function loadProviders() {
-      // Only set keysLoading=true when there is genuinely no cache (first ever load)
-      if (providers.length === 0) setKeysLoading(true);
       try {
-        const data = await apiRequest('/providers');
+        const res = await apiRequest('/api-keys');
+        const data = await res.json();
         setProviders(data);
       } catch { /* silent */ }
       finally { setKeysLoading(false); }
@@ -995,15 +994,18 @@ export default function ChatPage() {
   }, []);
 
   // ── Auto-select first available model when no valid model is active ──
-  // Also guards against stale localStorage models (e.g. anthropic/claude)
-  // that are no longer in the curated list.
+  // Also guards against stale localStorage models that are no longer in the curated list.
   useEffect(() => {
     const curatedIds = new Set(CURATED_MODELS.map((m) => m.id));
     const isStale = !curatedIds.has(activeModel);
 
     if (isStale) {
-      // Snap immediately to gemini-2.5-flash (always in curated list)
-      setActiveModel('gemini-2.5-flash');
+      // Snap immediately to gemini-3.6-flash (or first verified model)
+      if (models.length > 0) {
+        setActiveModel(models[0].id);
+      } else {
+        setActiveModel('gemini-3.6-flash');
+      }
       return;
     }
 
@@ -2620,7 +2622,7 @@ export default function ChatPage() {
                 className="flex items-center gap-1 px-1 py-1 rounded-lg text-xs font-semibold text-white/90 hover:text-white transition-all duration-150 active:scale-[0.97] outline-none"
               >
                 {currentModel.icon && <currentModel.icon className="w-3.5 h-3.5 text-accent flex-shrink-0" />}
-                <span className="truncate max-w-[80px] tracking-tight text-xs font-semibold text-white">{currentModel.name || 'Model'}</span>
+                <span className="truncate max-w-[180px] sm:max-w-[220px] tracking-tight text-xs font-semibold text-white">{currentModel.name || 'Model'}</span>
                 <ChevronDown className={`w-3.5 h-3.5 text-foreground-3 transition-transform duration-200 flex-shrink-0 ${modelDropdownOpen ? 'rotate-180 text-foreground' : ''}`} />
               </button>
 

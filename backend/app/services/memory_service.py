@@ -267,13 +267,13 @@ class MemoryService:
 
         # Build multi-provider candidate list for extraction
         extraction_candidates = [
-            (GeminiProvider(),     "gemini",     "gemini-2.0-flash",
+            (GeminiProvider(),     "gemini",     "gemini-3.6-flash",
              user_keys.get("gemini") or user_keys.get("google") or settings.GEMINI_API_KEY),
-            (GroqProvider(),       "groq",       "llama-3.3-70b-versatile",
+            (GroqProvider(),       "groq",       "openai/gpt-oss-120b",
              user_keys.get("groq") or settings.GROQ_API_KEY),
             (OpenAIProvider(),     "openai",     "gpt-4o-mini",
              user_keys.get("openai") or settings.OPENAI_API_KEY),
-            (OpenRouterProvider(), "openrouter", "google/gemini-2.0-flash",
+            (OpenRouterProvider(), "openrouter", "google/gemini-3.6-flash",
              user_keys.get("openrouter") or settings.OPENROUTER_API_KEY),
         ]
 
@@ -486,7 +486,7 @@ async def _llm_based_extraction(
         {"role": "user", "content": f"Analyze this exchange:\n{conversation_text}"},
     ]
     try:
-        response = await provider.generate(messages, model="gemini-2.0-flash", api_key=api_key)
+        response = await provider.generate(messages, model=model, api_key=api_key)
         raw_text = response.get("text", "").strip()
         if raw_text.startswith("```"):
             raw_text = raw_text.split("```", 1)[1]

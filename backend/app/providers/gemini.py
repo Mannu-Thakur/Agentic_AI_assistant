@@ -194,7 +194,7 @@ class GeminiProvider(BaseLLMProvider):
     async def generate(
         self,
         messages: List[Dict[str, str]],
-        model: str = "gemini-2.0-flash",
+        model: str = "gemini-3.6-flash",
         temperature: float = 0.7,
         max_tokens: int = 2048,
         tools: Optional[List[Dict[str, Any]]] = None,
@@ -366,7 +366,7 @@ class GeminiProvider(BaseLLMProvider):
     async def generate_stream(
         self,
         messages: List[Dict[str, str]],
-        model: str = "gemini-2.0-flash",
+        model: str = "gemini-3.6-flash",
         temperature: float = 0.7,
         max_tokens: int = 2048,
         tools: Optional[List[Dict[str, Any]]] = None,

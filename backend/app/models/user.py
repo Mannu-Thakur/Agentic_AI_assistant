@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Integer, JSON
+from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Integer, JSON, Float
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.core.database import Base
@@ -33,6 +33,21 @@ class UserPreference(Base):
     theme = Column(String(20), default="dark")
     system_prompt_override = Column(String(2000), nullable=True)
     developer_mode = Column(Boolean, default=False)
+    
+    # Generation & UI parameters
+    temperature = Column(Float, default=0.7)
+    max_tokens = Column(Integer, default=2048)
+    streaming = Column(Boolean, default=True)
+    font_size = Column(String(20), default="md")
+    compact_mode = Column(Boolean, default=False)
+    contrast_mode = Column(String(20), default="normal")
+    accent_color = Column(String(20), default="blue")
+    language = Column(String(20), default="en")
+    higher_intelligence = Column(Boolean, default=True)
+    enable_dictation = Column(Boolean, default=True)
+    improve_model = Column(Boolean, default=True)
+    features = Column(JSON, nullable=True)
+
     updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
 
     # Relationships
