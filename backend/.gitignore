@@ -58,6 +58,7 @@ temp/
 tmp/
 tmp_pytest/
 mcp_store.json
+*_report.json
 
 # ===== Temporary / Scratch Test Scripts =====
 tests/load_test.py

@@ -29,4 +29,5 @@ task.md
 .reset_tokens_cache.json
 *_cache.json
 render_*.txt
+*_report.json
 
