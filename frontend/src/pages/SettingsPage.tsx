@@ -215,14 +215,14 @@ const SettingRow = memo(function SettingRow({
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const SectionCard = memo(function SectionCard({
-  title, children,
-}: { title: string; children: React.ReactNode }) {
+  title, children, className = '',
+}: { title: string; children: React.ReactNode; className?: string }) {
   return (
-    <div className="rounded-2xl border border-border bg-surface overflow-hidden shadow-sm transition-colors duration-200">
-      <div className="settings-card-header px-4 py-3 bg-surface-2/60 border-b border-border">
+    <div className={`rounded-2xl border border-border bg-surface shadow-sm transition-colors duration-200 relative ${className}`}>
+      <div className="settings-card-header px-6 py-4 bg-surface-2/60 border-b border-border rounded-t-2xl">
         <h3 className="text-[10px] font-bold uppercase tracking-wider text-foreground-3">{title}</h3>
       </div>
-      <div className="settings-card-body px-4 divide-y divide-border/80">{children}</div>
+      <div className="settings-card-body px-6 py-5 divide-y divide-border/80">{children}</div>
     </div>
   );
 });
@@ -2029,12 +2029,12 @@ export default function SettingsPage() {
 
             {/* ── Remote MCP Servers tab ── */}
             {tab === 'mcpservers' && (
-              <div className="space-y-6">
+              <div className="space-y-8">
                 {/* Hero Banner */}
-                <div className="p-5 rounded-2xl bg-gradient-to-br from-primary/10 via-surface-2 to-surface border border-primary/20 space-y-2.5 shadow-sm">
+                <div className="p-6 rounded-2xl bg-gradient-to-br from-primary/10 via-surface-2 to-surface border border-primary/20 space-y-3 shadow-sm">
                   <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2.5 text-foreground font-semibold text-sm">
-                      <div className="w-8 h-8 rounded-xl bg-primary/20 border border-primary/30 flex items-center justify-center text-primary shadow-xs">
+                    <div className="flex items-center gap-3 text-foreground font-semibold text-sm">
+                      <div className="w-9 h-9 rounded-xl bg-primary/20 border border-primary/30 flex items-center justify-center text-primary shadow-xs flex-shrink-0">
                         <Radio className="w-4 h-4" />
                       </div>
                       <div>
@@ -2042,7 +2042,7 @@ export default function SettingsPage() {
                         <p className="text-[11px] text-foreground-3">Connect external tools and agent workflows via Model Context Protocol</p>
                       </div>
                     </div>
-                    <span className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-semibold bg-primary/15 text-primary border border-primary/30">
+                    <span className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-semibold bg-primary/15 text-primary border border-primary/30">
                       <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
                       MCP 2024-11-05 Spec
                     </span>
@@ -2053,12 +2053,12 @@ export default function SettingsPage() {
                   </p>
                 </div>
 
-                {/* Add Remote MCP Server Form */}
-                <SectionCard title="Add Remote MCP Server">
-                  <div className="space-y-5 p-1">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-xs font-semibold text-foreground-2 mb-1.5">
+                {/* Add Remote MCP Server Form - elevated z-20 so dropdown floats above next card */}
+                <SectionCard title="Add Remote MCP Server" className="relative z-20">
+                  <div className="space-y-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                      <div className="space-y-1.5">
+                        <label className="block text-xs font-semibold text-foreground-2">
                           Server Name <span className="text-rose-400">*</span>
                         </label>
                         <input
@@ -2066,11 +2066,11 @@ export default function SettingsPage() {
                           value={mcpName}
                           onChange={(e) => setMcpName(e.target.value)}
                           placeholder="e.g. Weather &amp; Geocoding Tool"
-                          className="w-full px-3.5 py-2.5 rounded-xl border border-border bg-background text-foreground text-xs focus:ring-2 focus:ring-primary/40 focus:border-primary outline-none transition-all shadow-inner"
+                          className="w-full h-11 px-4 rounded-xl border border-border bg-background text-foreground text-xs focus:ring-2 focus:ring-primary/40 focus:border-primary outline-none transition-all shadow-inner"
                         />
                       </div>
-                      <div>
-                        <label className="block text-xs font-semibold text-foreground-2 mb-1.5">
+                      <div className="space-y-1.5">
+                        <label className="block text-xs font-semibold text-foreground-2">
                           Server Endpoint URL <span className="text-rose-400">*</span>
                         </label>
                         <input
@@ -2078,14 +2078,14 @@ export default function SettingsPage() {
                           value={mcpUrl}
                           onChange={(e) => setMcpUrl(e.target.value)}
                           placeholder="https://my-mcp-server.onrender.com/mcp"
-                          className="w-full px-3.5 py-2.5 rounded-xl border border-border bg-background text-foreground text-xs font-mono focus:ring-2 focus:ring-primary/40 focus:border-primary outline-none transition-all shadow-inner"
+                          className="w-full h-11 px-4 rounded-xl border border-border bg-background text-foreground text-xs font-mono focus:ring-2 focus:ring-primary/40 focus:border-primary outline-none transition-all shadow-inner"
                         />
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
-                      <div>
-                        <label className="block text-xs font-semibold text-foreground-2 mb-1.5">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-5 items-start">
+                      <div className="space-y-1.5">
+                        <label className="block text-xs font-semibold text-foreground-2">
                           Authorization Header / Token <span className="text-foreground-3 text-[10px] font-normal">(Optional)</span>
                         </label>
                         <input
@@ -2093,23 +2093,27 @@ export default function SettingsPage() {
                           value={mcpAuth}
                           onChange={(e) => setMcpAuth(e.target.value)}
                           placeholder="Bearer secret-token or API key"
-                          className="w-full px-3.5 py-2.5 rounded-xl border border-border bg-background text-foreground text-xs font-mono focus:ring-2 focus:ring-primary/40 focus:border-primary outline-none transition-all shadow-inner"
+                          className="w-full h-11 px-4 rounded-xl border border-border bg-background text-foreground text-xs font-mono focus:ring-2 focus:ring-primary/40 focus:border-primary outline-none transition-all shadow-inner"
                         />
                       </div>
-                      <div>
-                        <label className="block text-xs font-semibold text-foreground-2 mb-1.5">
+                      <div className="space-y-1.5">
+                        <label className="block text-xs font-semibold text-foreground-2">
                           Transport Protocol
                         </label>
                         <CustomSelect
                           options={MCP_TRANSPORT_OPTIONS}
                           value={mcpTransport}
                           onChange={(val) => setMcpTransport(val)}
+                          align="left"
+                          className="w-full"
+                          buttonClassName="w-full h-11 px-4 rounded-xl bg-background border border-border text-foreground hover:bg-surface-2/60 transition-all shadow-inner justify-between"
+                          menuClassName="w-full min-w-[280px]"
                         />
                       </div>
                     </div>
 
-                    {/* Action buttons */}
-                    <div className="flex flex-wrap items-center gap-3 pt-2">
+                    {/* Action buttons with clean separation */}
+                    <div className="pt-5 border-t border-border/50 flex flex-wrap items-center gap-3.5">
                       <button
                         type="button"
                         onClick={handleTestMcpConnection}
@@ -2150,14 +2154,14 @@ export default function SettingsPage() {
                         <p className="text-[11px] leading-relaxed opacity-90">{mcpTestResult.message}</p>
                         
                         {mcpTestResult.tools && mcpTestResult.tools.length > 0 && (
-                          <div className="pt-2 border-t border-emerald-500/20 space-y-1.5">
+                          <div className="pt-3 border-t border-emerald-500/20 space-y-2">
                             <span className="font-semibold text-[11px] block">Discovered Tools ({mcpTestResult.tools.length}):</span>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
                               {mcpTestResult.tools.map((t: any) => (
-                                <div key={t.name} className="px-2.5 py-1.5 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300">
+                                <div key={t.name} className="p-2.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300">
                                   <div className="font-mono text-[11px] font-bold truncate">⚡ {t.name}</div>
                                   {t.description && (
-                                    <div className="text-[10px] opacity-80 truncate" title={t.description}>{t.description}</div>
+                                    <div className="text-[10px] opacity-80 truncate mt-0.5" title={t.description}>{t.description}</div>
                                   )}
                                 </div>
                               ))}
@@ -2177,39 +2181,39 @@ export default function SettingsPage() {
                       <span>Loading MCP servers...</span>
                     </div>
                   ) : mcpServers.length === 0 ? (
-                    <div className="text-center py-12 border border-dashed border-border rounded-2xl bg-background text-foreground-3 space-y-2">
-                      <Link2 className="w-8 h-8 mx-auto text-foreground-3 opacity-40" />
+                    <div className="text-center py-14 border border-dashed border-border rounded-2xl bg-background text-foreground-3 space-y-2.5">
+                      <Link2 className="w-9 h-9 mx-auto text-foreground-3 opacity-40" />
                       <p className="text-xs font-semibold text-foreground">No Remote MCP Servers Connected</p>
-                      <p className="text-[11px] text-foreground-3 max-w-sm mx-auto">
+                      <p className="text-[11px] text-foreground-3 max-w-sm mx-auto leading-relaxed">
                         Enter your server URL above and click "Save &amp; Register Server" to connect custom tool endpoints.
                       </p>
                     </div>
                   ) : (
-                    <div className="space-y-4">
+                    <div className="space-y-5">
                       {mcpServers.map((srv) => (
                         <div
                           key={srv.id}
-                          className="p-5 rounded-2xl border border-border bg-background hover:border-border/80 transition-all space-y-3.5 shadow-sm"
+                          className="p-5 sm:p-6 rounded-2xl border border-border bg-background hover:border-border/80 transition-all space-y-4 shadow-sm"
                         >
                           {/* Top row: Name, status badge, protocol, toggle, and delete */}
                           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <h4 className="text-xs font-bold text-foreground">{srv.name}</h4>
-                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                            <div className="flex flex-wrap items-center gap-2.5">
+                              <h4 className="text-xs font-bold text-foreground tracking-tight">{srv.name}</h4>
+                              <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
                                 srv.is_enabled
                                   ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
                                   : 'bg-zinc-500/15 text-zinc-400 border border-zinc-500/30'
                               }`}>
                                 {srv.is_enabled ? 'Active' : 'Disabled'}
                               </span>
-                              <span className="px-2 py-0.5 rounded-full text-[10px] font-mono text-foreground-3 bg-surface-2 border border-border">
+                              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono text-foreground-3 bg-surface-2 border border-border">
                                 {srv.transport_type === 'http_sse' ? 'SSE Stream' : 'HTTP JSON-RPC'}
                               </span>
                             </div>
 
-                            <div className="flex items-center gap-3">
+                            <div className="flex items-center gap-4">
                               {/* Animated Toggle Switch */}
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-2.5">
                                 <span className="text-[11px] font-medium text-foreground-3">
                                   {srv.is_enabled ? 'Enabled' : 'Disabled'}
                                 </span>
@@ -2233,24 +2237,24 @@ export default function SettingsPage() {
                           </div>
 
                           {/* URL row with copy button */}
-                          <div className="flex items-center gap-2 p-2.5 rounded-xl bg-surface-2 border border-border/80">
+                          <div className="flex items-center gap-3 p-3 rounded-xl bg-surface-2/70 border border-border/80">
                             <span className="text-[11px] font-mono text-foreground-2 truncate flex-1 select-all">
                               {srv.url}
                             </span>
                             <button
                               type="button"
                               onClick={() => handleCopyMcpUrl(srv.id, srv.url)}
-                              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-surface-3 hover:bg-surface-1 border border-border text-[11px] font-medium text-foreground transition-all cursor-pointer flex-shrink-0"
+                              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-3 hover:bg-surface-1 border border-border text-[11px] font-medium text-foreground transition-all cursor-pointer flex-shrink-0 active:scale-95"
                               title="Copy URL"
                             >
                               {copiedServerId === srv.id ? (
                                 <>
-                                  <CheckCheck className="w-3 h-3 text-emerald-400" />
+                                  <CheckCheck className="w-3.5 h-3.5 text-emerald-400" />
                                   <span className="text-emerald-400 font-semibold">Copied</span>
                                 </>
                               ) : (
                                 <>
-                                  <Copy className="w-3 h-3 text-foreground-3" />
+                                  <Copy className="w-3.5 h-3.5 text-foreground-3" />
                                   <span>Copy</span>
                                 </>
                               )}

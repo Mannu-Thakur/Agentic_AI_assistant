@@ -33,11 +33,12 @@ export function CustomSelect({
   disabled = false,
 }: CustomSelectProps) {
   const [isOpen, setIsOpen] = useState(false);
+  const [openUpward, setOpenUpward] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const selectedOption = options.find((opt) => opt.value === value) || options[0];
 
-  // Close dropdown on click outside
+  // Close dropdown on click outside and detect space
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
@@ -46,6 +47,16 @@ export function CustomSelect({
     };
     if (isOpen) {
       document.addEventListener('mousedown', handleClickOutside);
+      if (containerRef.current) {
+        const rect = containerRef.current.getBoundingClientRect();
+        const spaceBelow = window.innerHeight - rect.bottom;
+        // If less than 240px below and space above is greater, open upward
+        if (spaceBelow < 240 && rect.top > 240) {
+          setOpenUpward(true);
+        } else {
+          setOpenUpward(false);
+        }
+      }
     }
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
@@ -80,13 +91,16 @@ export function CustomSelect({
   const SelectedIcon = selectedOption?.icon;
 
   return (
-    <div ref={containerRef} className={`relative inline-block ${className}`}>
+    <div
+      ref={containerRef}
+      className={`relative inline-block ${className} ${isOpen ? 'z-50' : 'z-10'}`}
+    >
       <button
         type="button"
         disabled={disabled}
         onClick={() => setIsOpen((prev) => !prev)}
         onKeyDown={handleKeyDown}
-        className={`group flex items-center justify-between gap-2 px-2.5 py-1 rounded-full
+        className={`group flex items-center justify-between gap-2 px-3 py-1.5 rounded-full
           bg-surface-2/60 hover:bg-surface-3/90 text-xs font-semibold text-foreground
           transition-all duration-200 border border-border/70 shadow-xs outline-none backdrop-blur-md
           focus-visible:ring-2 focus-visible:ring-accent/40 active:scale-[0.97]
@@ -117,8 +131,8 @@ export function CustomSelect({
       {isOpen && (
         <div
           role="listbox"
-          className={`absolute top-full mt-1.5 min-w-[180px] max-w-[260px] z-50 p-1.5 rounded-2xl
-            bg-surface/95 dark:bg-surface/95 border border-border/80 shadow-xl backdrop-blur-xl animate-scale-in
+          className={`absolute ${openUpward ? 'bottom-full mb-2' : 'top-full mt-2'} min-w-[200px] max-w-[340px] z-50 p-1.5 rounded-2xl
+            bg-surface border border-border shadow-2xl backdrop-blur-2xl animate-scale-in
             flex flex-col gap-0.5 max-h-64 overflow-y-auto custom-scrollbar ${
               align === 'right' ? 'right-0' : 'left-0'
             } ${menuClassName}`}
