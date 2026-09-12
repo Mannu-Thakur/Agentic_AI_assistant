@@ -431,3 +431,69 @@ async def download_document(
         filename=doc.filename,
         media_type="application/octet-stream"
     )
+
+
+@router.post("/{document_id}/retry", response_model=DocumentOut)
+async def retry_document_indexing(
+    document_id: str,
+    current_user: UserOut = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Retries ingestion for a failed document.
+    Resets status to 'processing', clears error_message, and launches background ingestion.
+    """
+    from app.models.document import Document
+    result = await db.execute(
+        select(Document).where(
+            Document.id == document_id,
+            Document.user_id == current_user.id,
+        )
+    )
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found or access denied.",
+        )
+
+    if not os.path.exists(doc.storage_path):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Source document file is missing on server storage.",
+        )
+
+    doc.status = "processing"
+    doc.error_message = None
+    await db.commit()
+    await db.refresh(doc)
+
+    user_api_key: Optional[str] = None
+    try:
+        key_result = await db.execute(
+            select(ApiKey).where(
+                ApiKey.user_id == current_user.id,
+                ApiKey.provider_name.in_(["google", "gemini"]),
+            )
+        )
+        db_key = key_result.scalar_one_or_none()
+        if db_key and db_key.encrypted_api_key:
+            user_api_key = decrypt_api_key(db_key.encrypted_api_key)
+    except Exception as _key_exc:
+        logger.warning(f"[Retry] Could not fetch user Gemini key: {_key_exc}")
+
+    if not user_api_key:
+        user_api_key = settings.GEMINI_API_KEY or None
+
+    asyncio.create_task(
+        ParserService.process_document_ingestion(
+            document_id=doc.id,
+            user_id=current_user.id,
+            file_path=doc.storage_path,
+            filename=doc.filename,
+            file_type=doc.file_type,
+            api_key=user_api_key,
+        )
+    )
+    logger.info(f"[Retry] Scheduled re-indexing for doc {doc.id} ({doc.filename})")
+    return doc

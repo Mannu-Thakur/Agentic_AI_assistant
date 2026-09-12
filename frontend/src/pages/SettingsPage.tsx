@@ -20,9 +20,9 @@ import {
 import { apiRequest, BASE_URL } from '../services/api';
 import { ProviderKeyManager } from '../services/providerKeyManager';
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// -------------------------------------------------------------
 // Types & Constants
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// -------------------------------------------------------------
 
 type SettingsTab = 'general' | 'datacontrols' | 'models' | 'generation' | 'features' | 'mcpservers' | 'documents' | 'memories' | 'account';
 
@@ -142,9 +142,9 @@ const MCP_TRANSPORT_OPTIONS: SelectOption[] = [
 import { detectUserLocation } from '../services/locationService';
 export { detectUserLocation };
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// â”€â”€ Premium Toggle Switch â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// -------------------------------------------------------------
+// -- Premium Toggle Switch ------------------------------------
+// -------------------------------------------------------------
 
 const Toggle = memo(function Toggle({
   checked,
@@ -190,46 +190,46 @@ const Toggle = memo(function Toggle({
   );
 });
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// â”€â”€ Setting Row â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// -------------------------------------------------------------
+// -- Setting Row -----------------------------------------------
+// -------------------------------------------------------------
 
 const SettingRow = memo(function SettingRow({
   label, desc, children, danger,
 }: { label: string; desc?: string; children: React.ReactNode; danger?: boolean }) {
   return (
-    <div className={`settings-row flex items-center justify-between py-4 border-b border-border last:border-0 gap-4
+    <div className={`settings-row flex items-center justify-between py-4.5 border-b border-border/60 last:border-0 gap-6 transition-colors duration-150 relative
       ${danger ? 'text-rose-400' : 'text-foreground'}`}
     >
-      <div className="min-w-0">
-        <p className="text-sm font-semibold text-foreground">{label}</p>
-        {desc && <p className="text-[11px] text-foreground-2 mt-1 leading-relaxed">{desc}</p>}
+      <div className="min-w-0 flex-1 pr-4">
+        <p className="text-sm font-semibold text-foreground tracking-tight">{label}</p>
+        {desc && <p className="text-xs text-foreground-3 mt-1 leading-relaxed">{desc}</p>}
       </div>
-      <div className="flex-shrink-0">{children}</div>
+      <div className="flex-shrink-0 flex items-center">{children}</div>
     </div>
   );
 });
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// â”€â”€ Section Card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────
+// ── Section Card ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
 
 const SectionCard = memo(function SectionCard({
   title, children, className = '',
 }: { title: string; children: React.ReactNode; className?: string }) {
   return (
-    <div className={`rounded-2xl border border-border bg-surface shadow-sm transition-colors duration-200 relative ${className}`}>
-      <div className="settings-card-header px-6 py-4 bg-surface-2/60 border-b border-border rounded-t-2xl">
-        <h3 className="text-[10px] font-bold uppercase tracking-wider text-foreground-3">{title}</h3>
+    <div className={`rounded-2xl border border-border/80 bg-surface/90 shadow-sm transition-colors duration-200 relative overflow-visible ${className}`}>
+      <div className="settings-card-header px-6 py-4 bg-surface-2/40 border-b border-border/60 rounded-t-2xl flex items-center justify-between">
+        <h3 className="text-[11px] font-bold uppercase tracking-wider text-foreground-3">{title}</h3>
       </div>
-      <div className="settings-card-body px-6 py-5 divide-y divide-border/80">{children}</div>
+      <div className="settings-card-body px-6 py-2 divide-y divide-border/50">{children}</div>
     </div>
   );
 });
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// â”€â”€ Ingestion Progress â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// -------------------------------------------------------------
+// -- Ingestion Progress ----------------------------------------
+// -------------------------------------------------------------
 
 const IngestionProgress = memo(function IngestionProgress({
   filename, currentStep, done, error,
@@ -302,9 +302,9 @@ const IngestionProgress = memo(function IngestionProgress({
   );
 });
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// â”€â”€ Pipeline Explainer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// -------------------------------------------------------------
+// -- Pipeline Explainer ----------------------------------------
+// -------------------------------------------------------------
 
 const PipelineExplainer = memo(function PipelineExplainer() {
   const [open, setOpen] = useState(false);
@@ -349,9 +349,9 @@ const PipelineExplainer = memo(function PipelineExplainer() {
   );
 });
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// â”€â”€ API Key Field â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// -------------------------------------------------------------
+// -- API Key Field ---------------------------------------------
+// -------------------------------------------------------------
 
 const ApiKeyField = memo(function ApiKeyField({
   provider, initialMaskedKey, status, lastError, onSaveSuccess, onDeleteSuccess,
@@ -371,7 +371,7 @@ const ApiKeyField = memo(function ApiKeyField({
 
   useEffect(() => {
     const localHasKey = ProviderKeyManager.hasKey(provider);
-    setVal(initialMaskedKey || (localHasKey ? 'â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢' : ''));
+    setVal(initialMaskedKey || (localHasKey ? '••••••••••••••••' : ''));
     setErrorMsg(lastError || '');
     setSaveStep('');
     setLoading(false);
@@ -395,7 +395,7 @@ const ApiKeyField = memo(function ApiKeyField({
       const updated = data.find((p: Provider) => p.id === provider);
       if (updated) {
         onSaveSuccess(updated);
-        setVal(updated.saved ? 'â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢' : '');
+        setVal(updated.saved ? '••••••••••••••••' : '');
       }
     } catch (err: unknown) {
       setSaveStep('');
@@ -466,7 +466,7 @@ const ApiKeyField = memo(function ApiKeyField({
             value={val}
             readOnly={isVerified || loading}
             onChange={(e) => handleInputChange(e.target.value)}
-            placeholder={initialMaskedKey ? 'â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢' : `Enter ${meta.label}...`}
+            placeholder={initialMaskedKey ? '••••••••••••••••' : `Enter ${meta.label}...`}
             className={`w-full bg-background border rounded-lg px-3 py-2 pr-9 text-xs font-mono text-foreground
               placeholder:text-foreground-3 focus:outline-none transition-all duration-150 shadow-inner
               ${isVerified
@@ -527,7 +527,7 @@ const ApiKeyField = memo(function ApiKeyField({
   );
 });
 
-// â”€â”€ Custom Select Options â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// -- Custom Select Options -------------------------------------
 const THEME_OPTIONS: SelectOption[] = [
   { value: 'system', label: 'System', icon: Monitor, description: 'Sync with OS settings' },
   { value: 'dark', label: 'Dark', icon: Moon, description: 'Sleek pitch dark theme' },
@@ -573,12 +573,12 @@ const MEMORY_CATEGORY_OPTIONS: SelectOption[] = [
   { value: 'topic', label: 'Topic', description: 'Subject area' },
 ];
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// â”€â”€ Main Settings Page â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// -------------------------------------------------------------
+// -- Main Settings Page ----------------------------------------
+// -------------------------------------------------------------
 
 export default function SettingsPage() {
-  // â”€â”€ Routing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // -- Routing -----------------------------------------------
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const tab = (searchParams.get('tab') as SettingsTab) || 'general';
@@ -767,7 +767,7 @@ export default function SettingsPage() {
   }, [chats, addToast]);
 
 
-  // â”€â”€ Documents state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // -- Documents state ---------------------------------------
   const [documents, setDocuments]         = useState<DocumentFile[]>([]);
   const [uploading, setUploading]         = useState(false);
   const [uploadError, setUploadError]     = useState<string | null>(null);
@@ -776,7 +776,7 @@ export default function SettingsPage() {
   const [ingestDone, setIngestDone]       = useState(false);
   const ingestTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // â”€â”€ Memories state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // -- Memories state ----------------------------------------
   const [memories, setMemories]           = useState<SemanticMemory[]>([]);
   const [memContent, setMemContent]       = useState('');
   const [memCategory, setMemCategory]     = useState<'fact' | 'preference' | 'goal' | 'topic'>('fact');
@@ -841,7 +841,8 @@ export default function SettingsPage() {
 
   const handleTestMcpConnection = async () => {
     if (!mcpUrl.trim()) {
-      addToast('Please enter a remote MCP server URL to test.', 'error');
+      addToast('Please enter a remote MCP Server Endpoint URL to test.', 'error');
+      document.getElementById('mcp-url-input')?.focus();
       return;
     }
     setIsTestingMcp(true);
@@ -869,8 +870,14 @@ export default function SettingsPage() {
   };
 
   const handleAddMcpServer = async () => {
-    if (!mcpName.trim() || !mcpUrl.trim()) {
-      addToast('Server Name and Server URL are required.', 'error');
+    if (!mcpName.trim()) {
+      addToast('Please enter a Server Name.', 'error');
+      document.getElementById('mcp-name-input')?.focus();
+      return;
+    }
+    if (!mcpUrl.trim()) {
+      addToast('Please enter a Server Endpoint URL.', 'error');
+      document.getElementById('mcp-url-input')?.focus();
       return;
     }
     setIsSavingMcp(true);
@@ -887,7 +894,13 @@ export default function SettingsPage() {
       if (res?.warning) {
         addToast(res.warning, 'info');
       } else {
-        addToast('Remote MCP Server added and tools registered successfully!', 'success');
+        const count = res?.discovered_tools_count ?? 0;
+        addToast(
+          count > 0
+            ? `Remote MCP Server saved & registered! (${count} tools discovered & active)`
+            : 'Remote MCP Server registered and saved to database & cache.',
+          'success'
+        );
       }
       setMcpName('');
       setMcpUrl('');
@@ -1099,7 +1112,7 @@ export default function SettingsPage() {
     }, 100);
   }, []);
 
-  // â”€â”€ Ingestion progress â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // -- Ingestion progress ------------------------------------
   const startIngestionProgress = useCallback((filename: string) => {
     setIngestFilename(filename);
     setIngestStep(0);
@@ -1134,10 +1147,11 @@ export default function SettingsPage() {
           setIngestStep(6);
           setIngestDone(true);
           setUploading(false);
+          setUploadError(null);
         } else if (doc && doc.status === 'failed') {
           clearInterval(interval);
           if (ingestTimerRef.current) clearTimeout(ingestTimerRef.current as unknown as number);
-          setUploadError('Indexing failed on the server. Please try again.');
+          setUploadError(doc.error_message ? `Indexing failed: ${doc.error_message}` : 'Indexing failed on the server. Please try again.');
           setIngestStep(-1);
           setUploading(false);
         }
@@ -1185,14 +1199,27 @@ export default function SettingsPage() {
     }
   }, [token, startIngestionProgress, pollUntilReady]);
 
+  const handleRetryDoc = useCallback(async (id: string) => {
+    try {
+      addToast('Retrying document indexing in background...', 'info');
+      await apiRequest(`/documents/${id}/retry`, { method: 'POST' });
+      addToast('Re-indexing scheduled on server.', 'success');
+      fetchDocuments();
+      pollUntilReady(id);
+    } catch (err: any) {
+      addToast(err.message || 'Failed to retry indexing.', 'error');
+    }
+  }, [fetchDocuments, pollUntilReady, addToast]);
+
   const handleDeleteDoc = useCallback(async (id: string) => {
     try {
       await apiRequest(`/documents/${id}`, { method: 'DELETE' });
       setDocuments((prev) => prev.filter((doc) => doc.id !== id));
+      addToast('Document removed from vector store.', 'success');
     } catch (err) {
       console.error('Failed to delete document:', err);
     }
-  }, []);
+  }, [addToast]);
 
   const handleAddMemory = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1225,9 +1252,9 @@ export default function SettingsPage() {
     }
   }, [addToast]);
 
-  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ---------------------------------------------------------
   // Render
-  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ---------------------------------------------------------
   return (
     <div className="h-full w-full flex flex-col overflow-hidden bg-background text-foreground transition-colors duration-250">
       <ToastContainer toasts={toasts} onRemove={removeToast} />
@@ -1293,7 +1320,7 @@ export default function SettingsPage() {
             className="flex-1 bg-surface text-foreground p-6 lg:p-8 space-y-6 overflow-y-auto custom-scrollbar min-w-0 animate-settings-panel-in transition-colors duration-250"
           >
 
-            {/* â”€â”€ General tab (Matching ChatGPT Settings layout) â”€â”€ */}
+            {/* -- General tab (Matching ChatGPT Settings layout) -- */}
             {tab === 'general' && (
               <>
 
@@ -1573,7 +1600,7 @@ export default function SettingsPage() {
                                     provider={prov.id}
                                     status={prov.status}
                                     lastError={prov.lastError || null}
-                                    initialMaskedKey={prov.saved ? 'â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢' : ''}
+                                    initialMaskedKey={prov.saved ? '••••••••••••••••' : ''}
                                     onSaveSuccess={(updated) => {
                                       setProviders(providers.map((p) => p.id === prov.id ? updated : p));
                                     }}
@@ -1689,7 +1716,7 @@ export default function SettingsPage() {
               </div>
             )}
 
-            {/* â”€â”€ Generation tab â”€â”€ */}
+            {/* -- Generation tab -- */}
             {tab === 'generation' && (
               <SectionCard title="Generation Parameters">
                 <SettingRow
@@ -1723,22 +1750,23 @@ export default function SettingsPage() {
                   <Toggle label="Streaming responses" checked={streaming} onChange={setStreamingState} />
                 </SettingRow>
 
-                <div className="py-3 flex justify-end">
+                <div className="pt-4 pb-2 flex justify-end border-t border-border/40">
                   <button
+                    type="button"
                     onClick={handleSaveGeneration}
-                    className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all duration-150 border shadow-sm
+                    className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold transition-all duration-200 cursor-pointer active:scale-95 shadow-sm
                       ${saved
-                        ? 'bg-emerald-950/20 border-emerald-800/40 text-emerald-400'
-                        : 'bg-surface-3 border-border text-foreground hover:bg-surface-2'}`}
+                        ? 'bg-emerald-500/15 border border-emerald-500/30 text-emerald-400'
+                        : 'bg-primary text-primary-foreground hover:brightness-110 border border-primary/20'}`}
                   >
-                    {saved ? <Check className="w-3.5 h-3.5" /> : <Save className="w-3.5 h-3.5" />}
-                    {saved ? 'Saved!' : 'Save Changes'}
+                    {saved ? <Check className="w-4 h-4 text-emerald-400" /> : <Save className="w-4 h-4" />}
+                    <span>{saved ? 'Changes Saved to DB & Cache!' : 'Save Changes'}</span>
                   </button>
                 </div>
               </SectionCard>
             )}
 
-            {/* â”€â”€ Features tab â”€â”€ */}
+            {/* -- Features tab -- */}
             {tab === 'features' && (
               <SectionCard title="AI Feature Flags">
                 <SettingRow label="Semantic Memory" desc="Automatically extract and recall long-term facts about you.">
@@ -1763,7 +1791,7 @@ export default function SettingsPage() {
               </SectionCard>
             )}
 
-            {/* â”€â”€ Documents tab â”€â”€ */}
+            {/* -- Documents tab -- */}
             {tab === 'documents' && (
               <div className="settings-section space-y-6 animate-fade-in">
                 <div>
@@ -1798,7 +1826,7 @@ export default function SettingsPage() {
                         <span className="text-[10px] font-semibold text-foreground">
                           {uploading ? 'Processing...' : 'Click to select a file'}
                         </span>
-                        <span className="text-[9px] text-foreground-3 mt-1">PDF, DOCX, TXT, XLSX â€” up to 20 MB</span>
+                        <span className="text-[9px] text-foreground-3 mt-1">PDF, DOCX, TXT, XLSX "” up to 20 MB</span>
                         <input
                           type="file"
                           className="hidden"
@@ -1845,28 +1873,39 @@ export default function SettingsPage() {
                             </div>
                           </div>
 
-                          <div className="flex items-center gap-3 flex-shrink-0">
+                          <div className="flex items-center gap-2.5 flex-shrink-0">
                             {doc.status === 'ready' && (
-                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[9px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                                <CheckCircle2 className="w-2.5 h-2.5" />Vectorized
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/25 shadow-xs">
+                                <CheckCircle2 className="w-3 h-3" />Vectorized
                               </span>
                             )}
                             {doc.status === 'processing' && (
-                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[9px] font-semibold bg-blue-500/10 text-blue-400 border border-blue-500/20">
-                                <Loader2 className="w-2.5 h-2.5 animate-spin" />Indexing
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-semibold bg-blue-500/10 text-blue-400 border border-blue-500/25 shadow-xs">
+                                <Loader2 className="w-3 h-3 animate-spin" />Indexing
                               </span>
                             )}
                             {doc.status === 'failed' && (
-                              <Tooltip content={doc.error_message || 'Document indexing failed. Check server logs.'} side="top">
-                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[9px] font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20 cursor-help">
-                                  <XCircle className="w-2.5 h-2.5" />Failed
-                                </span>
-                              </Tooltip>
+                              <div className="flex items-center gap-2">
+                                <Tooltip content={doc.error_message || 'Document indexing failed. Click Retry to re-index.'} side="top">
+                                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/25 cursor-help shadow-xs">
+                                    <XCircle className="w-3 h-3" />Failed
+                                  </span>
+                                </Tooltip>
+                                <button
+                                  type="button"
+                                  onClick={() => handleRetryDoc(doc.id)}
+                                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-surface-2 hover:bg-surface-3 text-foreground text-xs font-semibold border border-border/80 hover:border-primary/40 transition-all cursor-pointer active:scale-95 shadow-xs"
+                                  title="Retry document indexing"
+                                >
+                                  <RotateCcw className="w-3 h-3 text-primary" />
+                                  <span>Retry</span>
+                                </button>
+                              </div>
                             )}
                             <Tooltip content="Delete document" side="top">
                               <button
                                 onClick={() => handleDeleteDoc(doc.id)}
-                                className="p-1.5 rounded-lg border border-border bg-surface-2 text-foreground-3 hover:text-rose-400 hover:bg-rose-500/10 hover:border-rose-500/20 transition-all duration-150"
+                                className="p-1.5 rounded-lg border border-border bg-surface-2 text-foreground-3 hover:text-rose-400 hover:bg-rose-500/10 hover:border-rose-500/20 transition-all duration-150 cursor-pointer active:scale-95"
                                 aria-label="Delete document"
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
@@ -1889,7 +1928,7 @@ export default function SettingsPage() {
               </div>
             )}
 
-            {/* â”€â”€ Memories tab â”€â”€ */}
+            {/* -- Memories tab -- */}
             {tab === 'memories' && (
               <div className="settings-section space-y-6 animate-fade-in">
                 <div>
@@ -1952,10 +1991,10 @@ export default function SettingsPage() {
 
                     <button
                       type="submit"
-                      className="w-full flex items-center justify-center gap-2 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs transition-all duration-150 shadow-md active:scale-[0.98]"
+                      className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-primary hover:brightness-110 text-primary-foreground font-bold text-xs transition-all shadow-sm cursor-pointer active:scale-95"
                     >
                       <Plus className="w-3.5 h-3.5" />
-                      <span>Save Fact</span>
+                      <span>Save Fact to Memory</span>
                     </button>
 
                     {memError && (
@@ -2062,10 +2101,11 @@ export default function SettingsPage() {
                           Server Name <span className="text-rose-400">*</span>
                         </label>
                         <input
+                          id="mcp-name-input"
                           type="text"
                           value={mcpName}
                           onChange={(e) => setMcpName(e.target.value)}
-                          placeholder="e.g. Weather &amp; Geocoding Tool"
+                          placeholder="e.g. Weather & Geocoding Tool"
                           className="w-full h-11 px-4 rounded-xl border border-border bg-background text-foreground text-xs focus:ring-2 focus:ring-primary/40 focus:border-primary outline-none transition-all shadow-inner"
                         />
                       </div>
@@ -2074,6 +2114,7 @@ export default function SettingsPage() {
                           Server Endpoint URL <span className="text-rose-400">*</span>
                         </label>
                         <input
+                          id="mcp-url-input"
                           type="url"
                           value={mcpUrl}
                           onChange={(e) => setMcpUrl(e.target.value)}
@@ -2117,8 +2158,8 @@ export default function SettingsPage() {
                       <button
                         type="button"
                         onClick={handleTestMcpConnection}
-                        disabled={isTestingMcp || !mcpUrl.trim()}
-                        className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-border bg-surface-2 hover:bg-surface-3 text-foreground text-xs font-semibold disabled:opacity-50 transition-all cursor-pointer active:scale-95 shadow-xs"
+                        disabled={isTestingMcp}
+                        className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-border bg-surface-2 hover:bg-surface-3 text-foreground text-xs font-semibold disabled:opacity-60 disabled:cursor-not-allowed transition-all cursor-pointer active:scale-95 shadow-xs"
                       >
                         {isTestingMcp ? <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" /> : <RefreshCw className="w-3.5 h-3.5 text-primary" />}
                         <span>{isTestingMcp ? 'Testing Connection...' : 'Test Connection'}</span>
@@ -2127,8 +2168,8 @@ export default function SettingsPage() {
                       <button
                         type="button"
                         onClick={handleAddMcpServer}
-                        disabled={isSavingMcp || !mcpName.trim() || !mcpUrl.trim()}
-                        className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-primary text-primary-foreground text-xs font-bold hover:brightness-110 disabled:opacity-50 transition-all shadow-sm cursor-pointer active:scale-95"
+                        disabled={isSavingMcp}
+                        className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-primary text-primary-foreground text-xs font-bold hover:brightness-110 disabled:opacity-60 disabled:cursor-not-allowed transition-all shadow-sm cursor-pointer active:scale-95"
                       >
                         {isSavingMcp ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <PlusCircle className="w-3.5 h-3.5" />}
                         <span>{isSavingMcp ? 'Registering Server...' : 'Save & Register Server'}</span>

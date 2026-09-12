@@ -978,13 +978,17 @@ class ParserService:
                 metadata={"document_id": document_id, "filename": filename, "user_id": user_id},
             )
 
-            chunk_texts = [c["content"] for c in chunk_dicts]
+            valid_chunk_dicts = [c for c in chunk_dicts if c.get("content", "").strip()]
+            if not valid_chunk_dicts:
+                raise ValueError(f"Document '{filename}' contains no readable text content after chunking.")
+
+            chunk_texts = [c["content"].strip() for c in valid_chunk_dicts]
             chunk_metadatas = [
                 {
                     "page_number": c.get("page_number", 1),
                     "chunk_index": c.get("chunk_index", i),
                 }
-                for i, c in enumerate(chunk_dicts)
+                for i, c in enumerate(valid_chunk_dicts)
             ]
 
             await vector_store.add_document_chunks(
@@ -1007,6 +1011,7 @@ class ParserService:
                 doc = result.scalar_one_or_none()
                 if doc:
                     doc.status = "ready"
+                    doc.error_message = None
                     await db.commit()
 
             logger.info(
@@ -1025,5 +1030,5 @@ class ParserService:
                 doc = result.scalar_one_or_none()
                 if doc:
                     doc.status = "failed"
-                    doc.error_message = str(exc)
+                    doc.error_message = str(exc)[:900]
                     await db.commit()

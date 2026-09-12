@@ -96,11 +96,14 @@ async def list_remote_mcp_servers(
 async def test_mcp_server_connection(req: TestConnectionRequest):
     """Test connection and tool discovery for a remote MCP server URL before saving."""
     t0 = time.perf_counter()
-    client = McpHttpClient(url=req.url, auth_header=req.auth_header, transport_type=req.transport_type)
+    url = req.url.strip()
+    if not (url.startswith("http://") or url.startswith("https://")):
+        url = f"http://{url}"
+
+    client = McpHttpClient(url=url, auth_header=req.auth_header, transport_type=req.transport_type)
     try:
-        await asyncio.wait_for(client.connect(), timeout=15.0)
-        tools = await asyncio.wait_for(client.list_tools(), timeout=15.0)
-        await client.close()
+        await asyncio.wait_for(client.connect(), timeout=12.0)
+        tools = await asyncio.wait_for(client.list_tools(), timeout=12.0)
         latency_ms = round((time.perf_counter() - t0) * 1000, 1)
 
         tool_summaries = []
@@ -119,16 +122,14 @@ async def test_mcp_server_connection(req: TestConnectionRequest):
             "tools": tool_summaries,
         }
     except (asyncio.TimeoutError, TimeoutError):
-        await client.close()
         latency_ms = round((time.perf_counter() - t0) * 1000, 1)
         return {
             "status": "error",
-            "message": "Connection timed out (15s). The remote server took too long to respond. If hosted on Render free tier, it may still be waking up from sleep.",
+            "message": "Connection timed out (12s). The remote server took too long to respond. If hosted on a free cloud tier, it may still be spinning up.",
             "latency_ms": latency_ms,
             "tools": [],
         }
     except Exception as e:
-        await client.close()
         latency_ms = round((time.perf_counter() - t0) * 1000, 1)
         err_msg = str(e).strip() or type(e).__name__
         return {
@@ -137,6 +138,11 @@ async def test_mcp_server_connection(req: TestConnectionRequest):
             "latency_ms": latency_ms,
             "tools": [],
         }
+    finally:
+        try:
+            await client.close()
+        except Exception:
+            pass
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -149,41 +155,48 @@ async def create_remote_mcp_server(
     discovered_tools = []
     connection_warning = None
 
-    # Test connection gracefully (fail-safe so user is never blocked from saving)
-    client = McpHttpClient(url=payload.url, auth_header=payload.auth_header, transport_type=payload.transport_type)
+    url = payload.url.strip()
+    if not (url.startswith("http://") or url.startswith("https://")):
+        url = f"http://{url}"
+
+    # Test connection gracefully (fail-safe 4.0s timeout so user is never blocked from saving)
+    client = McpHttpClient(url=url, auth_header=payload.auth_header, transport_type=payload.transport_type)
     try:
-        await asyncio.wait_for(client.connect(), timeout=10.0)
-        discovered_tools = await asyncio.wait_for(client.list_tools(), timeout=10.0)
-        await client.close()
+        await asyncio.wait_for(client.connect(), timeout=4.0)
+        discovered_tools = await asyncio.wait_for(client.list_tools(), timeout=4.0)
     except Exception as e:
-        await client.close()
         connection_warning = f"Server saved to DB & Redis, but remote endpoint did not respond immediately ({str(e)[:90]}). Tools will be discovered when server is reachable."
         logger.warning(f"[MCP Save] Server endpoint offline/slow during save: {e}")
+    finally:
+        try:
+            await client.close()
+        except Exception:
+            pass
 
     # Check if a server with this URL or Name already exists for this user (upsert)
     stmt = select(RemoteMcpServer).where(
-        ((RemoteMcpServer.url == payload.url) | (RemoteMcpServer.name == payload.name)) &
+        ((RemoteMcpServer.url == url) | (RemoteMcpServer.name == payload.name.strip())) &
         ((RemoteMcpServer.user_id == current_user.id) | (RemoteMcpServer.user_id.is_(None)))
     )
     res = await db.execute(stmt)
     existing_server = res.scalars().first()
 
     if existing_server:
-        existing_server.name = payload.name
-        existing_server.url = payload.url
+        existing_server.name = payload.name.strip()
+        existing_server.url = url
         existing_server.transport_type = payload.transport_type or "http_jsonrpc"
         if payload.auth_header is not None:
-            existing_server.auth_header = payload.auth_header
+            existing_server.auth_header = payload.auth_header.strip() if payload.auth_header else None
         if payload.is_enabled is not None:
             existing_server.is_enabled = payload.is_enabled
         server_obj = existing_server
     else:
         server_obj = RemoteMcpServer(
             user_id=current_user.id,
-            name=payload.name,
-            url=payload.url,
+            name=payload.name.strip(),
+            url=url,
             transport_type=payload.transport_type or "http_jsonrpc",
-            auth_header=payload.auth_header,
+            auth_header=payload.auth_header.strip() if payload.auth_header else None,
             is_enabled=payload.is_enabled if payload.is_enabled is not None else True,
         )
         db.add(server_obj)

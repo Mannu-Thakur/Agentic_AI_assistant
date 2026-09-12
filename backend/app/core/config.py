@@ -13,6 +13,7 @@ import os
 import sys
 import json
 import logging
+from pathlib import Path
 from typing import List, Optional, Any, Union
 from pydantic import AnyHttpUrl, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -103,6 +104,17 @@ class Settings(BaseSettings):
     #
     # The server will refuse to start if SQLite is configured in staging/production.
     DATABASE_URL: str = "sqlite:///./sql_app.db"
+
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def _canonicalize_database_url(cls, v: Any) -> str:
+        if isinstance(v, str) and v.startswith("sqlite:///") and not v.startswith("sqlite:////"):
+            rel_part = v[len("sqlite:///"):]
+            if not os.path.isabs(rel_part):
+                backend_dir = Path(__file__).resolve().parent.parent.parent
+                abs_db_path = (backend_dir / rel_part).resolve()
+                return f"sqlite:///{abs_db_path.as_posix()}"
+        return v
 
     @property
     def ASYNC_DATABASE_URL(self) -> str:
