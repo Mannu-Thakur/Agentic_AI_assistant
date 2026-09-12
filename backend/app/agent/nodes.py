@@ -39,7 +39,7 @@ import json
 import logging
 import asyncio
 import re
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Set, Tuple
 
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
@@ -91,6 +91,7 @@ from app.providers.gemini import GeminiProvider
 from app.providers.groq import GroqProvider
 from app.providers.openrouter import OpenRouterProvider
 from app.providers.openai_provider import OpenAIProvider
+from app.providers.registry import is_quota_exhaustion
 # Top-level imports so patch paths resolve correctly in tests
 from app.core.database import AsyncSessionLocal
 from app.tools.local_tools import tavily_search as tavily_search
@@ -790,23 +791,23 @@ def _best_api_key(keys: dict, model: str) -> Optional[str]:
     if model.startswith("openrouter/"):
         return keys.get("openrouter")
     if "gemini" in model or "google" in model:
-        return keys.get("gemini") or keys.get("google")
+        return keys.get("gemini") or keys.get("google") or keys.get("openrouter")
     if "gpt" in model or "o1-" in model or "o3-" in model or "o4-" in model:
-        return keys.get("openai")
+        return keys.get("openai") or keys.get("openrouter")
     if "claude" in model:
-        return keys.get("anthropic")
+        return keys.get("anthropic") or keys.get("openrouter")
     if "deepseek" in model:
-        return keys.get("deepseek")
+        return keys.get("deepseek") or keys.get("openrouter")
     if "qwen" in model:
-        return keys.get("alibaba")
+        return keys.get("alibaba") or keys.get("openrouter")
     if "glm" in model:
-        return keys.get("glm")
+        return keys.get("glm") or keys.get("openrouter")
     if "llama" in model or "mixtral" in model or "gemma" in model or "groq" in model:
-        return keys.get("groq")
+        return keys.get("groq") or keys.get("openrouter")
     # Unknown model name — fall back to any available key in priority order
-    # (Google first since it supports the most model variants)
     return (
         keys.get("gemini") or keys.get("google") or
+        keys.get("groq") or
         keys.get("openai") or keys.get("anthropic") or
         keys.get("openrouter")
     )
@@ -1003,6 +1004,7 @@ async def _call_llm_judge(prompt: str, config: dict) -> Optional[dict]:
     messages = [{"role": "user", "content": prompt}]
 
     candidates = [
+        (groq_provider,       "groq",       "llama-3.1-8b-instant"),
         (groq_provider,       "groq",       "llama-3.3-70b-versatile"),
         (gemini_provider,     "gemini",     "gemini-2.0-flash"),
         (openai_provider,     "openai",     "gpt-4o-mini"),
@@ -1043,10 +1045,10 @@ async def _call_llm_judge(prompt: str, config: dict) -> Optional[dict]:
                     return json.loads(json_match.group(1))
                 raise
         except Exception as e:
-            err_str = str(e).lower()
-            if "429" in err_str or "rate limit" in err_str or "rate_limit" in err_str:
+            err_str = str(e)
+            if is_quota_exhaustion(err_str):
                 _mark_provider_rate_limited(key_name)
-            logger.warning(f"Judge call failed on {key_name}: {e}")
+            logger.warning(f"Judge call failed on {key_name}/{model}: {e}")
             continue
 
     return None
@@ -1063,12 +1065,13 @@ async def _call_llm_text(prompt: str, config: dict, max_tokens: int = 256) -> Op
 
     Production hardening:
     • Per-provider 429 cooldown: rate-limited providers are skipped.
-    • Fallback chain: Groq → Gemini → OpenAI → OpenRouter.
+    • Fallback chain: Groq (8B Instant → 70B) → Gemini → OpenAI → OpenRouter.
     """
     keys = _extract_api_keys(config)
     messages = [{"role": "user", "content": prompt}]
 
     candidates = [
+        (groq_provider,       "groq",       "llama-3.1-8b-instant"),
         (groq_provider,       "groq",       "llama-3.3-70b-versatile"),
         (gemini_provider,     "gemini",     "gemini-2.0-flash"),
         (openai_provider,     "openai",     "gpt-4o-mini"),
@@ -1098,10 +1101,10 @@ async def _call_llm_text(prompt: str, config: dict, max_tokens: int = 256) -> Op
             raw = result.get("text", "").strip()
             return raw
         except Exception as e:
-            err_str = str(e).lower()
-            if "429" in err_str or "rate limit" in err_str or "rate_limit" in err_str:
+            err_str = str(e)
+            if is_quota_exhaustion(err_str):
                 _mark_provider_rate_limited(key_name)
-            logger.warning(f"Text call failed on {key_name}: {e}")
+            logger.warning(f"Text call failed on {key_name}/{model}: {e}")
             continue
 
     return None
@@ -2947,25 +2950,8 @@ async def generate_response_node(
         if config.get("configurable", {}).get("on_token"):
             await config["configurable"]["on_token"]("*[Error: No model selected. Please select a model from the model picker.]*")
         return {**state, "response_text": "*[Error: No model selected. Please select a model from the model picker.]*"}
-    model_aliases = {
-        # Map all deprecated/renamed models to current stable equivalents
-        "gemini-1.5-flash":                     "gemini-2.0-flash",
-        "gemini-1.5-pro":                       "gemini-2.0-flash",
-        "gemini-2.5-flash":                     "gemini-2.0-flash",
-        "gemini-2.5-pro":                       "gemini-2.0-flash",
-        "gemini-3.5-flash":                     "gemini-2.0-flash",
-        "openrouter/google/gemini-flash-1.5":   "openrouter/google/gemini-2.0-flash",
-        "openrouter/google/gemini-pro-1.5":     "openrouter/google/gemini-2.0-flash",
-        "openrouter/google/gemini-2.5-flash":   "openrouter/google/gemini-2.0-flash",
-        "openrouter/google/gemini-3.5-flash":   "openrouter/google/gemini-2.0-flash",
-        "google/gemini-flash-1.5":              "google/gemini-2.0-flash",
-        "google/gemini-pro-1.5":                "google/gemini-2.0-flash",
-        "google/gemini-2.5-flash":              "google/gemini-2.0-flash",
-        "google/gemini-3.5-flash":              "google/gemini-2.0-flash",
-        # Deprecated Groq models
-        "mixtral-8x7b-32768":                   "llama-3.3-70b-versatile",
-    }
-    model           = model_aliases.get(model, model)
+    from app.providers.registry import DEPRECATED_MODELS
+    model = DEPRECATED_MODELS.get(model, model)
     retrieved_items   = state.get("retrieved_documents", [])
     messages          = state.get("messages", [])
     plan              = state.get("plan")
@@ -3091,13 +3077,23 @@ async def generate_response_node(
 
     raw_messages = [{"role": "system", "content": sys_prompt}]
     for msg in messages:
-        role = "user"
-        if hasattr(msg, "type"):
-            if msg.type == "ai":
+        if isinstance(msg, dict):
+            role = msg.get("role", "user")
+            if role == "ai":
                 role = "assistant"
-            elif msg.type == "system":
-                role = "system"
-        content = msg.content if isinstance(msg.content, str) else str(msg.content)
+            content = msg.get("content", "")
+            if not isinstance(content, str):
+                content = str(content)
+        else:
+            role = "user"
+            if hasattr(msg, "type"):
+                if msg.type == "ai":
+                    role = "assistant"
+                elif msg.type == "system":
+                    role = "system"
+            content = getattr(msg, "content", "")
+            if not isinstance(content, str):
+                content = str(content)
         raw_messages.append({"role": role, "content": content})
 
     # Phase 3 parallel tool results injection:
@@ -3179,149 +3175,174 @@ async def generate_response_node(
             "model": model
         }))
 
-    counterparts = {
-        "gemini-2.0-flash":                    ("openrouter", "google/gemini-2.0-flash"),
-        "gemini-2.5-flash":                    ("openrouter", "google/gemini-2.0-flash"),
-        "gemini-2.5-pro":                      ("openrouter", "google/gemini-2.0-flash"),
-        "gemini-1.5-flash":                    ("openrouter", "google/gemini-2.0-flash"),
-        "gemini-1.5-pro":                      ("openrouter", "google/gemini-2.0-flash"),
-        "llama-3.1-8b-instant":                ("openrouter", "meta-llama/llama-3.1-8b-instruct"),
-        "llama-3.3-70b-versatile":             ("openrouter", "meta-llama/llama-3.3-70b-instruct"),
-        "gemma2-9b-it":                        ("openrouter", "google/gemma-2-9b-it"),
-        "google/gemini-2.0-flash":             ("gemini", "gemini-2.0-flash"),
-        "google/gemini-2.5-flash":             ("gemini", "gemini-2.0-flash"),
-        "google/gemini-2.5-pro":               ("gemini", "gemini-2.0-flash"),
-        "google/gemini-flash-1.5":             ("gemini", "gemini-2.0-flash"),
-        "google/gemini-pro-1.5":               ("gemini", "gemini-2.0-flash"),
-        "google/gemma-2-9b-it":                ("groq", "gemma2-9b-it"),
-        "meta-llama/llama-3.1-8b-instruct":    ("groq", "llama-3.1-8b-instant"),
-        "meta-llama/llama-3.3-70b-instruct":   ("groq", "llama-3.3-70b-versatile"),
-    }
-
-    attempts = [(provider, actual_model_id, provider_api_key)]
-    if actual_model_id in counterparts:
-        target_prov_name, target_model = counterparts[actual_model_id]
-        target_key = keys.get(target_prov_name)
-        if target_key:
-            prov_inst = (
-                gemini_provider     if target_prov_name == "gemini"
-                else groq_provider  if target_prov_name == "groq"
-                else openrouter_provider
-            )
-            attempts.append((prov_inst, target_model, target_key))
-
+    # ── Multi-Tier Production Fallback Resolution ─────────────────────────────
+    # Tier 0: Primary requested model and provider
+    # Tier 1: Intra-provider candidates (same key, lighter / higher-rate-limit models)
+    # Tier 2: Cross-provider candidates across all configured valid keys
+    actual_model_id = model[11:] if model.startswith("openrouter/") else model
+    primary_prov_inst = get_provider(model)
     model_lower = (actual_model_id or "").lower()
-    if "gemini" in model_lower or "google" in model_lower:
-        # Gemini primary → try OpenRouter Gemini → then Groq as rescue
-        generic_fallbacks = [
-            ("gemini",     gemini_provider,     "gemini-2.0-flash"),
-            ("openrouter", openrouter_provider, "google/gemini-2.0-flash"),
-            ("groq",       groq_provider,       "llama-3.3-70b-versatile"),
-        ]
-    elif "gpt" in model_lower or "o1-" in model_lower or "o3-" in model_lower or "o4-" in model_lower:
-        # OpenAI primary → OpenRouter OpenAI → Gemini rescue
-        generic_fallbacks = [
-            ("openai",     openai_provider,     actual_model_id),
-            ("openrouter", openrouter_provider, f"openai/{actual_model_id}"),
-            ("gemini",     gemini_provider,     "gemini-2.0-flash"),
-        ]
+
+    if model.startswith("openrouter/"):
+        primary_prov_name = "openrouter"
+    elif "gemini" in model_lower or "google" in model_lower:
+        primary_prov_name = "gemini"
+    elif any(x in model_lower for x in ("llama", "mixtral", "gemma", "groq")):
+        primary_prov_name = "groq"
+    elif any(x in model_lower for x in ("gpt", "o1-", "o3-", "o4-")):
+        primary_prov_name = "openai" if (keys.get("openai") and not str(keys.get("openai")).startswith("mock_")) else "openrouter"
     elif "claude" in model_lower:
-        # Anthropic primary → OpenRouter Anthropic → Gemini rescue
-        generic_fallbacks = [
-            ("anthropic",  openrouter_provider, f"anthropic/{actual_model_id}"),
-            ("openrouter", openrouter_provider, f"anthropic/{actual_model_id}"),
-            ("gemini",     gemini_provider,     "gemini-2.0-flash"),
-        ]
+        primary_prov_name = "anthropic"
     elif "deepseek" in model_lower:
-        # DeepSeek primary → OpenRouter DeepSeek → Gemini rescue
-        generic_fallbacks = [
-            ("deepseek",   openrouter_provider, f"deepseek/{actual_model_id}"),
-            ("openrouter", openrouter_provider, f"deepseek/{actual_model_id}"),
-            ("gemini",     gemini_provider,     "gemini-2.0-flash"),
+        primary_prov_name = "deepseek"
+    else:
+        primary_prov_name = "gemini"
+
+    # Normalize actual_model_id when routed through OpenRouter
+    if (primary_prov_inst == openrouter_provider or primary_prov_name in ("openrouter", "anthropic", "deepseek")) and "/" not in actual_model_id:
+        if "claude" in model_lower:
+            actual_model_id = f"anthropic/{actual_model_id}"
+        elif "deepseek" in model_lower:
+            actual_model_id = f"deepseek/{actual_model_id}"
+        elif any(x in model_lower for x in ("gpt", "o1-", "o3-", "o4-")):
+            actual_model_id = f"openai/{actual_model_id}"
+        elif "gemini" in model_lower:
+            actual_model_id = f"google/{actual_model_id}"
+        elif "llama" in model_lower:
+            actual_model_id = f"meta-llama/{actual_model_id}"
+        elif "qwen" in model_lower:
+            actual_model_id = f"qwen/{actual_model_id}"
+        elif "mistral" in model_lower or "mixtral" in model_lower:
+            actual_model_id = f"mistralai/{actual_model_id}"
+
+    # Gather available keys across providers
+    gemini_key = (
+        keys.get("gemini") or keys.get("google") or
+        getattr(settings, "GEMINI_API_KEY", None) or
+        os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    )
+    groq_key = (
+        keys.get("groq") or
+        getattr(settings, "GROQ_API_KEY", None) or
+        os.environ.get("GROQ_API_KEY")
+    )
+    openai_key = (
+        keys.get("openai") or
+        getattr(settings, "OPENAI_API_KEY", None) or
+        os.environ.get("OPENAI_API_KEY")
+    )
+    openrouter_key = (
+        keys.get("openrouter") or
+        getattr(settings, "OPENROUTER_API_KEY", None) or
+        os.environ.get("OPENROUTER_API_KEY")
+    )
+
+    candidates: List[Tuple[str, Any, str, Optional[str]]] = []
+
+    # 0. Primary attempt
+    candidates.append((primary_prov_name, primary_prov_inst, actual_model_id, provider_api_key))
+
+    # 1. Tier 1 — Intra-provider fallback (same provider, lighter / higher-rate-limit models)
+    if primary_prov_name == "gemini" and gemini_key:
+        for m in ("gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash", "gemini-2.5-flash"):
+            candidates.append(("gemini", gemini_provider, m, gemini_key))
+    elif primary_prov_name == "groq" and groq_key:
+        # Llama 3.1 8B Instant has 30,000 TPM and 30 RPM (5x headroom over 70B's 6,000 TPM limit)
+        for m in ("llama-3.1-8b-instant", "llama-3.3-70b-versatile", "gemma2-9b-it"):
+            candidates.append(("groq", groq_provider, m, groq_key))
+    elif primary_prov_name == "openai" and openai_key:
+        for m in ("gpt-4o-mini", "gpt-4o"):
+            candidates.append(("openai", openai_provider, m, openai_key))
+    elif primary_prov_name in ("openrouter", "anthropic", "deepseek") and openrouter_key:
+        for m in ("google/gemini-2.0-flash", "meta-llama/llama-3.3-70b-instruct", "openai/gpt-4o-mini"):
+            candidates.append(("openrouter", openrouter_provider, m, openrouter_key))
+
+    # 2. Tier 2 — Cross-provider cascades
+    cross_providers = []
+    if primary_prov_name == "gemini":
+        cross_providers = [
+            ("groq", groq_provider, ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"], groq_key),
+            ("openai", openai_provider, ["gpt-4o-mini", "gpt-4o"], openai_key),
+            ("openrouter", openrouter_provider, ["google/gemini-2.0-flash", "meta-llama/llama-3.3-70b-instruct"], openrouter_key),
         ]
-    elif "llama" in model_lower or "groq" in model_lower or "mixtral" in model_lower or "gemma" in model_lower:
-        # Groq primary → OpenRouter Llama/Gemma → Gemini cross-provider rescue
-        generic_fallbacks = [
-            ("openrouter", openrouter_provider, "meta-llama/llama-3.3-70b-instruct"),
-            ("gemini",     gemini_provider,     "gemini-2.0-flash"),
-            ("openrouter", openrouter_provider, "google/gemini-2.0-flash"),
+    elif primary_prov_name == "groq":
+        cross_providers = [
+            ("gemini", gemini_provider, ["gemini-2.0-flash", "gemini-2.0-flash-lite"], gemini_key),
+            ("openai", openai_provider, ["gpt-4o-mini", "gpt-4o"], openai_key),
+            ("openrouter", openrouter_provider, ["meta-llama/llama-3.3-70b-instruct", "google/gemini-2.0-flash"], openrouter_key),
         ]
-    elif "qwen" in model_lower or "glm" in model_lower:
-        # Alibaba/Zhipu → OpenRouter → Gemini rescue
-        generic_fallbacks = [
-            ("openrouter", openrouter_provider, actual_model_id),
-            ("gemini",     gemini_provider,     "gemini-2.0-flash"),
+    elif primary_prov_name == "openai":
+        cross_providers = [
+            ("gemini", gemini_provider, ["gemini-2.0-flash", "gemini-2.0-flash-lite"], gemini_key),
+            ("groq", groq_provider, ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"], groq_key),
+            ("openrouter", openrouter_provider, [
+                actual_model_id if "/" in actual_model_id else f"openai/{actual_model_id}",
+                "google/gemini-2.0-flash"
+            ], openrouter_key),
         ]
     else:
-        # Unknown model — dynamically choose fallback based on what keys are available.
-        generic_fallbacks = []
-        if keys.get("gemini") or keys.get("google"):
-            generic_fallbacks.append(("gemini", gemini_provider, actual_model_id))
-        if keys.get("openrouter"):
-            generic_fallbacks.append(("openrouter", openrouter_provider, actual_model_id))
-        if not generic_fallbacks:
-            generic_fallbacks = [
-                ("gemini",     gemini_provider,     "gemini-2.0-flash"),
-                ("openrouter", openrouter_provider, "google/gemini-2.0-flash"),
-            ]
-    for prov_name, prov_inst, model_id in generic_fallbacks:
-        key = keys.get(prov_name) or getattr(prov_inst, "api_key", None)
-        if key and not any(p == prov_inst and m == model_id for p, m, _ in attempts):
-            attempts.append((prov_inst, model_id, key))
+        or_primary = actual_model_id
+        if "/" not in or_primary:
+            if "claude" in or_primary.lower():
+                or_primary = f"anthropic/{or_primary}"
+            elif "deepseek" in or_primary.lower():
+                or_primary = f"deepseek/{or_primary}"
+            elif any(x in or_primary.lower() for x in ("gpt", "o1-", "o3-", "o4-")):
+                or_primary = f"openai/{or_primary}"
+        cross_providers = [
+            ("openrouter", openrouter_provider, [
+                or_primary,
+                "google/gemini-2.0-flash",
+                "meta-llama/llama-3.3-70b-instruct",
+            ], openrouter_key),
+            ("gemini", gemini_provider, ["gemini-2.0-flash", "gemini-2.0-flash-lite"], gemini_key),
+            ("groq", groq_provider, ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"], groq_key),
+            ("openai", openai_provider, ["gpt-4o-mini"], openai_key),
+        ]
+
+    for p_name, p_inst, p_models, p_key in cross_providers:
+        if p_key and not str(p_key).startswith("mock_"):
+            for p_mod in p_models:
+                candidates.append((p_name, p_inst, p_mod, p_key))
 
     if images:
-        # ── Vision guarantee: always inject system-level vision providers ──────
-        # User fallback chain may have no vision-capable entries if the user has
-        # no matching API keys. Inject system-settings keys so Tesseract OCR is
-        # truly the absolute last resort, not the first fallback.
-        _sys_gemini_key = (
-            keys.get("gemini") or keys.get("google") or
-            getattr(settings, "GEMINI_API_KEY", None) or
-            os.environ.get("GEMINI_API_KEY")
-        )
-        _sys_openai_key = (
-            keys.get("openai") or
-            getattr(settings, "OPENAI_API_KEY", None) or
-            os.environ.get("OPENAI_API_KEY")
-        )
-        _sys_groq_key = (
-            keys.get("groq") or
-            getattr(settings, "GROQ_API_KEY", None) or
-            os.environ.get("GROQ_API_KEY")
-        )
-        _sys_or_key = (
-            keys.get("openrouter") or
-            getattr(settings, "OPENROUTER_API_KEY", None) or
-            os.environ.get("OPENROUTER_API_KEY")
-        )
         # Guarantee: OpenAI GPT-4o directly if system OPENAI_API_KEY is set
-        if _sys_openai_key and not str(_sys_openai_key).startswith("mock_"):
-            if not any(m == "gpt-4o" and p == openai_provider for p, m, _ in attempts):
-                attempts.insert(0, (openai_provider, "gpt-4o", _sys_openai_key))
+        if openai_key and not str(openai_key).startswith("mock_"):
+            if not any(m == "gpt-4o" and p == "openai" for p, _, m, _ in candidates):
+                candidates.insert(0, ("openai", openai_provider, "gpt-4o", openai_key))
         # Guarantee: Gemini Flash via system key (best for handwriting/vision)
-        if _sys_gemini_key and not str(_sys_gemini_key).startswith("mock_"):
-            if not any("gemini-2.0-flash" in m for _, m, _ in attempts):
-                attempts.append((gemini_provider, "gemini-2.0-flash", _sys_gemini_key))
+        if gemini_key and not str(gemini_key).startswith("mock_"):
+            if not any("gemini-2.0-flash" in m and p == "gemini" for p, _, m, _ in candidates):
+                candidates.append(("gemini", gemini_provider, "gemini-2.0-flash", gemini_key))
         # Guarantee: OpenAI GPT-4o via system key through OpenRouter
-        if _sys_or_key and not str(_sys_or_key).startswith("mock_"):
-            if not any("gpt-4o" in m for _, m, _ in attempts):
-                attempts.append((openrouter_provider, "openai/gpt-4o", _sys_or_key))
-        # Guarantee: Groq Llama Vision (free)
-        if _sys_groq_key and not str(_sys_groq_key).startswith("mock_"):
-            if not any("llama-3.2" in m for _, m, _ in attempts):
-                attempts.append((groq_provider, "llama-3.2-11b-vision-preview", _sys_groq_key))
+        if openrouter_key and not str(openrouter_key).startswith("mock_"):
+            if not any("gpt-4o" in m and p == "openrouter" for p, _, m, _ in candidates):
+                candidates.append(("openrouter", openrouter_provider, "openai/gpt-4o", openrouter_key))
+        # Guarantee: Groq Llama Vision
+        if groq_key and not str(groq_key).startswith("mock_"):
+            if not any("llama-3.2" in m and p == "groq" for p, _, m, _ in candidates):
+                candidates.append(("groq", groq_provider, "llama-3.2-11b-vision-preview", groq_key))
 
         # Strict filter: only attempt vision-capable models when images are present
-        attempts = [
-            (p, m, k) for (p, m, k) in attempts
+        candidates = [
+            (p, inst, m, k) for (p, inst, m, k) in candidates
             if any(frag in m.lower() for frag in _VISION_FRAGMENTS)
         ]
-        logger.info(f"[Vision] {len(attempts)} vision attempt(s) queued: {[m for _, m, _ in attempts]}")
+        logger.info(f"[Vision] {len(candidates)} vision attempt(s) queued: {[m for _, _, m, _ in candidates]}")
 
-    # Remove any attempt that lacks a valid API key to avoid instant/silent timeouts
-    valid_attempts = [(p, m, k) for (p, m, k) in attempts if k]
-    if valid_attempts:
-        attempts = valid_attempts
+    # Deduplicate while strictly preserving priority order & filtering invalid/empty keys
+    seen_models: Set[Tuple[str, str]] = set()
+    attempts: List[Tuple[str, Any, str, str]] = []
+    for p_name, p_inst, p_mod, p_k in candidates:
+        if not p_k or str(p_k).startswith("mock_"):
+            continue
+        key_pair = (p_name, p_mod)
+        if key_pair not in seen_models:
+            seen_models.add(key_pair)
+            attempts.append((p_name, p_inst, p_mod, p_k))
+
+    if not attempts:
+        attempts = [(primary_prov_name, primary_prov_inst, actual_model_id, provider_api_key or "")]
 
     full_response = ""
     tool_calls: List[dict] = []
@@ -3459,48 +3480,101 @@ async def generate_response_node(
         return t_calls
 
 
-    primary_error = None
-    primary_provider_class = type(attempts[0][0]).__name__ if attempts else ""
-    for attempt_idx, (current_provider, current_model, current_key) in enumerate(attempts):
+    model_used_final = actual_model_id
+    provider_used_final = primary_prov_name
+    attempt_history: List[dict] = []
+    skipped_providers: Set[str] = set()
+
+    for attempt_idx, (current_prov_name, current_provider, current_model, current_key) in enumerate(attempts):
+        if current_prov_name in skipped_providers:
+            logger.info(
+                f"[Fallback] Skipping {current_prov_name}/{current_model} — "
+                f"provider '{current_prov_name}' account quota is exhausted."
+            )
+            continue
+
+        # If switching to a fallback model, notify UI
+        if attempt_idx > 0:
+            await _notify_step(config, f"Trying fallback model ({current_model})...")
+
         try:
             tool_calls = await _stream(current_provider, current_model, current_key)
             success = True
+            model_used_final = current_model
+            provider_used_final = current_prov_name
+            if attempt_idx > 0:
+                logger.info(
+                    f"[Fallback] Successfully fulfilled request using fallback model '{current_model}' "
+                    f"(provider: {current_prov_name}, attempt {attempt_idx})"
+                )
+                try:
+                    from app.providers.provider_metrics import provider_metrics
+                    provider_metrics.record_fallback(
+                        from_provider=primary_prov_name,
+                        to_provider=current_prov_name,
+                        to_model=current_model,
+                        reason=attempt_history[-1]["error"] if attempt_history else "fallback",
+                    )
+                except Exception as _m_err:
+                    logger.debug(f"Failed to record fallback metric: {_m_err}")
             break
         except Exception as e:
-            err_str = str(e).lower()
-            is_rate_limit   = "429" in err_str or "rate limit" in err_str or "rate_limit" in err_str or "ratelimit" in err_str
-            is_payment_error = any(code in err_str for code in ["402", "403", "payment required", "insufficient credits"])
-            logger.error(json.dumps({
-                "event": "provider_call_failed",
-                "model": current_model,
-                "error": str(e),
-                "is_rate_limit": is_rate_limit,
-                "is_payment_error": is_payment_error,
-                "attempt": attempt_idx
-            }))
-            if attempt_idx == 0:
-                primary_error = e  # always remember the primary attempt's error
-            last_error = e
-            if full_response:
-                # Already streamed some content — cannot silently retry mid-stream
-                raise e
-            # On rate-limit, attempt 1 brief backoff retry before skipping to next provider
-            if is_rate_limit and not full_response:
-                logger.warning(f"[RateLimitRetry] HTTP 429 on {current_model}. Pausing 1.5s for exponential backoff retry...")
-                try:
-                    await asyncio.sleep(1.5)
-                    tool_calls = await _stream(current_provider, current_model, current_key)
-                    success = True
-                    break
-                except Exception as retry_err:
-                    logger.warning(f"[RateLimitRetry] Backoff retry failed on {current_model}: {retry_err}")
+            err_str = str(e)
+            is_exhausted = is_quota_exhaustion(err_str)
+            is_rate_limit = (
+                "429" in err_str.lower()
+                or "rate limit" in err_str.lower()
+                or "rate_limit" in err_str.lower()
+                or "ratelimit" in err_str.lower()
+                or "quota" in err_str.lower()
+                or is_exhausted
+            )
+            is_payment_error = any(code in err_str.lower() for code in ["402", "403", "payment required", "insufficient credits"])
 
-            if is_rate_limit:
-                current_prov_class = type(current_provider).__name__
-                # Advance past any remaining same-provider attempts in the list
-                logger.warning(f"[fallback] 429 rate-limit on {current_prov_class}/{current_model} — skipping same-provider retries")
-            # Always continue to next fallback
-            logger.warning(f"[fallback] attempt {attempt_idx} failed ({current_model}): {str(e)[:120]} — trying next provider")
+            attempt_history.append({
+                "provider": current_prov_name,
+                "model": current_model,
+                "error": err_str,
+                "is_rate_limit": is_rate_limit,
+                "is_quota_exhausted": is_exhausted,
+                "is_payment_error": is_payment_error,
+            })
+
+            logger.warning(json.dumps({
+                "event": "provider_attempt_failed",
+                "attempt": attempt_idx,
+                "provider": current_prov_name,
+                "model": current_model,
+                "is_rate_limit": is_rate_limit,
+                "is_quota_exhausted": is_exhausted,
+                "error": err_str[:160]
+            }))
+
+            if full_response:
+                # Already streamed some content to the user — cannot silently retry a new model from scratch.
+                # Gracefully append an inline notice so the user and chat state remain consistent.
+                logger.error(f"[StreamInterrupted] Stream interrupted mid-generation on {current_model}: {err_str}")
+                interruption_msg = f"\n\n⚠️ *[Response interrupted: {err_str[:120]}]*"
+                full_response += interruption_msg
+                if on_token:
+                    try:
+                        await on_token(interruption_msg)
+                    except Exception:
+                        pass
+                success = True
+                break
+
+            if is_exhausted:
+                # Account/project quota exhausted for this provider key.
+                # Skip all remaining attempts that share this provider.
+                logger.warning(
+                    f"[Fallback] Provider '{current_prov_name}' account quota exhausted. "
+                    f"Skipping remaining models for this provider."
+                )
+                skipped_providers.add(current_prov_name)
+                continue
+
+            # Per-model rate limit or other error: advance to next candidate model or provider
             continue
 
     # ── Tesseract OCR Rescue: If all vision provider attempts failed ──────────
@@ -3591,17 +3665,73 @@ async def generate_response_node(
                 full_response = direct_ocr_response
                 success = True
 
+    # If fallback succeeded and differed from the primary model, attach a polite notice
+    if success and model_used_final != actual_model_id and full_response:
+        if not full_response.startswith("> ℹ️"):
+            fallback_notice = (
+                f"> ℹ️ *Note: Selected model **{actual_model_id}** was rate-limited or unavailable. "
+                f"Response provided by fallback model **{model_used_final}**.* \n\n"
+            )
+            full_response = fallback_notice + full_response
+
     # Track whether the final response is a transient error (should NOT be saved to history)
     _is_error_response = False
 
-
     if not success:
-        err_msg = str(primary_error or last_error or "")
+        attempt_summaries = []
+        has_rate_limit = False
+        has_auth_error = False
+
+        for att in attempt_history:
+            p_name = att["provider"].upper()
+            m_name = att["model"]
+            err_text = att["error"]
+            if att.get("is_quota_exhausted"):
+                has_rate_limit = True
+                attempt_summaries.append(f"• **{p_name}** (`{m_name}`): Account daily quota / credits exhausted")
+            elif att.get("is_rate_limit"):
+                has_rate_limit = True
+                attempt_summaries.append(f"• **{p_name}** (`{m_name}`): Rate limit (RPM/TPM) reached")
+            elif any(w in err_text.lower() for w in ["api key", "missing", "invalid", "401", "403", "credentials"]):
+                has_auth_error = True
+                attempt_summaries.append(f"• **{p_name}** (`{m_name}`): Invalid or missing API key")
+            else:
+                attempt_summaries.append(f"• **{p_name}** (`{m_name}`): {err_text[:100]}")
+
+        summary_bullets = "\n".join(attempt_summaries) if attempt_summaries else f"• Model `{model}`: Call failed"
+
+        if has_rate_limit:
+            friendly_msg = (
+                "⚠️ **API Rate Limit / Quota Exceeded**\n\n"
+                "The active model and fallback providers reached their API capacity:\n\n"
+                f"{summary_bullets}\n\n"
+                "**How to resolve:**\n"
+                "1. Wait 30–60 seconds for transient per-minute limits to reset.\n"
+                "2. Add a **Groq API Key** (ultra-fast with generous free limits) or **Google Gemini Key** in **Settings → AI Models**.\n"
+                "3. Select another model from the top dropdown."
+            )
+        elif has_auth_error:
+            friendly_msg = (
+                "⚠️ **API Key Authentication Error**\n\n"
+                "Could not complete the request due to provider authentication errors:\n\n"
+                f"{summary_bullets}\n\n"
+                "Please verify your API keys in **Settings → AI Models**."
+            )
+        else:
+            primary_err_sample = attempt_history[0]["error"] if attempt_history else "Unknown error"
+            friendly_msg = (
+                f"⚠️ **Model Provider Error**\n\n"
+                f"Unable to complete request with model '{model}':\n\n"
+                f"{summary_bullets}\n\n"
+                f"Error detail: {primary_err_sample[:200]}\n\n"
+                "Please check your network connection or select a different model."
+            )
+
         # Build comprehensive telemetry metrics on error so Developer HUD renders accurately
         final_sources = state.get("source_documents", [])
         retrieved_items = state.get("retrieved_documents", [])
         error_telemetry = {
-            "model_used": current_model if 'current_model' in locals() else (actual_model_id if 'actual_model_id' in locals() else "unknown"),
+            "model_used": model_used_final,
             "latency_ms": int((_wall_time.monotonic() - _llm_start_time) * 1000),
             "cost_estimate": 0.0,
             "tokens_input": 0,
@@ -3620,32 +3750,13 @@ async def generate_response_node(
                     "used": False,
                 } for item in retrieved_items
             ],
-            "error_details": err_msg,
+            "error_details": friendly_msg,
         }
         if on_metrics:
             try:
                 await on_metrics(error_telemetry)
             except Exception:
                 pass
-
-        if "429" in err_msg or "rate limit" in err_msg.lower() or "quota" in err_msg.lower():
-            friendly_msg = (
-                "⚠️ **Rate Limit Exceeded (HTTP 429)**\n\n"
-                "The API request limit or quota for the active model has been reached. "
-                "Please wait a moment before trying again, or select a different model from the top bar."
-            )
-        elif "api key" in err_msg.lower() or "missing" in err_msg.lower() or "invalid" in err_msg.lower() or "credentials" in err_msg.lower() or "401" in err_msg or "403" in err_msg:
-            friendly_msg = (
-                f"⚠️ **API Key Error**\n\n"
-                f"{err_msg}\n\n"
-                f"Please check your API key in **Settings → AI Models**."
-            )
-        else:
-            friendly_msg = (
-                f"⚠️ **Model Provider Error**\n\n"
-                f"Unable to complete request with model '{model}': {err_msg}\n\n"
-                f"Please select a different model from the top dropdown."
-            )
 
         if on_token and not full_response:
             try:
@@ -3685,8 +3796,8 @@ async def generate_response_node(
         try:
             _actual_latency_ms = round((_wall_time.monotonic() - _llm_start_time) * 1000, 2)
             _telemetry.record_llm(
-                provider=type(attempts[0][0]).__name__ if attempts else "unknown",
-                model=model,
+                provider=provider_used_final,
+                model=model_used_final,
                 latency_ms=_actual_latency_ms,
                 response_text=full_response,
             )
@@ -3704,6 +3815,9 @@ async def generate_response_node(
             "iteration_count": iteration_count + 1,
             "source_documents": final_source_docs,
             "generation_mode":  gen_mode,
+            "active_model":     model_used_final,
+            "model_used":       model_used_final,
+            "provider_used":    provider_used_final,
         }
 
     # Only append to conversation history when the response is a real AI turn.
@@ -3723,6 +3837,9 @@ async def generate_response_node(
         "iteration_count": iteration_count + 1,
         "source_documents": final_source_docs,   # ← authoritative: only used=True docs
         "generation_mode":  gen_mode,            # ← "normal_rag" | "model_knowledge" | "crag_rejected"
+        "active_model":     model_used_final,
+        "model_used":       model_used_final,
+        "provider_used":    provider_used_final,
     }
 
 

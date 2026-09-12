@@ -118,6 +118,31 @@ class OpenRouterProvider(BaseLLMProvider):
 
         return messages
 
+    def _normalize_model_id(self, model: str) -> str:
+        """Ensure model slug has proper organization prefix expected by OpenRouter API."""
+        if not model:
+            return "google/gemini-2.0-flash"
+        if model.startswith("openrouter/"):
+            model = model[len("openrouter/"):]
+        if "/" in model:
+            return model
+        m_lower = model.lower()
+        if "claude" in m_lower:
+            return f"anthropic/{model}"
+        if "deepseek" in m_lower:
+            return f"deepseek/{model}"
+        if any(x in m_lower for x in ("gpt", "o1-", "o3-", "o4-")):
+            return f"openai/{model}"
+        if "gemini" in m_lower:
+            return f"google/{model}"
+        if "llama" in m_lower:
+            return f"meta-llama/{model}"
+        if "qwen" in m_lower:
+            return f"qwen/{model}"
+        if "mistral" in m_lower or "mixtral" in m_lower:
+            return f"mistralai/{model}"
+        return model
+
     # ── generate() ────────────────────────────────────────────────────────────
 
     async def generate(
@@ -151,6 +176,7 @@ class OpenRouterProvider(BaseLLMProvider):
 
         # ── Deprecated model remapping ────────────────────────────────────────
         model = registry.remap_model(model)
+        model = self._normalize_model_id(model)
 
         # ── Model availability check ──────────────────────────────────────────
         if not registry.is_model_available(self.provider_name, model):
@@ -305,6 +331,7 @@ class OpenRouterProvider(BaseLLMProvider):
 
         # ── Deprecated model remapping ────────────────────────────────────────
         model = registry.remap_model(model)
+        model = self._normalize_model_id(model)
 
         # ── Model availability check ──────────────────────────────────────────
         if not registry.is_model_available(self.provider_name, model):

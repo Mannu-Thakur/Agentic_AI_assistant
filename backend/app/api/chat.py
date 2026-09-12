@@ -305,11 +305,11 @@ async def stream_agent_message(
         if (user_keys.get("openai") or settings.OPENAI_API_KEY) and not str(settings.OPENAI_API_KEY or "").startswith("mock_"):
             available_fallback = ("openai", user_keys.get("openai") or settings.OPENAI_API_KEY, "gpt-4o-mini")
         elif (user_keys.get("google") or user_keys.get("gemini") or settings.GEMINI_API_KEY) and not str(settings.GEMINI_API_KEY or "").startswith("mock_"):
-            available_fallback = ("google", user_keys.get("google") or user_keys.get("gemini") or settings.GEMINI_API_KEY, "gemini-2.5-flash")
+            available_fallback = ("google", user_keys.get("google") or user_keys.get("gemini") or settings.GEMINI_API_KEY, "gemini-2.0-flash")
         elif (user_keys.get("groq") or settings.GROQ_API_KEY) and not str(settings.GROQ_API_KEY or "").startswith("mock_"):
             available_fallback = ("groq", user_keys.get("groq") or settings.GROQ_API_KEY, "llama-3.3-70b-versatile")
         elif (user_keys.get("openrouter") or settings.OPENROUTER_API_KEY) and not str(settings.OPENROUTER_API_KEY or "").startswith("mock_"):
-            available_fallback = ("openrouter", user_keys.get("openrouter") or settings.OPENROUTER_API_KEY, "meta-llama/llama-3.1-8b-instruct:free")
+            available_fallback = ("openrouter", user_keys.get("openrouter") or settings.OPENROUTER_API_KEY, "google/gemini-2.0-flash")
         
         if available_fallback:
             resolved_prov, final_key, schema.model = available_fallback
@@ -590,7 +590,8 @@ async def stream_agent_message(
         # Compile full runtime execution trace & Dev HUD metrics
         if isinstance(final_state, dict):
             metrics_store.update({
-                "model_used": schema.model,
+                "model_used": final_state.get("model_used") or final_state.get("active_model") or schema.model,
+                "provider_used": final_state.get("provider_used") or resolved_prov,
                 "latency_ms": getattr(_telemetry, "total_latency_ms", 0) if _telemetry else 0,
                 "cost_estimate": 0.0,
                 "tokens_input": getattr(_telemetry, "token_estimate", 0) if _telemetry else 0,

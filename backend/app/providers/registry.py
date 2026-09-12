@@ -37,47 +37,30 @@ from app.core.config import settings
 logger = logging.getLogger("app.providers.registry")
 
 # ── Deprecated model aliases ──────────────────────────────────────────────────
-# Maps known-bad / deprecated model IDs to their supported replacement.
+# Maps truly retired / obsolete model IDs to their supported replacement.
 # Providers call remap_model() before constructing the API request URL.
 DEPRECATED_MODELS: Dict[str, str] = {
-    # ── Gemini — retired / restricted models ─────────────────────────────────
-    # gemini-2.5-flash was retired for non-allowlisted accounts (HTTP 404).
-    # gemini-2.0-flash is the current stable replacement.
-    "gemini-2.5-flash":                    "gemini-2.0-flash",
-    "gemini-2.5-pro":                      "gemini-2.0-flash",
-    "gemini-2.5-flash-preview":            "gemini-2.0-flash",
-    "gemini-1.5-flash":                    "gemini-2.0-flash",
-    "gemini-1.5-pro":                      "gemini-2.0-flash",
+    # ── Gemini — retired legacy models ───────────────────────────────────────
     "gemini-1.0-pro":                      "gemini-2.0-flash",
-    "gemini-3.5-flash":                    "gemini-2.0-flash",
     "gemini-pro":                          "gemini-2.0-flash",
     # ── Groq — deprecated model IDs ──────────────────────────────────────────
-    "llama-4-scout-17b-16e-instruct":      "llama-3.3-70b-versatile",  # deprecated July 2026
+    "llama-4-scout-17b-16e-instruct":      "llama-3.3-70b-versatile",
     "meta-llama/llama-4-scout-17b-16e-instruct": "llama-3.3-70b-versatile",
     "llama2-70b-4096":                     "llama-3.3-70b-versatile",
     "mixtral-8x7b-32768":                  "llama-3.3-70b-versatile",
-    # ── OpenRouter — retired Gemini aliases ───────────────────────────────────
-    "openrouter/google/gemini-flash-1.5":  "openrouter/google/gemini-2.0-flash",
-    "openrouter/google/gemini-pro-1.5":    "openrouter/google/gemini-2.0-flash",
-    "openrouter/google/gemini-3.5-flash":  "openrouter/google/gemini-2.0-flash",
-    "openrouter/google/gemini-2.5-flash":  "openrouter/google/gemini-2.0-flash",
-    "openrouter/google/gemini-2.5-pro":    "openrouter/google/gemini-2.0-flash",
-    "google/gemini-flash-1.5":             "google/gemini-2.0-flash",
-    "google/gemini-pro-1.5":               "google/gemini-2.0-flash",
-    "google/gemini-2.5-flash":             "google/gemini-2.0-flash",
-    "google/gemini-2.5-pro":               "google/gemini-2.0-flash",
 }
 
 # ── Known-good model sets per provider ────────────────────────────────────────
 # These are static fallback lists used when the live API is not reachable at
-# startup.  The live API response is authoritative when available.
+# startup. The live API response is authoritative when available.
 KNOWN_MODELS: Dict[str, List[str]] = {
     "gemini": [
-        # gemini-2.0-flash is the current stable model (gemini-2.5-flash retired for some accounts)
         "gemini-2.0-flash",
         "gemini-2.0-flash-lite",
-        "gemini-2.5-flash",   # kept for accounts that still have access
+        "gemini-2.5-flash",
         "gemini-2.5-pro",
+        "gemini-1.5-flash",
+        "gemini-1.5-pro",
     ],
     "groq": [
         "llama-3.3-70b-versatile",
@@ -101,6 +84,43 @@ KNOWN_MODELS: Dict[str, List[str]] = {
         "o4-mini",
     ],
 }
+
+
+def is_quota_exhaustion(error_msg: str) -> bool:
+    """
+    Determine if an error represents an account/project-wide quota exhaustion
+    (e.g., daily request limit, insufficient credits, billing cap)
+    vs a transient per-model TPM/RPM rate limit.
+
+    When True: trying other models under the same API key is useless;
+    the system must immediately skip remaining models for this provider/key
+    and pivot to an alternative provider.
+    When False: if 429, it is a per-model TPM/RPM limit and lighter models
+    on the same key may still succeed.
+    """
+    if not error_msg:
+        return False
+    msg = str(error_msg).lower()
+    quota_indicators = (
+        "resource_exhausted",
+        "quota exceeded for quota metric",
+        "exceeded your current quota",
+        "insufficient_quota",
+        "insufficient credits",
+        "credit balance",
+        "daily limit",
+        "requests per day",
+        "tokens per day",
+        "rpd",
+        "tpd",
+        "billing",
+        "payment required",
+        "402",
+        "account limit",
+        "free tier limit",
+        "out of credits",
+    )
+    return any(indicator in msg for indicator in quota_indicators)
 
 # Provider priority (lower number = higher priority).
 # Override via PROVIDER_PRIORITY_ORDER env var: "gemini,groq,openrouter,openai"

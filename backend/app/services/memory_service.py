@@ -486,7 +486,7 @@ async def _llm_based_extraction(
         {"role": "user", "content": f"Analyze this exchange:\n{conversation_text}"},
     ]
     try:
-        response = await provider.generate(messages, model="gemini-2.5-flash", api_key=api_key)
+        response = await provider.generate(messages, model="gemini-2.0-flash", api_key=api_key)
         raw_text = response.get("text", "").strip()
         if raw_text.startswith("```"):
             raw_text = raw_text.split("```", 1)[1]
