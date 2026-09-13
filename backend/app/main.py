@@ -83,7 +83,35 @@ async def lifespan(app: FastAPI):
         logger.info("Schema migrations completed successfully.")
     except Exception as e:
         logger.error(f"Schema migration failed: {e}")
-    
+
+    # ── Orphaned-document recovery ────────────────────────────────────────────
+    # Any document left in 'processing' from a previous run (server crash /
+    # restart) will never finish — reset them to 'failed' so users can retry.
+    try:
+        from app.core.database import AsyncSessionLocal
+        from app.models.document import Document
+        from sqlalchemy.future import select
+        async with AsyncSessionLocal() as _db:
+            result = await _db.execute(
+                select(Document).where(Document.status == "processing")
+            )
+            stuck_docs = result.scalars().all()
+            if stuck_docs:
+                for doc in stuck_docs:
+                    doc.status = "failed"
+                    doc.error_message = (
+                        "Indexing was interrupted by a server restart. "
+                        "Click Retry to re-index this document."
+                    )
+                await _db.commit()
+                logger.warning(
+                    f"[Startup] Reset {len(stuck_docs)} orphaned 'processing' "
+                    f"document(s) to 'failed': "
+                    f"{[d.filename for d in stuck_docs]}"
+                )
+    except Exception as _rec_err:
+        logger.warning(f"[Startup] Orphaned-document recovery failed (non-fatal): {_rec_err}")
+
     # Validate provider API keys and emit startup diagnostics
     try:
         from app.providers.registry import provider_registry
@@ -94,9 +122,9 @@ async def lifespan(app: FastAPI):
     # Start background provider health check task
     from app.workers.health_check import provider_health_check_loop
     bg_task = asyncio.create_task(provider_health_check_loop())
-    
+
     yield  # Application runs here
-    
+
     # Shutdown: cancel task
     bg_task.cancel()
     try:

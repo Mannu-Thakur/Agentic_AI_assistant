@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { 
   FolderClosed, UploadCloud, Database, FileText, 
   Trash2, RefreshCw, Layers, ShieldCheck, HardDrive,
-  FileCode, CheckCircle2
+  FileCode, CheckCircle2, Loader2, XCircle
 } from 'lucide-react';
 import { apiRequest } from '../../services/api';
 
@@ -221,10 +221,24 @@ export function WorkspaceDashboard() {
                   </div>
 
                   <div className="flex items-center gap-3">
-                    <span className="hidden sm:inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-emerald-400 bg-emerald-950/60 border border-emerald-800/60 rounded-full">
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      Ready
-                    </span>
+                    {doc.status === 'processing' && (
+                      <span className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-blue-400 bg-blue-950/60 border border-blue-800/60 rounded-full">
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        Indexing
+                      </span>
+                    )}
+                    {doc.status === 'failed' && (
+                      <span className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-rose-400 bg-rose-950/60 border border-rose-800/60 rounded-full">
+                        <XCircle className="w-3.5 h-3.5" />
+                        Failed
+                      </span>
+                    )}
+                    {(doc.status === 'ready' || (!doc.status && true)) && (
+                      <span className="hidden sm:inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-emerald-400 bg-emerald-950/60 border border-emerald-800/60 rounded-full">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        Ready
+                      </span>
+                    )}
                     <button
                       onClick={() => handleDelete(doc.id)}
                       className="p-2 text-slate-400 hover:text-red-400 hover:bg-red-950/50 rounded-lg transition"

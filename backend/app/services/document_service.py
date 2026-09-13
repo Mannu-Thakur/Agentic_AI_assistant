@@ -16,12 +16,36 @@ class DocumentService:
         Retrieves all documents owned by a specific user, optionally filtered by chat_id.
         """
         from sqlalchemy import or_
+        from datetime import datetime, timezone
         query = select(Document).where(Document.user_id == user_id)
         if chat_id:
             query = query.where(or_(Document.chat_id == chat_id, Document.chat_id.is_(None)))
         query = query.order_by(desc(Document.uploaded_at))
         result = await db.execute(query)
-        return list(result.scalars().all())
+        docs = list(result.scalars().all())
+
+        # Auto-heal: If any document has been in 'processing' for > 90 seconds,
+        # it was interrupted by server crash/reload/worker timeout. Mark it as 'failed'
+        # so the client receives a non-spinning state and shows the Retry button.
+        now = datetime.now(timezone.utc)
+        has_auto_healed = False
+        for doc in docs:
+            if doc.status == "processing" and doc.uploaded_at:
+                up_time = doc.uploaded_at
+                if up_time.tzinfo is None:
+                    up_time = up_time.replace(tzinfo=timezone.utc)
+                if (now - up_time).total_seconds() > 90:
+                    doc.status = "failed"
+                    doc.error_message = "Indexing timed out on server. Click Retry to re-index."
+                    has_auto_healed = True
+
+        if has_auto_healed:
+            try:
+                await db.commit()
+            except Exception as e:
+                logger.warning(f"[DocumentService] Failed to commit auto-healed document statuses: {e}")
+
+        return docs
 
     @staticmethod
     async def create_document(

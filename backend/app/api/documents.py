@@ -6,6 +6,7 @@ import re
 import zipfile
 import io
 from typing import List, Optional
+from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -496,4 +497,54 @@ async def retry_document_indexing(
         )
     )
     logger.info(f"[Retry] Scheduled re-indexing for doc {doc.id} ({doc.filename})")
+    return doc
+
+
+class DocumentStatusPatch(BaseModel):
+    status: Optional[str] = None
+    error_message: Optional[str] = None
+
+
+@router.patch("/{document_id}", response_model=DocumentOut)
+async def patch_document_status(
+    document_id: str,
+    body: DocumentStatusPatch,
+    current_user: UserOut = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Lightweight PATCH for updating document status and error_message.
+    Used by the frontend to mark timed-out 'processing' documents as 'failed'
+    so the Retry button becomes available to the user.
+    Only 'failed' is accepted as a writable status via this endpoint.
+    """
+    from app.models.document import Document
+    result = await db.execute(
+        select(Document).where(
+            Document.id == document_id,
+            Document.user_id == current_user.id,
+        )
+    )
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found or access denied.",
+        )
+
+    # Only allow writing 'failed' through this endpoint (not 'ready' / 'processing')
+    if body.status and body.status not in ("failed",):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only 'failed' status may be set via PATCH.",
+        )
+
+    if body.status:
+        doc.status = body.status
+    if body.error_message is not None:
+        doc.error_message = body.error_message[:900]
+
+    await db.commit()
+    await db.refresh(doc)
+    logger.info(f"[Patch] Document {doc.id} status updated to '{doc.status}'")
     return doc

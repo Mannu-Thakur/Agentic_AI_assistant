@@ -1019,7 +1019,20 @@ class ParserService:
                 f"({len(chunk_texts)} chunks)"
             )
 
-        except Exception as exc:
+        except asyncio.CancelledError:
+            logger.warning(f"[Parser] Ingestion task cancelled for document {document_id}")
+            async with AsyncSessionLocal() as db:
+                from sqlalchemy import select
+                result = await db.execute(
+                    select(Document).where(Document.id == document_id)
+                )
+                doc = result.scalar_one_or_none()
+                if doc:
+                    doc.status = "failed"
+                    doc.error_message = "Indexing was interrupted by server reload or shutdown. Click Retry to re-index."
+                    await db.commit()
+            raise
+        except BaseException as exc:
             logger.error(f"[Parser] Failed to ingest document {document_id}: {exc}")
             logger.error(traceback.format_exc())
             async with AsyncSessionLocal() as db:

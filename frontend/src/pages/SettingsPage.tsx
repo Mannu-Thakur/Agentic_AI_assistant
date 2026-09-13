@@ -849,17 +849,33 @@ export default function SettingsPage() {
   useEffect(() => {
     if (tab === 'documents') {
       fetchDocuments().then((docs: DocumentFile[] | void) => {
-        // Auto-resume polling for any documents already in 'processing' state.
-        // This handles: page refresh, navigation away & back, or server-survived tasks.
+        // Auto-resume polling for any documents already in 'processing' state,
+        // UNLESS they are already older than 90 seconds (in which case they timed out).
+        const now = Date.now();
+        const processList = (list: DocumentFile[]) => {
+          list.forEach((d) => {
+            if (d.status === 'processing') {
+              const uploadAgeMs = d.uploaded_at ? now - new Date(d.uploaded_at).getTime() : 0;
+              if (uploadAgeMs > 90_000) {
+                setDocuments((prev) =>
+                  prev.map((item) =>
+                    item.id === d.id
+                      ? { ...item, status: 'failed' as const, error_message: 'Indexing timed out. Click Retry to re-index.' }
+                      : item
+                  )
+                );
+              } else {
+                pollUntilReadyRef.current(d.id);
+              }
+            }
+          });
+        };
+
         if (Array.isArray(docs)) {
-          docs
-            .filter((d) => d.status === 'processing')
-            .forEach((d) => pollUntilReadyRef.current(d.id));
+          processList(docs);
         } else {
           setDocuments((current) => {
-            current
-              .filter((d) => d.status === 'processing')
-              .forEach((d) => pollUntilReadyRef.current(d.id));
+            processList(current);
             return current;
           });
         }
@@ -1216,24 +1232,33 @@ export default function SettingsPage() {
 
       if (polls >= MAX_POLLS) {
         stopPoll(interval);
-        // Timeout: mark the document as failed in the DB so the user can retry
-        try {
-          await apiRequest(`/documents/${docId}`, {
-            method: 'PATCH',
-            json: {
-              status: 'failed',
-              error_message: 'Indexing timed out. The server may be busy — click Retry to re-index.',
-            },
-          });
-        } catch { /* ignore patch failure */ }
+
+        // ── Optimistic UI update first ──────────────────────────────────────
+        // Immediately flip the badge to 'Failed' in local state so the user
+        // sees the Retry button right away, regardless of whether the PATCH
+        // to the backend succeeds or fails (backend may be slow / suspended).
+        const TIMEOUT_MSG = 'Indexing timed out. The server may be busy — click Retry to re-index.';
+        setDocuments((prev) =>
+          prev.map((d) =>
+            d.id === docId
+              ? { ...d, status: 'failed' as const, error_message: TIMEOUT_MSG }
+              : d
+          )
+        );
         setUploadError('Indexing timed out after 90 seconds. Click Retry on the document to try again.');
         setIngestStep(-1);
         setUploading(false);
-        // Refresh document list so the UI shows the updated Failed state
+
+        // ── Best-effort: persist failed state to DB + resync from server ────
         try {
+          await apiRequest(`/documents/${docId}`, {
+            method: 'PATCH',
+            json: { status: 'failed', error_message: TIMEOUT_MSG },
+          });
+          // Only overwrite local state if the server responds successfully
           const docs: DocumentFile[] = await apiRequest('/documents');
           setDocuments(docs);
-        } catch { /* ignore */ }
+        } catch { /* ignore — local state already shows Failed */ }
       }
     }, 2000);
 

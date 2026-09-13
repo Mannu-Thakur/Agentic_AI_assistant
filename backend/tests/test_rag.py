@@ -183,6 +183,17 @@ async def test_documents_and_memories_api_flow(override_get_db, db_session: Asyn
         res_mem_list2 = await ac.get("/api/v1/memories", headers=headers)
         assert not any(m["id"] == mem_id for m in res_mem_list2.json())
 
+        # 6b. Test PATCH status endpoint (used when client-side polling times out)
+        res_patch = await ac.patch(
+            f"/api/v1/documents/{doc_id}",
+            headers=headers,
+            json={"status": "failed", "error_message": "Indexing timed out test"},
+        )
+        assert res_patch.status_code == 200
+        patched_doc = res_patch.json()
+        assert patched_doc["status"] == "failed"
+        assert "Indexing timed out test" in patched_doc["error_message"]
+
         # 7. Delete document — expects 204 No Content (FIX-8)
         res_del_doc = await ac.delete(f"/api/v1/documents/{doc_id}", headers=headers)
         assert res_del_doc.status_code == 204
