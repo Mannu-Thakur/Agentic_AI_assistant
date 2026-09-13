@@ -787,7 +787,9 @@ export default function SettingsPage() {
   const [ingestFilename, setIngestFilename] = useState<string>('');
   const [ingestStep, setIngestStep]       = useState<number>(-1);
   const [ingestDone, setIngestDone]       = useState(false);
-  const ingestTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const ingestTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Tracks active polling intervals per document ID to prevent duplicates
+  const pollIntervalsRef = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map());
 
   // -- Memories state ----------------------------------------
   const [memories, setMemories]           = useState<SemanticMemory[]>([]);
@@ -809,12 +811,14 @@ export default function SettingsPage() {
   const [copiedServerId, setCopiedServerId]       = useState<string | null>(null);
 
   // Data fetching
-  const fetchDocuments = useCallback(async () => {
+  const fetchDocuments = useCallback(async (): Promise<DocumentFile[]> => {
     try {
-      const data = await apiRequest('/documents');
+      const data: DocumentFile[] = await apiRequest('/documents');
       setDocuments(data);
+      return data;
     } catch (err) {
       console.error('Failed to load documents:', err);
+      return [];
     }
   }, []);
 
@@ -839,11 +843,40 @@ export default function SettingsPage() {
     }
   }, []);
 
+  // Stable ref so effects defined before pollUntilReady can call it without TS forward-ref errors
+  const pollUntilReadyRef = useRef<(docId: string) => Promise<void>>(async () => {});
+
   useEffect(() => {
-    if (tab === 'documents') fetchDocuments();
+    if (tab === 'documents') {
+      fetchDocuments().then((docs: DocumentFile[] | void) => {
+        // Auto-resume polling for any documents already in 'processing' state.
+        // This handles: page refresh, navigation away & back, or server-survived tasks.
+        if (Array.isArray(docs)) {
+          docs
+            .filter((d) => d.status === 'processing')
+            .forEach((d) => pollUntilReadyRef.current(d.id));
+        } else {
+          setDocuments((current) => {
+            current
+              .filter((d) => d.status === 'processing')
+              .forEach((d) => pollUntilReadyRef.current(d.id));
+            return current;
+          });
+        }
+      });
+    }
     else if (tab === 'memories') fetchMemories();
     else if (tab === 'mcpservers') fetchMcpServers();
   }, [tab, fetchDocuments, fetchMemories, fetchMcpServers]);
+
+  // Cleanup: clear all active poll intervals and the ingest step timer when the component unmounts
+  useEffect(() => {
+    return () => {
+      if (ingestTimerRef.current) clearTimeout(ingestTimerRef.current);
+      pollIntervalsRef.current.forEach((id) => clearInterval(id));
+      pollIntervalsRef.current.clear();
+    };
+  }, []);
 
   const handleCopyMcpUrl = useCallback((id: string, url: string) => {
     navigator.clipboard.writeText(url);
@@ -955,7 +988,7 @@ export default function SettingsPage() {
   // Clean up ingestion timer
   useEffect(() => {
     return () => {
-      if (ingestTimerRef.current) clearTimeout(ingestTimerRef.current as unknown as number);
+      if (ingestTimerRef.current) clearTimeout(ingestTimerRef.current);
     };
   }, []);
 
@@ -1139,15 +1172,24 @@ export default function SettingsPage() {
       step += 1;
       setIngestStep(step);
       if (step < STEP_DURATIONS.length) {
-        ingestTimerRef.current = setTimeout(advance, STEP_DURATIONS[step]) as unknown as ReturnType<typeof setInterval>;
+        ingestTimerRef.current = setTimeout(advance, STEP_DURATIONS[step]);
       }
     };
-    ingestTimerRef.current = setTimeout(advance, STEP_DURATIONS[0]) as unknown as ReturnType<typeof setInterval>;
+    ingestTimerRef.current = setTimeout(advance, STEP_DURATIONS[0]);
   }, []);
 
   const pollUntilReady = useCallback(async (docId: string) => {
-    const MAX_POLLS = 30;
+    // Guard: if we're already polling this document, don't create a duplicate interval
+    if (pollIntervalsRef.current.has(docId)) return;
+
+    const MAX_POLLS = 45;  // 90s total (45 × 2s)
     let polls = 0;
+
+    const stopPoll = (intervalId: ReturnType<typeof setInterval>) => {
+      clearInterval(intervalId);
+      pollIntervalsRef.current.delete(docId);
+    };
+
     const interval = setInterval(async () => {
       polls++;
       try {
@@ -1155,28 +1197,51 @@ export default function SettingsPage() {
         setDocuments(docs);
         const doc = docs.find((d) => d.id === docId);
         if (doc && doc.status === 'ready') {
-          clearInterval(interval);
-          if (ingestTimerRef.current) clearTimeout(ingestTimerRef.current as unknown as number);
+          stopPoll(interval);
+          if (ingestTimerRef.current) clearTimeout(ingestTimerRef.current);
           setIngestStep(6);
           setIngestDone(true);
           setUploading(false);
           setUploadError(null);
+          return;
         } else if (doc && doc.status === 'failed') {
-          clearInterval(interval);
-          if (ingestTimerRef.current) clearTimeout(ingestTimerRef.current as unknown as number);
+          stopPoll(interval);
+          if (ingestTimerRef.current) clearTimeout(ingestTimerRef.current);
           setUploadError(doc.error_message ? `Indexing failed: ${doc.error_message}` : 'Indexing failed on the server. Please try again.');
           setIngestStep(-1);
           setUploading(false);
+          return;
         }
       } catch { /* ignore */ }
+
       if (polls >= MAX_POLLS) {
-        clearInterval(interval);
-        setIngestDone(true);
-        setIngestStep(6);
+        stopPoll(interval);
+        // Timeout: mark the document as failed in the DB so the user can retry
+        try {
+          await apiRequest(`/documents/${docId}`, {
+            method: 'PATCH',
+            json: {
+              status: 'failed',
+              error_message: 'Indexing timed out. The server may be busy — click Retry to re-index.',
+            },
+          });
+        } catch { /* ignore patch failure */ }
+        setUploadError('Indexing timed out after 90 seconds. Click Retry on the document to try again.');
+        setIngestStep(-1);
         setUploading(false);
+        // Refresh document list so the UI shows the updated Failed state
+        try {
+          const docs: DocumentFile[] = await apiRequest('/documents');
+          setDocuments(docs);
+        } catch { /* ignore */ }
       }
     }, 2000);
+
+    // Register the interval so duplicates are blocked and cleanup is possible
+    pollIntervalsRef.current.set(docId, interval);
   }, []);
+  // Keep the stable ref in sync so the early tab-switch useEffect can invoke this safely
+  pollUntilReadyRef.current = pollUntilReady;
 
   const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -1205,7 +1270,7 @@ export default function SettingsPage() {
       setDocuments((prev) => [doc, ...prev.filter((d) => d.id !== doc.id)]);
       pollUntilReady(doc.id);
     } catch (err: unknown) {
-      if (ingestTimerRef.current) clearTimeout(ingestTimerRef.current as unknown as number);
+      if (ingestTimerRef.current) clearTimeout(ingestTimerRef.current);
       setUploadError((err as Error).message || 'Failed to upload document');
       setIngestStep(-1);
       setUploading(false);
