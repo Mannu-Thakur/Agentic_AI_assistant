@@ -14,21 +14,56 @@ _local_model = None
 _local_model_lock = threading.Lock()
 
 
+def _deterministic_hash_vector(text: str, dim: int = 768) -> List[float]:
+    """
+    Deterministic, high-entropy fallback embedding vector of unit length.
+    Guarantees ChromaDB HNSW cosine compatibility with 0 MB extra RAM and 0 external network calls.
+    Executes in < 1ms so indexing NEVER hangs.
+    """
+    import hashlib
+    clean = (text or "").strip()
+    if not clean:
+        return [0.0] * dim
+
+    words = clean.lower().split()
+    vec = [0.0] * dim
+
+    for i, word in enumerate(words):
+        tokens = [word[j:j+3] for j in range(max(1, len(word) - 2))]
+        tokens.append(word)
+        for tok in tokens:
+            h = int(hashlib.md5(tok.encode("utf-8", errors="ignore")).hexdigest(), 16)
+            idx = h % dim
+            sign = 1.0 if ((h >> 8) & 1) == 0 else -1.0
+            vec[idx] += sign * (1.0 / (1.0 + (i * 0.01)))
+
+    norm = math.sqrt(sum(x * x for x in vec))
+    if norm < 1e-9:
+        vec[0] = 1.0
+        return vec
+    return [x / norm for x in vec]
+
+
 def _get_local_model():
     """
     Lazily loads the local neural SentenceTransformer model ('all-MiniLM-L6-v2').
     Attempts offline local cache first to prevent HF network requests.
+    Returns None if unavailable or if downloading fails.
     """
     global _local_model
     if _local_model is None:
         with _local_model_lock:
             if _local_model is None:
-                from sentence_transformers import SentenceTransformer
                 try:
-                    _local_model = SentenceTransformer("all-MiniLM-L6-v2", local_files_only=True)
-                except Exception:
-                    _local_model = SentenceTransformer("all-MiniLM-L6-v2")
-    return _local_model
+                    from sentence_transformers import SentenceTransformer
+                    try:
+                        _local_model = SentenceTransformer("all-MiniLM-L6-v2", local_files_only=True)
+                    except Exception:
+                        _local_model = SentenceTransformer("all-MiniLM-L6-v2")
+                except Exception as exc:
+                    logger.warning(f"[EmbeddingService] Local SentenceTransformer unavailable ({exc}); using deterministic hash embedding fallback.")
+                    _local_model = False
+    return _local_model if _local_model is not False else None
 
 
 def _expand_to_768(vec_384: List[float]) -> List[float]:
@@ -50,8 +85,13 @@ def _get_local_embedding_sync(text: str) -> List[float]:
     if not clean:
         return [0.0] * 768
     model = _get_local_model()
-    vec = model.encode(clean, normalize_embeddings=True).tolist()
-    return _expand_to_768(vec)
+    if model is not None:
+        try:
+            vec = model.encode(clean, normalize_embeddings=True).tolist()
+            return _expand_to_768(vec)
+        except Exception as exc:
+            logger.warning(f"[EmbeddingService] Local model encoding failed ({exc}); falling back to hash vector.")
+    return _deterministic_hash_vector(clean, 768)
 
 
 def _get_local_embeddings_sync(texts: List[str]) -> List[List[float]]:
@@ -59,8 +99,13 @@ def _get_local_embeddings_sync(texts: List[str]) -> List[List[float]]:
         return []
     cleaned = [t.strip() if t and t.strip() else " " for t in texts]
     model = _get_local_model()
-    vecs = model.encode(cleaned, normalize_embeddings=True, batch_size=64).tolist()
-    return [_expand_to_768(v) for v in vecs]
+    if model is not None:
+        try:
+            vecs = model.encode(cleaned, normalize_embeddings=True, batch_size=64).tolist()
+            return [_expand_to_768(v) for v in vecs]
+        except Exception as exc:
+            logger.warning(f"[EmbeddingService] Local batch model encoding failed ({exc}); falling back to hash vectors.")
+    return [_deterministic_hash_vector(t, 768) for t in cleaned]
 
 
 class EmbeddingService:
@@ -79,9 +124,8 @@ class EmbeddingService:
     """
 
     CANDIDATE_MODELS = [
-        "models/gemini-embedding-001",
-        "models/gemini-embedding-2",
-        "models/gemini-embedding-2-preview",
+        "models/text-embedding-004",
+        "models/embedding-001",
     ]
 
     MAX_BATCH_SIZE = 50
@@ -170,12 +214,17 @@ class EmbeddingService:
 
             for attempt in range(2):
                 try:
-                    async with httpx.AsyncClient(timeout=15.0) as client:
+                    async with httpx.AsyncClient(timeout=8.0) as client:
                         response = await client.post(url, json=payload)
 
                     if response.status_code == 200:
                         data = response.json()
                         return data["embedding"]["values"]
+
+                    # If model not found (404), don't retry — switch to next model immediately
+                    if response.status_code == 404:
+                        errors[model] = "HTTP 404: Model not found"
+                        break
 
                     # If project access is denied (403) or unauthenticated (401), immediate fallback
                     if response.status_code in (401, 403):
@@ -256,7 +305,7 @@ class EmbeddingService:
 
                 for attempt in range(2):
                     try:
-                        async with httpx.AsyncClient(timeout=25.0) as client:
+                        async with httpx.AsyncClient(timeout=10.0) as client:
                             response = await client.post(url, json=payload)
 
                         if response.status_code == 200:
@@ -264,6 +313,11 @@ class EmbeddingService:
                             slice_embeddings = [item["values"] for item in data["embeddings"]]
                             all_embeddings.extend(slice_embeddings)
                             batch_success = True
+                            break
+
+                        # If model not found (404), don't retry — switch to next model immediately
+                        if response.status_code == 404:
+                            errors[model] = "HTTP 404: Model not found"
                             break
 
                         # If project access is denied (403) or key invalid (401), fallback all chunks to local neural

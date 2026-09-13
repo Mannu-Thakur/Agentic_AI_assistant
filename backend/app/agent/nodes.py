@@ -1213,7 +1213,9 @@ def _heuristic_fallback_intent(
 
     # 4. MCP_TOOL: Math, Expense, Reminder, Email
     is_expense = bool(_re.search(
-        r"\b(spent|expense|expenses|kharch|kharcha|kharche|tanka|rupees|rs\b|bought|pizza|burger|groceries|auto fare|uber ride|fast food|add \d+)\b",
+        r"\b(spent|spend|spending|expense|expenses|kharch|kharcha|kharche|tanka|rupees|rs\b|"
+        r"bought|pizza|burger|groceries|auto fare|uber ride|fast food|coupon|fooding|foodi|"
+        r"food|record|track|add \d+|\d+ spend|mcp|model context protocol)\b",
         q,
         _re.IGNORECASE,
     ))
@@ -1343,10 +1345,21 @@ async def classify_intent_node(
             is_ambiguous = False
             logger.info(f"Reconstructed resolved query: {resolved_query}")
 
+    # ── Fast-path bypass: action/tool commands are NEVER ambiguous ───────────
+    # If the query matches clear action patterns, skip the expensive ambiguity
+    # LLM call entirely and proceed straight to intent classification.
+    _ACTION_BYPASS_RE = _re.compile(
+        r"\b(add|record|log|track|spend|spent|spending|expense|expenses|calculate|"
+        r"list|show|fetch|summarize|monthly|category|coupon|fooding|foodi|"
+        r"mcp|model context protocol)\b",
+        _re.IGNORECASE,
+    )
+    _skip_ambiguity_check = bool(_ACTION_BYPASS_RE.search(last_query_clean)) if last_query_clean else False
+
     # ── Ambiguity check via LLM (no keyword shortcuts) ───────────────────────
     # Let the AMBIGUITY_DETECTOR_PROMPT decide — it's already calibrated to
     # never flag normal questions as ambiguous. No keyword bypass needed.
-    if not resolved_query and last_query and not images_present:
+    if not resolved_query and last_query and not images_present and not _skip_ambiguity_check:
         ambiguity_prompt = AMBIGUITY_DETECTOR_PROMPT.format(
             query=last_query,
             conversation_context=conversation_context,
@@ -1495,6 +1508,17 @@ async def classify_intent_node(
         allowed_tools = [t for t in INTENT_TOOL_WHITELIST[intent] if t in all_registered or t in registry.local_tools or t in registry.mcp_tools_schemas]
     else:
         allowed_tools = list(all_registered)
+
+    # ── Dynamic MCP tool augmentation ─────────────────────────────────────────
+    # Always include ALL currently-registered remote MCP tools for tool-eligible
+    # intents so that user-added servers (e.g. expense tracker on Render) are
+    # never excluded by a stale static whitelist.
+    _MCP_ELIGIBLE = {INTENT_MCP_TOOL, INTENT_COMPLEX, INTENT_VISION, INTENT_WEB_SEARCH, INTENT_CODE_EXECUTION}
+    if intent in _MCP_ELIGIBLE and registry.mcp_tools_schemas:
+        _live_mcp = list(registry.mcp_tools_schemas.keys())
+        allowed_tools = list(set(allowed_tools) | set(_live_mcp))
+        logger.debug(f"classify_intent_node: augmented allowed_tools with {len(_live_mcp)} live MCP tools")
+
     logger.info(f"classify_intent_node: intent={intent} → exposing {len(allowed_tools)} tools: {allowed_tools}")
 
     # ── Telemetry ─────────────────────────────────────────────────────────────

@@ -518,6 +518,13 @@ async def stream_agent_message(
           }
       }
 
+      # Ensure user's remote MCP servers are loaded and synchronized in ToolRegistry
+      try:
+          from app.tools.registry import ToolRegistry
+          await ToolRegistry().sync_remote_servers(current_user.id)
+      except Exception as _mcp_sync_err:
+          logger.warning(f"Failed to sync remote MCP servers before graph invoke: {_mcp_sync_err}")
+
       logger.info("STARTING GRAPH TASK...")
       task = asyncio.create_task(agent_graph.ainvoke(initial_state, config))
 

@@ -159,11 +159,11 @@ async def create_remote_mcp_server(
     if not (url.startswith("http://") or url.startswith("https://")):
         url = f"http://{url}"
 
-    # Test connection gracefully (fail-safe 4.0s timeout so user is never blocked from saving)
+    # Test connection gracefully (8.0s timeout to allow for cloud cold starts like Render/Railway)
     client = McpHttpClient(url=url, auth_header=payload.auth_header, transport_type=payload.transport_type)
     try:
-        await asyncio.wait_for(client.connect(), timeout=4.0)
-        discovered_tools = await asyncio.wait_for(client.list_tools(), timeout=4.0)
+        await asyncio.wait_for(client.connect(), timeout=8.0)
+        discovered_tools = await asyncio.wait_for(client.list_tools(), timeout=8.0)
     except Exception as e:
         connection_warning = f"Server saved to DB & Redis, but remote endpoint did not respond immediately ({str(e)[:90]}). Tools will be discovered when server is reachable."
         logger.warning(f"[MCP Save] Server endpoint offline/slow during save: {e}")
@@ -208,9 +208,9 @@ async def create_remote_mcp_server(
     cache_key = f"mcp:servers:{current_user.id}"
     await cache_delete(cache_key)
 
-    # Register tools into live ToolRegistry if connected & enabled
-    if server_obj.is_enabled and discovered_tools:
-        registry = ToolRegistry()
+    # Synchronize live ToolRegistry
+    registry = ToolRegistry()
+    if server_obj.is_enabled:
         try:
             await registry.register_remote_server(
                 name=server_obj.name,
@@ -218,8 +218,15 @@ async def create_remote_mcp_server(
                 auth_header=server_obj.auth_header,
                 transport_type=server_obj.transport_type
             )
+            server_key = f"remote_{server_obj.name.replace(' ', '_').lower()}"
+            live_tools = [t for t, s in registry.mcp_tools_map.items() if s == server_key]
+            if live_tools:
+                discovered_tools = live_tools
         except Exception as reg_exc:
             logger.warning(f"Failed live registration for server '{server_obj.name}': {reg_exc}")
+    else:
+        server_key = f"remote_{server_obj.name.replace(' ', '_').lower()}"
+        await registry.unregister_remote_server(server_key)
 
     return {
         "id": server_obj.id,
@@ -265,10 +272,9 @@ async def update_remote_mcp_server(
     cache_key = f"mcp:servers:{current_user.id}"
     await cache_delete(cache_key)
 
-    # Re-initialize registry to refresh tool bindings
+    # Re-sync registry to refresh tool bindings
     registry = ToolRegistry()
-    registry.is_initialized = False
-    await registry.initialize()
+    await registry.sync_remote_servers(current_user.id)
 
     return {
         "id": server.id,
@@ -294,6 +300,7 @@ async def delete_remote_mcp_server(
     if not server:
         raise HTTPException(status_code=404, detail="Remote MCP Server not found.")
 
+    server_key = f"remote_{server.name.replace(' ', '_').lower()}"
     await db.delete(server)
     await db.commit()
 
@@ -301,9 +308,8 @@ async def delete_remote_mcp_server(
     cache_key = f"mcp:servers:{current_user.id}"
     await cache_delete(cache_key)
 
-    # Re-initialize registry to remove tool bindings
+    # Remove tool bindings from live registry
     registry = ToolRegistry()
-    registry.is_initialized = False
-    await registry.initialize()
+    await registry.unregister_remote_server(server_key)
 
     return None

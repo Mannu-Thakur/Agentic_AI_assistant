@@ -232,6 +232,16 @@ def compile_system_prompt(
         "- NEVER describe your internal reasoning pipeline, graph steps, or node names.\n"
     )
 
+    # ── Model Context Protocol (MCP) awareness ────────────────────────────────
+    system += (
+        "\n### Model Context Protocol (MCP) Awareness:\n"
+        "- 'MCP' in this context means Model Context Protocol — a standard for connecting AI systems to external tools and data sources.\n"
+        "- When the user refers to 'mcp', 'mcp command', 'mcp tools', 'model context protocol', they are referring to connected external tools (expense tracker, calculator, etc.).\n"
+        "- MCP does NOT mean Minecraft, network protocols, or any unrelated acronym in this application.\n"
+        "- Connected MCP tools may include: expense tracking, math calculation, reminders, email.\n"
+        "- When the user sends action commands like 'add N spend on X', 'record expense', 'track spending', invoke the relevant MCP tool immediately — DO NOT ask for clarification.\n"
+    )
+
     # ── Multilingual awareness ─────────────────────────────────────────────────
     system += MULTILINGUAL_SYSTEM_SECTION
 
@@ -432,6 +442,10 @@ HAS ATTACHED IMAGES: {has_images}
      - Logging spending (English & Hinglish): "spent 250 on pizza", "add 50 for burger", "add 50 rs for auto fare",
                                              "lunch me 120 kharch ho gaye", "maine fast food pe 500 diye, note down",
                                              "I bought groceries for 1200 rupees", "Record an expense of $45 for Uber ride"
+     - ALSO: "add 605 spend on coupon", "add 605 spend on coupon on fooding", "spend 200 on food",
+             "record 300 spend for transport", "add spend of 150 on snacks", "note 500 on petrol"
+             — ANY phrase with "spend", "spent", "spending", "expense", "record [amount]", "add [amount] on [category]"
+               is an expense tracking command, classify it as MCP_TOOL
      - Checking spend & summaries: "how much did i spend on food this month?", "mera total kharcha kitna hua?",
                                    "summarize all my expenses grouped by category", "fetch me total amount spent on food"
    ✓ MATH CALCULATION (Evaluating arithmetic, percentages, expressions, conversions):
@@ -440,6 +454,10 @@ HAS ATTACHED IMAGES: {has_images}
    ✓ REMINDER / CALENDAR: "remind me to call mom tomorrow at 9am", "kal subah 8 baje meeting ka reminder lagao",
                           "set a calendar alert for doctor appointment on Friday 3 PM"
    ✓ EMAIL: "send an email to john@example.com"
+   ✓ MCP REFERENCE: When the user says "mcp command", "run mcp", "model context protocol", "use mcp tool",
+     they are asking to use a connected external tool (expense tracker, calculator, etc.).
+     In this context, MCP = Model Context Protocol (AI tool standard), NOT Minecraft or network protocols.
+     Classify such queries as MCP_TOOL.
 
 6. DOCUMENT_QA
    User asks about their OWN uploaded files, documents, resume, code, personal projects, or profile.
@@ -648,6 +666,12 @@ NEVER mark as ambiguous:
   - Any query where a reasonable AI could make a sensible attempt
   - Roman script messages in any language (Roman Odia, Hindi, Bengali, etc.)
   - Math questions, coding questions, writing requests
+  - Action/tool commands: "add X spend on Y", "add expense for Z", "record spend",
+    "show expenses", "calculate X", "spent N on something", "add N for category"
+    — these are ALWAYS clear action commands, never ambiguous
+  - Queries mentioning "mcp", "mcp command", "model context protocol"
+    — these refer to connected system tools, not Minecraft or network protocols
+  - Any command phrased as "add/record/log/track/fetch/show/list [amount/item/category]"
 
 ONLY mark as ambiguous if the query is something like:
   - "Run it" with zero prior context about what "it" refers to

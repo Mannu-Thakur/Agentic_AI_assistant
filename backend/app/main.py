@@ -119,6 +119,14 @@ async def lifespan(app: FastAPI):
     except Exception as _pv_err:
         logger.warning(f"Provider startup validation encountered an issue (non-fatal): {_pv_err}")
 
+    # Initialize ToolRegistry and load configured MCP servers
+    try:
+        from app.tools.registry import ToolRegistry
+        await ToolRegistry().initialize()
+        logger.info("ToolRegistry and MCP servers initialized on startup.")
+    except Exception as _tr_err:
+        logger.warning(f"ToolRegistry startup initialization warning (non-fatal): {_tr_err}")
+
     # Start background provider health check task
     from app.workers.health_check import provider_health_check_loop
     bg_task = asyncio.create_task(provider_health_check_loop())

@@ -1,5 +1,6 @@
 import os
 import sys
+import asyncio
 import logging
 from typing import Dict, Any, List, Optional
 from app.tools.local_tools import tavily_search, python_sandbox
@@ -53,6 +54,13 @@ class ToolRegistry:
         self.mcp_tools_map: Dict[str, str] = {}          # tool_name -> server_name
         self.mcp_tools_schemas: Dict[str, Dict[str, Any]] = {}
         self.is_initialized = False
+        self._local_initialized = False
+        self._sync_lock: Optional[asyncio.Lock] = None
+
+    def _get_lock(self) -> asyncio.Lock:
+        if self._sync_lock is None:
+            self._sync_lock = asyncio.Lock()
+        return self._sync_lock
 
     async def register_remote_server(self, name: str, url: str, auth_header: Optional[str] = None, transport_type: str = "http_jsonrpc") -> List[Dict[str, Any]]:
         """
@@ -60,10 +68,32 @@ class ToolRegistry:
         """
         server_key = f"remote_{name.replace(' ', '_').lower()}"
         client = McpHttpClient(url=url, auth_header=auth_header, transport_type=transport_type)
-        await client.connect()
+        try:
+            await asyncio.wait_for(client.connect(), timeout=7.0)
+            tools = await asyncio.wait_for(client.list_tools(), timeout=7.0)
+        except Exception as conn_err:
+            try:
+                await client.close()
+            except Exception:
+                pass
+            raise conn_err
+
+        # If previous client existed for this server_key, close it cleanly
+        old_client = self.mcp_clients.get(server_key)
+        if old_client and old_client is not client:
+            try:
+                await old_client.close()
+            except Exception:
+                pass
+
         self.mcp_clients[server_key] = client
 
-        tools = await client.list_tools()
+        # Remove previous tools mapped to this server
+        for t_name, s_key in list(self.mcp_tools_map.items()):
+            if s_key == server_key:
+                self.mcp_tools_map.pop(t_name, None)
+                self.mcp_tools_schemas.pop(t_name, None)
+
         registered_tools = []
         for tool in tools:
             t_name = tool["name"]
@@ -77,15 +107,24 @@ class ToolRegistry:
             logger.info(f"Registered Remote MCP tool '{t_name}' from '{url}'")
         return registered_tools
 
-    async def initialize(self):
-        """
-        Connects to all configured local & remote MCP servers, fetches tool capabilities,
-        and builds the routing table.
-        """
-        if self.is_initialized:
-            return
+    async def unregister_remote_server(self, server_key: str):
+        """Unregisters tools and closes connection for a remote MCP server."""
+        client = self.mcp_clients.pop(server_key, None)
+        if client:
+            try:
+                await client.close()
+            except Exception as e:
+                logger.warning(f"Error closing client for {server_key}: {e}")
+        for t_name, s_key in list(self.mcp_tools_map.items()):
+            if s_key == server_key:
+                self.mcp_tools_map.pop(t_name, None)
+                self.mcp_tools_schemas.pop(t_name, None)
+                logger.info(f"Unregistered MCP tool '{t_name}' from server '{server_key}'")
 
-        logger.info("Initializing ToolRegistry and MCP servers...")
+    async def _init_local_mcp_servers(self):
+        """Initializes internal stdio MCP servers (calculator, web_mcp)."""
+        if self._local_initialized:
+            return
 
         current_dir       = os.path.dirname(os.path.abspath(__file__))
         calculator_script = os.path.join(current_dir, "mcp_calculator_server.py")
@@ -104,6 +143,8 @@ class ToolRegistry:
         }
 
         for server_name, cfg in mcp_configs.items():
+            if server_name in self.mcp_clients:
+                continue
             try:
                 client = McpStdioClient(command=cfg["command"], args=cfg["args"])
                 await client.connect()
@@ -124,18 +165,41 @@ class ToolRegistry:
                 logger.error(
                     f"Failed to initialize MCP server '{server_name}': {str(e)}"
                 )
+        self._local_initialized = True
 
-        # Load enabled Remote MCP Servers from database
-        try:
-            from app.core.database import AsyncSessionLocal
-            from app.models.mcp_server import RemoteMcpServer
-            from sqlalchemy import select
+    async def sync_remote_servers(self, user_id: Optional[str] = None):
+        """
+        Synchronizes active remote MCP servers from DB with the in-memory registry.
+        Safely connects new/enabled servers, drops disabled/deleted ones, and
+        never blocks forever if a server is offline.
+        """
+        async with self._get_lock():
+            await self._init_local_mcp_servers()
 
-            async with AsyncSessionLocal() as session:
-                res = await session.execute(select(RemoteMcpServer).where(RemoteMcpServer.is_enabled == True))
-                db_servers = res.scalars().all()
+            try:
+                from app.core.database import AsyncSessionLocal
+                from app.models.mcp_server import RemoteMcpServer
+                from sqlalchemy import select
+
+                async with AsyncSessionLocal() as session:
+                    stmt = select(RemoteMcpServer).where(RemoteMcpServer.is_enabled == True)
+                    if user_id:
+                        stmt = stmt.where((RemoteMcpServer.user_id == user_id) | (RemoteMcpServer.user_id.is_(None)))
+                    res = await session.execute(stmt)
+                    db_servers = res.scalars().all()
+
+                active_server_keys = set()
                 for r_server in db_servers:
+                    server_key = f"remote_{r_server.name.replace(' ', '_').lower()}"
+                    active_server_keys.add(server_key)
+
+                    # If already connected and has tools, skip reconnect
+                    has_tools = any(s == server_key for s in self.mcp_tools_map.values())
+                    if server_key in self.mcp_clients and has_tools:
+                        continue
+
                     try:
+                        logger.info(f"Syncing remote MCP server '{r_server.name}' ({r_server.url})...")
                         await self.register_remote_server(
                             name=r_server.name,
                             url=r_server.url,
@@ -143,11 +207,26 @@ class ToolRegistry:
                             transport_type=r_server.transport_type
                         )
                     except Exception as exc:
-                        logger.error(f"Failed to initialize remote MCP server '{r_server.name}' ({r_server.url}): {exc}")
-        except Exception as db_exc:
-            logger.warning(f"Could not load remote MCP servers from DB: {db_exc}")
+                        logger.warning(f"Failed to sync remote MCP server '{r_server.name}' ({r_server.url}): {exc}")
 
-        self.is_initialized = True
+                # Drop removed/disabled remote servers if this is a global sync
+                if not user_id:
+                    for s_key in list(self.mcp_clients.keys()):
+                        if s_key.startswith("remote_") and s_key not in active_server_keys:
+                            logger.info(f"Cleaning up disabled/removed remote MCP server '{s_key}'")
+                            await self.unregister_remote_server(s_key)
+
+                self.is_initialized = True
+            except Exception as db_exc:
+                logger.warning(f"Could not load remote MCP servers from DB: {db_exc}")
+                self.is_initialized = True
+
+    async def initialize(self):
+        """
+        Connects to all configured local & remote MCP servers, fetches tool capabilities,
+        and builds the routing table.
+        """
+        await self.sync_remote_servers()
         logger.info("ToolRegistry initialization complete.")
 
 
