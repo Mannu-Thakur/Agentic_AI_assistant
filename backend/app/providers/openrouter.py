@@ -121,7 +121,7 @@ class OpenRouterProvider(BaseLLMProvider):
     def _normalize_model_id(self, model: str) -> str:
         """Ensure model slug has proper organization prefix expected by OpenRouter API."""
         if not model:
-            return "google/gemini-3.6-flash"
+            return "google/gemini-2.0-flash-001"
         if model.startswith("openrouter/"):
             model = model[len("openrouter/"):]
         if "/" in model:
@@ -148,7 +148,7 @@ class OpenRouterProvider(BaseLLMProvider):
     async def generate(
         self,
         messages: List[Dict[str, Any]],
-        model: str = "google/gemini-3.6-flash",
+        model: str = "google/gemini-2.0-flash-001",
         temperature: float = 0.7,
         max_tokens: int = 2048,
         tools: Optional[List[Dict[str, Any]]] = None,
@@ -317,7 +317,7 @@ class OpenRouterProvider(BaseLLMProvider):
     async def generate_stream(
         self,
         messages: List[Dict[str, Any]],
-        model: str = "google/gemini-3.6-flash",
+        model: str = "google/gemini-2.0-flash-001",
         temperature: float = 0.7,
         max_tokens: int = 2048,
         tools: Optional[List[Dict[str, Any]]] = None,

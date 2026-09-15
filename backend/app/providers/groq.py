@@ -183,7 +183,7 @@ class GroqProvider(BaseLLMProvider):
     async def generate(
         self,
         messages: List[Dict[str, Any]],
-        model: str = "openai/gpt-oss-120b",
+        model: str = "llama-3.3-70b-versatile",
         temperature: float = 0.7,
         max_tokens: int = 2048,
         tools: Optional[List[Dict[str, Any]]] = None,
@@ -379,7 +379,7 @@ class GroqProvider(BaseLLMProvider):
     async def generate_stream(
         self,
         messages: List[Dict[str, Any]],
-        model: str = "openai/gpt-oss-120b",
+        model: str = "llama-3.3-70b-versatile",
         temperature: float = 0.7,
         max_tokens: int = 2048,
         tools: Optional[List[Dict[str, Any]]] = None,

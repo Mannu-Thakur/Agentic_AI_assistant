@@ -58,7 +58,7 @@ INTENT_TOOL_WHITELIST: Dict[str, List[str]] = {
         "summarize_expenses", "create_reminder", "send_email"
     ],
     INTENT_DOCUMENT_QA:    [],                           # RAG-only, no tools
-    INTENT_VISION:         ["tavily_search", "python_sandbox", "calculate", "add_expense", "get_expenses"],
+    INTENT_VISION:         [],                           # Vision-only, no tools
     INTENT_COMPLEX:        [
         "tavily_search", "web_search", "web_fetch", "web_extract",
         "python_sandbox", "calculate", "add_expense",

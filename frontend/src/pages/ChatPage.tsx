@@ -725,8 +725,8 @@ function resolveProvider(modelId: string): string {
   if (m.includes('gemini') || m.includes('google')) return 'google';
   if (m.includes('gpt') || m.includes('o1-')) return 'openai';
   if (m.includes('claude')) return 'anthropic';
-  if (m.includes('deepseek')) return 'deepseek';
-  if (m.includes('llama') || m.includes('mixtral')) return 'groq';
+  if (m.includes('deepseek')) return m.includes('distill') || m.includes('llama') ? 'groq' : 'deepseek';
+  if (m.includes('llama') || m.includes('mixtral') || m.includes('groq')) return 'groq';
   if (m.includes('glm')) return 'glm';
   if (m.includes('qwen')) return 'alibaba';
   return 'google';
@@ -931,13 +931,13 @@ export default function ChatPage() {
   // which floods the picker with 300+ OpenRouter entries.
   const CURATED_MODELS = [
     // Google Gemini (Direct)
-    { id: 'gemini-3.6-flash',        name: 'Gemini 3.6 Flash',      provider: 'Google Gemini', apiProvider: 'google',   icon: Sparkles, badge: 'Recommended',  desc: 'Fast, intelligent & highly capable' },
-    { id: 'gemini-flash-latest',     name: 'Gemini Flash (Latest)', provider: 'Google Gemini', apiProvider: 'google',   icon: Cpu,      badge: 'Stable',       desc: 'Evergreen latest Gemini Flash' },
-    { id: 'gemini-3.1-flash-lite',   name: 'Gemini 3.1 Flash Lite', provider: 'Google Gemini', apiProvider: 'google',   icon: Cpu,      badge: 'Fastest',      desc: 'Lightweight & ultra-low latency' },
+    { id: 'gemini-2.0-flash',        name: 'Gemini 2.0 Flash',      provider: 'Google Gemini', apiProvider: 'google',   icon: Sparkles, badge: 'Recommended',  desc: 'Fast, intelligent & highly capable' },
+    { id: 'gemini-1.5-flash',        name: 'Gemini 1.5 Flash',      provider: 'Google Gemini', apiProvider: 'google',   icon: Cpu,      badge: 'Stable',       desc: 'Production-tested versatile Gemini model' },
+    { id: 'gemini-2.0-flash-lite',   name: 'Gemini 2.0 Flash Lite', provider: 'Google Gemini', apiProvider: 'google',   icon: Cpu,      badge: 'Fastest',      desc: 'Lightweight & ultra-low latency' },
     // Groq (Free, Fast)
-    { id: 'openai/gpt-oss-120b',     name: 'GPT-OSS 120B',          provider: 'Groq',          apiProvider: 'groq',     icon: Cpu,      badge: 'Fast & Free',  desc: 'High-intelligence 120B model on Groq LPU' },
-    { id: 'openai/gpt-oss-20b',      name: 'GPT-OSS 20B',           provider: 'Groq',          apiProvider: 'groq',     icon: Cpu,      badge: 'Fastest Free', desc: 'Ultra-fast low-latency model on Groq' },
-    { id: 'qwen/qwen3.8-27b',        name: 'Qwen 3.8 27B',          provider: 'Groq',          apiProvider: 'groq',     icon: Cpu,      badge: 'Reasoning',    desc: 'Capable coding & reasoning on Groq' },
+    { id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B',          provider: 'Groq',          apiProvider: 'groq',     icon: Cpu,      badge: 'Fast & Free',  desc: 'High-intelligence 70B model on Groq LPU' },
+    { id: 'llama-3.1-8b-instant',    name: 'Llama 3.1 8B',           provider: 'Groq',          apiProvider: 'groq',     icon: Cpu,      badge: 'Fastest Free', desc: 'Ultra-fast low-latency model on Groq' },
+    { id: 'deepseek-r1-distill-llama-70b', name: 'DeepSeek R1 70B',  provider: 'Groq',          apiProvider: 'groq',     icon: Cpu,      badge: 'Reasoning',    desc: 'Deep reasoning model running on Groq' },
   ];
 
   const verifiedProviderSet = new Set(
@@ -963,19 +963,12 @@ export default function ChatPage() {
       setModelDropdownOpen(false);
       setMenuOpen(false);
       setFilesModalOpen(false);
-      setShareModalOpen(false);
     },
   });
 
-  // Listen to custom sidebar search event — focus inline sidebar search input
+  // ── Global search window event listener ─────────────────────
   useEffect(() => {
-    const handleOpenSearchEvent = () => {
-      setConvoOpen(true);
-      setTimeout(() => {
-        const inputEl = document.querySelector('input[placeholder="Search conversations..."]') as HTMLInputElement;
-        inputEl?.focus();
-      }, 50);
-    };
+    const handleOpenSearchEvent = () => setGlobalSearchOpen(true);
     window.addEventListener('omni:open-search', handleOpenSearchEvent);
     return () => window.removeEventListener('omni:open-search', handleOpenSearchEvent);
   }, []);
@@ -1001,11 +994,11 @@ export default function ChatPage() {
     const isStale = !curatedIds.has(activeModel);
 
     if (isStale) {
-      // Snap immediately to gemini-3.6-flash (or first verified model)
+      // Snap immediately to gemini-2.0-flash (or first verified model)
       if (models.length > 0) {
         setActiveModel(models[0].id);
       } else {
-        setActiveModel('gemini-3.6-flash');
+        setActiveModel('gemini-2.0-flash');
       }
       return;
     }

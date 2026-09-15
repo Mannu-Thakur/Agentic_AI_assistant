@@ -15,8 +15,8 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger("app.resume.llm")
 
 # Default model for resume operations — lightweight and fast
-_DEFAULT_MODEL = "gemini-3.6-flash"
-_FALLBACK_MODELS = ["openai/gpt-oss-120b", "gemini-flash-latest"]
+_DEFAULT_MODEL = "gemini-2.0-flash"
+_FALLBACK_MODELS = ["llama-3.3-70b-versatile", "gemini-1.5-flash"]
 
 
 def _extract_json(text: str) -> Dict[str, Any]:
@@ -89,29 +89,29 @@ async def call_llm_json(
     if api_key:
         k_upper = api_key.upper()
         if api_key.startswith("gsk_") or "GROQ" in k_upper:
-            candidates.append((GroqProvider(), "openai/gpt-oss-120b", api_key))
+            candidates.append((GroqProvider(), "llama-3.3-70b-versatile", api_key))
         elif api_key.startswith("sk-or-") or "OPENROUTER" in k_upper:
             from app.providers.openrouter import OpenRouterProvider
-            candidates.append((OpenRouterProvider(), "google/gemini-3.6-flash", api_key))
+            candidates.append((OpenRouterProvider(), "google/gemini-2.0-flash-001", api_key))
         elif api_key.startswith("sk-proj") or (api_key.startswith("sk-") and not api_key.startswith("sk-or")):
             candidates.append((OpenAIProvider(), "gpt-4o-mini", api_key))
         elif api_key.startswith("AIzaSy") or api_key.startswith("AQ.") or "GEMINI" in k_upper or "GOOGLE" in k_upper:
-            candidates.append((GeminiProvider(), target_model if target_model.startswith("gemini") else "gemini-3.6-flash", api_key))
+            candidates.append((GeminiProvider(), target_model if target_model.startswith("gemini") else "gemini-2.0-flash", api_key))
         else:
             # Generic fallback: try Gemini first with user key
-            candidates.append((GeminiProvider(), target_model if target_model.startswith("gemini") else "gemini-3.6-flash", api_key))
+            candidates.append((GeminiProvider(), target_model if target_model.startswith("gemini") else "gemini-2.0-flash", api_key))
 
     # Environment key fallbacks
     if settings.GEMINI_API_KEY and (not api_key or "AIzaSy" not in api_key):
-        gemini_model = target_model if target_model.startswith("gemini") else "gemini-3.6-flash"
+        gemini_model = target_model if target_model.startswith("gemini") else "gemini-2.0-flash"
         candidates.append((GeminiProvider(), gemini_model, settings.GEMINI_API_KEY))
 
     if settings.GROQ_API_KEY and (not api_key or not api_key.startswith("gsk_")):
-        candidates.append((GroqProvider(), "openai/gpt-oss-120b", settings.GROQ_API_KEY))
+        candidates.append((GroqProvider(), "llama-3.3-70b-versatile", settings.GROQ_API_KEY))
 
     if getattr(settings, "OPENROUTER_API_KEY", None):
         from app.providers.openrouter import OpenRouterProvider
-        candidates.append((OpenRouterProvider(), "google/gemini-3.6-flash", settings.OPENROUTER_API_KEY))
+        candidates.append((OpenRouterProvider(), "google/gemini-2.0-flash-001", settings.OPENROUTER_API_KEY))
 
     if settings.OPENAI_API_KEY and (not api_key or not api_key.startswith("sk-proj")):
         candidates.append((OpenAIProvider(), "gpt-4o-mini", settings.OPENAI_API_KEY))

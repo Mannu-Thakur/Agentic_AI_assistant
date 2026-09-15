@@ -32,14 +32,14 @@ def resolve_provider_from_model(model: str) -> str:
         return "groq"
     if "gemini" in m or "google" in m:
         return "google"
-    if "llama" in m or "mixtral" in m or "groq" in m or "gpt-oss" in m or m.startswith("qwen/"):
+    if "llama" in m or "mixtral" in m or "groq" in m or "gpt-oss" in m or m.startswith("qwen/") or "distill-llama" in m:
         return "groq"
     if "gpt" in m or "o1-" in m or "o3-" in m or "o4-" in m:
         return "openai"
     if "claude" in m:
         return "anthropic"
     if "deepseek" in m:
-        return "deepseek"
+        return "groq" if "distill" in m or "llama" in m else "deepseek"
     if "glm" in m:
         return "glm"
     if "qwen" in m:
@@ -320,13 +320,13 @@ async def stream_agent_message(
     if not key_found:
         available_fallback = None
         if (user_keys.get("google") or user_keys.get("gemini") or settings.GEMINI_API_KEY) and not str(settings.GEMINI_API_KEY or "").startswith("mock_"):
-            available_fallback = ("google", user_keys.get("google") or user_keys.get("gemini") or settings.GEMINI_API_KEY, "gemini-3.6-flash")
+            available_fallback = ("google", user_keys.get("google") or user_keys.get("gemini") or settings.GEMINI_API_KEY, "gemini-2.0-flash")
         elif (user_keys.get("groq") or settings.GROQ_API_KEY) and not str(settings.GROQ_API_KEY or "").startswith("mock_"):
-            available_fallback = ("groq", user_keys.get("groq") or settings.GROQ_API_KEY, "openai/gpt-oss-120b")
+            available_fallback = ("groq", user_keys.get("groq") or settings.GROQ_API_KEY, "llama-3.3-70b-versatile")
         elif (user_keys.get("openai") or settings.OPENAI_API_KEY) and not str(settings.OPENAI_API_KEY or "").startswith("mock_"):
             available_fallback = ("openai", user_keys.get("openai") or settings.OPENAI_API_KEY, "gpt-4o-mini")
         elif (user_keys.get("openrouter") or settings.OPENROUTER_API_KEY) and not str(settings.OPENROUTER_API_KEY or "").startswith("mock_"):
-            available_fallback = ("openrouter", user_keys.get("openrouter") or settings.OPENROUTER_API_KEY, "google/gemini-3.6-flash")
+            available_fallback = ("openrouter", user_keys.get("openrouter") or settings.OPENROUTER_API_KEY, "google/gemini-2.0-flash-001")
         
         if available_fallback:
             resolved_prov, final_key, schema.model = available_fallback
@@ -572,6 +572,11 @@ async def stream_agent_message(
             chunk = get_task.result()
             yield f"data: {json.dumps(chunk)}\n\n"
             queue.task_done()
+            # Batch drain any additional tokens already queued to eliminate latency
+            while not queue.empty():
+              extra = queue.get_nowait()
+              yield f"data: {json.dumps(extra)}\n\n"
+              queue.task_done()
             # Each yielded chunk refreshes the deadline (model IS responding)
             graph_deadline = asyncio.get_event_loop().time() + GRAPH_TIMEOUT_SECONDS
           elif task in done_set:

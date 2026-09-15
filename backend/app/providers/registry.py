@@ -40,36 +40,37 @@ logger = logging.getLogger("app.providers.registry")
 # Maps truly retired / obsolete model IDs to their supported replacement.
 # Providers call remap_model() before constructing the API request URL.
 DEPRECATED_MODELS: Dict[str, str] = {
-    # ── Gemini — retired legacy models ───────────────────────────────────────
-    "gemini-1.0-pro":                      "gemini-3.6-flash",
-    "gemini-pro":                          "gemini-3.6-flash",
-    "gemini-1.5-flash":                    "gemini-3.6-flash",
-    "gemini-1.5-pro":                      "gemini-3.6-flash",
-    "gemini-2.0-flash":                    "gemini-3.6-flash",
-    "gemini-2.0-flash-lite":               "gemini-flash-lite-latest",
-    "gemini-2.0-flash-exp":                "gemini-3.6-flash",
-    "gemini-2.5-flash":                    "gemini-3.6-flash",
-    "gemini-2.5-flash-lite":               "gemini-flash-lite-latest",
-    "gemini-2.5-pro":                      "gemini-3.6-flash",
-    "google/gemini-2.0-flash":             "google/gemini-3.6-flash",
-    "google/gemini-2.0-flash-lite":        "google/gemini-flash-lite-latest",
+    # ── Gemini — legacy / alias mappings ─────────────────────────────────────
+    "gemini-1.0-pro":                      "gemini-2.0-flash",
+    "gemini-pro":                          "gemini-2.0-flash",
+    "gemini-2.0-flash-exp":                "gemini-2.0-flash",
+    "gemini-3.6-flash":                    "gemini-2.0-flash",
+    "gemini-flash-latest":                 "gemini-2.0-flash",
+    "gemini-3.1-flash-lite":               "gemini-2.0-flash-lite",
+    "gemini-flash-lite-latest":            "gemini-2.0-flash-lite",
+    "gemini-3.5-flash":                    "gemini-2.0-flash",
+    "gemini-3.8-flash":                    "gemini-2.0-flash",
+    "google/gemini-2.0-flash":             "gemini-2.0-flash",
+    "google/gemini-2.0-flash-lite":        "gemini-2.0-flash-lite",
+    "google/gemini-3.6-flash":             "gemini-2.0-flash",
+    "google/gemini-flash-lite-latest":     "gemini-2.0-flash-lite",
 
-    # ── Groq — deprecated / decommissioned model IDs ──────────────────────────
-    "llama3-70b-8192":                     "openai/gpt-oss-120b",
-    "llama3-8b-8192":                      "openai/gpt-oss-20b",
-    "llama-3-70b":                         "openai/gpt-oss-120b",
-    "llama-3-8b":                          "openai/gpt-oss-20b",
-    "llama-3.1-8b-instant":                "openai/gpt-oss-20b",
-    "llama-3.1-70b-versatile":             "openai/gpt-oss-120b",
-    "llama-3.3-70b-versatile":             "openai/gpt-oss-120b",
-    "gemma2-9b-it":                        "openai/gpt-oss-20b",
-    "gemma-7b-it":                         "openai/gpt-oss-20b",
-    "llama-4-scout-17b-16e-instruct":      "openai/gpt-oss-120b",
-    "meta-llama/llama-4-scout-17b-16e-instruct": "openai/gpt-oss-120b",
-    "llama2-70b-4096":                     "openai/gpt-oss-120b",
-    "mixtral-8x7b-32768":                  "openai/gpt-oss-120b",
-    "llama-3.2-11b-vision-preview":        "gemini-3.6-flash",
-    "llama-3.2-90b-vision-preview":        "gemini-3.6-flash",
+    # ── Groq — deprecated / alias mappings ───────────────────────────────────
+    "llama3-70b-8192":                     "llama-3.3-70b-versatile",
+    "llama3-8b-8192":                      "llama-3.1-8b-instant",
+    "llama-3-70b":                         "llama-3.3-70b-versatile",
+    "llama-3-8b":                          "llama-3.1-8b-instant",
+    "llama-3.1-70b-versatile":             "llama-3.3-70b-versatile",
+    "openai/gpt-oss-120b":                 "llama-3.3-70b-versatile",
+    "openai/gpt-oss-20b":                  "llama-3.1-8b-instant",
+    "qwen/qwen3.8-27b":                    "deepseek-r1-distill-llama-70b",
+    "groq/compound-mini":                  "llama-3.1-8b-instant",
+    "llama-4-scout-17b-16e-instruct":      "llama-3.3-70b-versatile",
+    "meta-llama/llama-4-scout-17b-16e-instruct": "llama-3.3-70b-versatile",
+    "llama2-70b-4096":                     "llama-3.3-70b-versatile",
+    "mixtral-8x7b-32768":                  "llama-3.3-70b-versatile",
+    "llama-3.2-11b-vision-preview":        "llama-3.3-70b-versatile",
+    "llama-3.2-90b-vision-preview":        "llama-3.3-70b-versatile",
 }
 
 # ── Known-good model sets per provider ────────────────────────────────────────
@@ -77,30 +78,24 @@ DEPRECATED_MODELS: Dict[str, str] = {
 # startup. The live API response is authoritative when available.
 KNOWN_MODELS: Dict[str, List[str]] = {
     "gemini": [
-        "gemini-3.6-flash",
-        "gemini-flash-latest",
-        "gemini-flash-lite-latest",
-        "gemini-3.1-flash-lite",
-        "gemini-3.5-flash",
-        "gemini-3.8-flash",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash",
+        "gemini-2.0-flash-lite",
+        "gemini-1.5-pro",
     ],
     "groq": [
-        "openai/gpt-oss-120b",
-        "openai/gpt-oss-20b",
-        "qwen/qwen3.8-27b",
-        "groq/compound-mini",
+        "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant",
+        "deepseek-r1-distill-llama-70b",
     ],
     "openrouter": [],   # dynamic — accepts any valid model ID via routing
     "openai": [
         "gpt-4o",
         "gpt-4o-mini",
-        "gpt-4.1",
-        "gpt-4.1-mini",
         "gpt-4-turbo",
         "o1",
         "o1-mini",
-        "o3",
-        "o4-mini",
+        "o3-mini",
     ],
 }
 

@@ -964,11 +964,11 @@ async def _call_llm_judge(prompt: str, config: dict) -> Optional[dict]:
     messages = [{"role": "user", "content": prompt}]
 
     candidates = [
-        (groq_provider,       "groq",       "openai/gpt-oss-20b"),
-        (groq_provider,       "groq",       "openai/gpt-oss-120b"),
-        (gemini_provider,     "gemini",     "gemini-3.6-flash"),
+        (groq_provider,       "groq",       "llama-3.1-8b-instant"),
+        (groq_provider,       "groq",       "llama-3.3-70b-versatile"),
+        (gemini_provider,     "gemini",     "gemini-2.0-flash"),
         (openai_provider,     "openai",     "gpt-4o-mini"),
-        (openrouter_provider, "openrouter", "google/gemini-3.6-flash"),
+        (openrouter_provider, "openrouter", "google/gemini-2.0-flash-001"),
     ]
 
     for provider, key_name, model in candidates:
@@ -989,7 +989,7 @@ async def _call_llm_judge(prompt: str, config: dict) -> Optional[dict]:
                     tools=None,
                     api_key=api_key,
                 ),
-                timeout=8.0
+                timeout=3.5
             )
             raw = (result.get("text") or "").strip()
             if raw.startswith("```"):
@@ -1031,11 +1031,11 @@ async def _call_llm_text(prompt: str, config: dict, max_tokens: int = 256) -> Op
     messages = [{"role": "user", "content": prompt}]
 
     candidates = [
-        (groq_provider,       "groq",       "openai/gpt-oss-20b"),
-        (groq_provider,       "groq",       "openai/gpt-oss-120b"),
-        (gemini_provider,     "gemini",     "gemini-3.6-flash"),
+        (groq_provider,       "groq",       "llama-3.1-8b-instant"),
+        (groq_provider,       "groq",       "llama-3.3-70b-versatile"),
+        (gemini_provider,     "gemini",     "gemini-2.0-flash"),
         (openai_provider,     "openai",     "gpt-4o-mini"),
-        (openrouter_provider, "openrouter", "google/gemini-3.6-flash"),
+        (openrouter_provider, "openrouter", "google/gemini-2.0-flash-001"),
     ]
 
     for provider, key_name, model in candidates:
@@ -1056,7 +1056,7 @@ async def _call_llm_text(prompt: str, config: dict, max_tokens: int = 256) -> Op
                     tools=None,
                     api_key=api_key,
                 ),
-                timeout=8.0,
+                timeout=3.5,
             )
             raw = result.get("text", "").strip()
             return raw
@@ -1240,7 +1240,7 @@ def _heuristic_fallback_intent(
 
     # 5. WEB_SEARCH
     if _re.search(
-        r"\b(who is|weather in|price of|latest news|news on|read (the )?webpage|fetch (the )?webpage|https?:\/\/|forecast in)\b",
+        r"\b(who is|weather in|price of|latest|today'?s|score of|live score|news on|current events|search for|search the web|read (the )?webpage|fetch (the )?webpage|https?:\/\/|forecast in)\b",
         q,
         _re.IGNORECASE,
     ):
@@ -1354,7 +1354,13 @@ async def classify_intent_node(
         r"mcp|model context protocol)\b",
         _re.IGNORECASE,
     )
-    _skip_ambiguity_check = bool(_ACTION_BYPASS_RE.search(last_query_clean)) if last_query_clean else False
+    _words = last_query_clean.split() if last_query_clean else []
+    _is_self_contained = len(_words) >= 3 or bool(_re.search(
+        r"\b(who|what|where|when|why|how|explain|describe|write|create|compare|calculate|help|hello|hi|hey)\b",
+        last_query_clean,
+        _re.IGNORECASE,
+    )) if last_query_clean else False
+    _skip_ambiguity_check = bool(_ACTION_BYPASS_RE.search(last_query_clean)) or _is_self_contained if last_query_clean else False
 
     # ── Ambiguity check via LLM (no keyword shortcuts) ───────────────────────
     # Let the AMBIGUITY_DETECTOR_PROMPT decide — it's already calibrated to
@@ -1497,7 +1503,7 @@ async def classify_intent_node(
         except Exception as init_exc:
             logger.warning(f"ToolRegistry initialization warning in classify_intent_node: {init_exc}")
 
-    _NO_TOOL_INTENTS = {INTENT_MEMORY_WRITE, INTENT_NORMAL_CHAT, INTENT_DOCUMENT_QA}
+    _NO_TOOL_INTENTS = {INTENT_MEMORY_WRITE, INTENT_NORMAL_CHAT, INTENT_DOCUMENT_QA, INTENT_VISION}
     from app.agent.prompts import INTENT_TOOL_WHITELIST
     all_registered = set(registry.local_tools.keys()) | set(registry.mcp_tools_schemas.keys())
 
@@ -1513,7 +1519,7 @@ async def classify_intent_node(
     # Always include ALL currently-registered remote MCP tools for tool-eligible
     # intents so that user-added servers (e.g. expense tracker on Render) are
     # never excluded by a stale static whitelist.
-    _MCP_ELIGIBLE = {INTENT_MCP_TOOL, INTENT_COMPLEX, INTENT_VISION, INTENT_WEB_SEARCH, INTENT_CODE_EXECUTION}
+    _MCP_ELIGIBLE = {INTENT_MCP_TOOL, INTENT_COMPLEX}
     if intent in _MCP_ELIGIBLE and registry.mcp_tools_schemas:
         _live_mcp = list(registry.mcp_tools_schemas.keys())
         allowed_tools = list(set(allowed_tools) | set(_live_mcp))
@@ -2088,7 +2094,16 @@ async def check_retrieval_node(
             needs_retrieval = True
             reason = "Personal data signal detected in query"
 
-    if not needs_retrieval and intent not in (INTENT_WEB_SEARCH, INTENT_MCP_TOOL, INTENT_MEMORY_WRITE, INTENT_VISION):
+    has_user_docs = bool(
+        uploaded_paths or
+        state.get("active_documents") or
+        config.get("configurable", {}).get("active_document_ids") or
+        is_private_doc
+    )
+    if not needs_retrieval and not has_user_docs:
+        needs_retrieval = False
+        reason = "No user documents active/uploaded — vector retrieval skipped"
+    elif not needs_retrieval and intent not in (INTENT_WEB_SEARCH, INTENT_MCP_TOOL, INTENT_MEMORY_WRITE, INTENT_VISION):
         last_query = state.get("resolved_query")
         if not last_query:
             for msg in reversed(messages):
@@ -3087,7 +3102,7 @@ async def generate_response_node(
 
         if gemini_key and not str(gemini_key).startswith("mock_"):
             logger.info(f"generate_response_node: '{model}' is not vision-capable — routing to Gemini Flash for native vision processing")
-            model = "gemini-3.6-flash"
+            model = "gemini-2.0-flash"
             provider = gemini_provider
             provider_api_key = gemini_key
             is_vision_capable_model = True
@@ -3363,39 +3378,39 @@ async def generate_response_node(
 
     # 1. Tier 1 — Intra-provider fallback (same provider, lighter / higher-rate-limit models)
     if primary_prov_name == "gemini" and gemini_key:
-        for m in ("gemini-3.6-flash", "gemini-flash-latest", "gemini-flash-lite-latest", "gemini-3.1-flash-lite", "gemini-3.5-flash"):
+        for m in ("gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.0-flash-lite"):
             candidates.append(("gemini", gemini_provider, m, gemini_key))
     elif primary_prov_name == "groq" and groq_key:
-        for m in ("openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b", "groq/compound-mini"):
+        for m in ("llama-3.3-70b-versatile", "llama-3.1-8b-instant", "deepseek-r1-distill-llama-70b"):
             candidates.append(("groq", groq_provider, m, groq_key))
     elif primary_prov_name == "openai" and openai_key:
         for m in ("gpt-4o-mini", "gpt-4o"):
             candidates.append(("openai", openai_provider, m, openai_key))
     elif primary_prov_name in ("openrouter", "anthropic", "deepseek") and openrouter_key:
-        for m in ("google/gemini-3.6-flash", "openai/gpt-4o-mini"):
+        for m in ("google/gemini-2.0-flash-001", "openai/gpt-4o-mini"):
             candidates.append(("openrouter", openrouter_provider, m, openrouter_key))
 
     # 2. Tier 2 — Cross-provider cascades
     cross_providers = []
     if primary_prov_name == "gemini":
         cross_providers = [
-            ("groq", groq_provider, ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b"], groq_key),
+            ("groq", groq_provider, ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "deepseek-r1-distill-llama-70b"], groq_key),
             ("openai", openai_provider, ["gpt-4o-mini", "gpt-4o"], openai_key),
-            ("openrouter", openrouter_provider, ["google/gemini-3.6-flash"], openrouter_key),
+            ("openrouter", openrouter_provider, ["google/gemini-2.0-flash-001"], openrouter_key),
         ]
     elif primary_prov_name == "groq":
         cross_providers = [
-            ("gemini", gemini_provider, ["gemini-3.6-flash", "gemini-flash-latest", "gemini-flash-lite-latest"], gemini_key),
+            ("gemini", gemini_provider, ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.0-flash-lite"], gemini_key),
             ("openai", openai_provider, ["gpt-4o-mini", "gpt-4o"], openai_key),
-            ("openrouter", openrouter_provider, ["google/gemini-3.6-flash"], openrouter_key),
+            ("openrouter", openrouter_provider, ["google/gemini-2.0-flash-001"], openrouter_key),
         ]
     elif primary_prov_name == "openai":
         cross_providers = [
-            ("gemini", gemini_provider, ["gemini-3.6-flash", "gemini-flash-latest"], gemini_key),
-            ("groq", groq_provider, ["openai/gpt-oss-120b", "openai/gpt-oss-20b"], groq_key),
+            ("gemini", gemini_provider, ["gemini-2.0-flash", "gemini-1.5-flash"], gemini_key),
+            ("groq", groq_provider, ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"], groq_key),
             ("openrouter", openrouter_provider, [
                 actual_model_id if "/" in actual_model_id else f"openai/{actual_model_id}",
-                "google/gemini-3.6-flash"
+                "google/gemini-2.0-flash-001"
             ], openrouter_key),
         ]
     else:
@@ -3410,10 +3425,10 @@ async def generate_response_node(
         cross_providers = [
             ("openrouter", openrouter_provider, [
                 or_primary,
-                "google/gemini-3.6-flash",
+                "google/gemini-2.0-flash-001",
             ], openrouter_key),
-            ("gemini", gemini_provider, ["gemini-3.6-flash", "gemini-flash-latest"], gemini_key),
-            ("groq", groq_provider, ["openai/gpt-oss-120b", "openai/gpt-oss-20b"], groq_key),
+            ("gemini", gemini_provider, ["gemini-2.0-flash", "gemini-1.5-flash"], gemini_key),
+            ("groq", groq_provider, ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"], groq_key),
             ("openai", openai_provider, ["gpt-4o-mini"], openai_key),
         ]
 
@@ -3429,8 +3444,8 @@ async def generate_response_node(
                 candidates.insert(0, ("openai", openai_provider, "gpt-4o", openai_key))
         # Guarantee: Gemini Flash via system key (best for handwriting/vision)
         if gemini_key and not str(gemini_key).startswith("mock_"):
-            if not any("gemini-3.6-flash" in m and p == "gemini" for p, _, m, _ in candidates):
-                candidates.append(("gemini", gemini_provider, "gemini-3.6-flash", gemini_key))
+            if not any("gemini" in m and p == "gemini" for p, _, m, _ in candidates):
+                candidates.append(("gemini", gemini_provider, "gemini-2.0-flash", gemini_key))
         # Guarantee: OpenAI GPT-4o via system key through OpenRouter
         if openrouter_key and not str(openrouter_key).startswith("mock_"):
             if not any("gpt-4o" in m and p == "openrouter" for p, _, m, _ in candidates):
@@ -3726,13 +3741,13 @@ async def generate_response_node(
             images = []
             rescue_attempts = []
             if keys.get("gemini") or keys.get("google"):
-                rescue_attempts.append((gemini_provider, "gemini-3.6-flash", keys.get("gemini") or keys.get("google")))
+                rescue_attempts.append((gemini_provider, "gemini-2.0-flash", keys.get("gemini") or keys.get("google")))
             if keys.get("groq"):
-                rescue_attempts.append((groq_provider, "openai/gpt-oss-120b", keys["groq"]))
+                rescue_attempts.append((groq_provider, "llama-3.3-70b-versatile", keys["groq"]))
             if keys.get("openai"):
                 rescue_attempts.append((openai_provider, "gpt-4o-mini", keys["openai"]))
             if keys.get("openrouter"):
-                rescue_attempts.append((openrouter_provider, "google/gemini-3.6-flash", keys["openrouter"]))
+                rescue_attempts.append((openrouter_provider, "google/gemini-2.0-flash-001", keys["openrouter"]))
 
             for r_prov, r_mod, r_key in rescue_attempts:
                 try:
@@ -4284,7 +4299,7 @@ async def evidence_checker_node(
     intent    = state.get("intent", INTENT_NORMAL_CHAT)
 
     # Extract the latest AI response
-    last_response = ""
+    last_response = state.get("response_text") or ""
     last_query    = state.get("resolved_query") or ""
     for msg in reversed(messages):
         if not last_response and hasattr(msg, "type") and msg.type == "ai":
