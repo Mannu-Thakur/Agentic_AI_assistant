@@ -22,6 +22,7 @@ BUG FIX: `logger` was used on lines 177 and 297 of the original file but
   original file — full backward compatibility.
 """
 
+import os
 import time
 import json
 import random
@@ -183,7 +184,7 @@ class GroqProvider(BaseLLMProvider):
     async def generate(
         self,
         messages: List[Dict[str, Any]],
-        model: str = "llama-3.3-70b-versatile",
+        model: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 2048,
         tools: Optional[List[Dict[str, Any]]] = None,
@@ -210,6 +211,7 @@ class GroqProvider(BaseLLMProvider):
             )
 
         # ── Deprecated model remapping ────────────────────────────────────────
+        model = model or os.getenv("DEFAULT_GROQ_MODEL") or "llama-3.3-70b-versatile"
         raw_model = model
         model = registry.remap_model(model)
 
@@ -379,7 +381,7 @@ class GroqProvider(BaseLLMProvider):
     async def generate_stream(
         self,
         messages: List[Dict[str, Any]],
-        model: str = "llama-3.3-70b-versatile",
+        model: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 2048,
         tools: Optional[List[Dict[str, Any]]] = None,
@@ -406,6 +408,7 @@ class GroqProvider(BaseLLMProvider):
             )
 
         # ── Deprecated model remapping ────────────────────────────────────────
+        model = model or os.getenv("DEFAULT_GROQ_MODEL") or "llama-3.3-70b-versatile"
         raw_model = model
         model = registry.remap_model(model)
 

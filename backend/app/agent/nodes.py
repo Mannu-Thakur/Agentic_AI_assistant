@@ -1636,9 +1636,9 @@ async def memory_write_node(
             messages_for_ack = [{"role": "user", "content": prompt}]
 
             for provider, key_name, model in [
-                (gemini_provider,     "gemini",     "gemini-3.6-flash"),
-                (groq_provider,       "groq",       "openai/gpt-oss-120b"),
-                (openrouter_provider, "openrouter", "google/gemini-3.6-flash"),
+                (gemini_provider,     "gemini",     "gemini-2.0-flash"),
+                (groq_provider,       "groq",       "llama-3.3-70b-versatile"),
+                (openrouter_provider, "openrouter", "google/gemini-2.0-flash"),
             ]:
                 api_key = keys.get(key_name)
                 if not api_key:

@@ -6,7 +6,7 @@ Production hardening applied
 • Circuit breaker: if the Gemini circuit is OPEN the method raises
   immediately (no network round-trip) so nodes.py moves to the next fallback.
 • Deprecated model remapping via ProviderRegistry.remap_model() — obsolete
-  model IDs (gemini-1.5-flash etc.) are transparently upgraded before the
+        model: Optional[str] = None, etc.) are transparently upgraded before the
   API call.
 • Model availability check: models marked unavailable after HTTP 400/404
   are rejected immediately.
@@ -25,6 +25,7 @@ Interface contract preserved
 • All existing call-sites (nodes.py) work without any changes.
 """
 
+import os
 import time
 import json
 import random
@@ -194,7 +195,7 @@ class GeminiProvider(BaseLLMProvider):
     async def generate(
         self,
         messages: List[Dict[str, str]],
-        model: str = "gemini-2.0-flash",
+        model: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 2048,
         tools: Optional[List[Dict[str, Any]]] = None,
@@ -222,6 +223,7 @@ class GeminiProvider(BaseLLMProvider):
             raise ProviderCircuitOpenError(err_msg)
 
         # ── Deprecated/alias model remapping ──────────────────────────────────
+        model = model or os.getenv("DEFAULT_GEMINI_MODEL") or "gemini-2.0-flash"
         model = registry.remap_model(model)
         if model.startswith("google/"):
             model = model[len("google/"):]
@@ -366,7 +368,7 @@ class GeminiProvider(BaseLLMProvider):
     async def generate_stream(
         self,
         messages: List[Dict[str, str]],
-        model: str = "gemini-2.0-flash",
+        model: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 2048,
         tools: Optional[List[Dict[str, Any]]] = None,
@@ -394,6 +396,7 @@ class GeminiProvider(BaseLLMProvider):
             raise ProviderCircuitOpenError(err_msg)
 
         # ── Deprecated model remapping ────────────────────────────────────────
+        model = model or os.getenv("DEFAULT_GEMINI_MODEL") or "gemini-2.0-flash"
         model = registry.remap_model(model)
         if model.startswith("google/"):
             model = model[len("google/"):]

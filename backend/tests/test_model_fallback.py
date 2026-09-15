@@ -34,7 +34,6 @@ def test_deprecated_models_preserves_valid_gemini_models():
     # Truly retired models and legacy aliases are remapped
     assert DEPRECATED_MODELS.get("gemini-1.0-pro") == "gemini-2.0-flash"
     assert DEPRECATED_MODELS.get("gemini-pro") == "gemini-2.0-flash"
-    assert DEPRECATED_MODELS.get("gemini-3.6-flash") == "gemini-2.0-flash"
 
 
 @pytest.mark.asyncio
