@@ -30,6 +30,15 @@ target_metadata = Base.metadata
 # ... etc.
 
 
+def _get_sync_database_url() -> str:
+    url = settings.DATABASE_URL
+    if url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql://", 1)
+    if url.startswith("postgresql+asyncpg://"):
+        url = url.replace("postgresql+asyncpg://", "postgresql+psycopg2://", 1)
+    return url
+
+
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode.
 
@@ -42,7 +51,7 @@ def run_migrations_offline() -> None:
     script output.
 
     """
-    url = settings.DATABASE_URL
+    url = _get_sync_database_url()
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -61,8 +70,9 @@ def run_migrations_online() -> None:
     and associate a connection with the context.
 
     """
+    url = _get_sync_database_url()
     connectable = create_engine(
-        settings.DATABASE_URL,
+        url,
         poolclass=pool.NullPool,
     )
 

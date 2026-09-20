@@ -25,9 +25,11 @@ from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.core.config import settings
-from app.api import auth, chat, documents, memories, api_keys, admin, mcp_servers, metrics as metrics_router
+from app.api import auth, chat, documents, memories, api_keys, admin, mcp_servers, metrics as metrics_router, evaluation as evaluation_router
 
 from app.api import health as health_router
+from app.api import analytics as analytics_router
+from app.api import monitoring as monitoring_router, graph as graph_router
 from app.core.database import run_schema_migrations
 from app.core.cache_service import get_all_cache_stats
 
@@ -37,15 +39,37 @@ from app.core.cache_service import get_all_cache_stats
 # ─────────────────────────────────────────────────────────────────────────────
 
 class _JsonFormatter(logging.Formatter):
-    """Formats each log record as a single-line JSON object."""
+    """
+    Formats each log record as a single-line JSON object.
+
+    BUG-6 FIX: Previously, callers were passing json.dumps({...}) as the log
+    message, which caused the formatter to double-encode the JSON string.
+    Now the formatter checks if the message is already a JSON string and
+    merges it back into the payload instead of double-serializing it.
+    Callers should preferably use logger.info("event", extra={...}) pattern,
+    but this formatter gracefully handles both patterns.
+    """
 
     def format(self, record: logging.LogRecord) -> str:  # noqa: A003
+        msg = record.getMessage()
         payload = {
             "timestamp": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
             "level":     record.levelname,
             "logger":    record.name,
-            "message":   record.getMessage(),
         }
+        # If the message is already a JSON object (dict), merge its fields
+        # directly into the payload to avoid double-encoding.
+        if msg and msg.lstrip().startswith("{"):
+            try:
+                inner = json.loads(msg)
+                if isinstance(inner, dict):
+                    payload.update(inner)
+                else:
+                    payload["message"] = msg
+            except (json.JSONDecodeError, ValueError):
+                payload["message"] = msg
+        else:
+            payload["message"] = msg
         if record.exc_info:
             payload["exc_info"] = self.formatException(record.exc_info)
         return json.dumps(payload)
@@ -72,6 +96,11 @@ logging.config.dictConfig({
 
 logger = logging.getLogger("main")
 
+# HIGH-2 FIX: module-level set keeps strong references to long-running background
+# tasks so Python's GC cannot collect them while the lifespan generator is alive.
+_bg_tasks: set = set()
+
+
 
 # ── Lifespan (startup / shutdown) ─────────────────────────────────────────────
 @asynccontextmanager
@@ -83,6 +112,17 @@ async def lifespan(app: FastAPI):
         logger.info("Schema migrations completed successfully.")
     except Exception as e:
         logger.error(f"Schema migration failed: {e}")
+
+    # ── Neo4j Knowledge Graph connection ──────────────────────────────────────
+    try:
+        from app.graph.neo4j_client import neo4j_client
+        connected = await neo4j_client.connect()
+        if connected:
+            logger.info("[GraphRAG] Neo4j connected and schema initialized.")
+        else:
+            logger.info("[GraphRAG] Running in vector-only mode (Neo4j not configured).")
+    except Exception as e:
+        logger.warning(f"[GraphRAG] Neo4j initialization skipped: {e}")
 
     # ── Orphaned-document recovery ────────────────────────────────────────────
     # Any document left in 'processing' from a previous run (server crash /
@@ -127,11 +167,35 @@ async def lifespan(app: FastAPI):
     except Exception as _tr_err:
         logger.warning(f"ToolRegistry startup initialization warning (non-fatal): {_tr_err}")
 
+    # NEW-LOW-2 FIX: Eagerly initialise the Redis in-memory fallback lock during
+    # lifespan startup (inside the running event loop) so the first concurrent
+    # pair of requests cannot race on the `_MEM_LOCK is None` check and create
+    # two independent Lock objects.
+    from app.core.redis_client import _get_mem_lock
+    _get_mem_lock()   # creates and caches the asyncio.Lock while event loop is active
+
     # Start background provider health check task
     from app.workers.health_check import provider_health_check_loop
     bg_task = asyncio.create_task(provider_health_check_loop())
+    _bg_tasks.add(bg_task)          # HIGH-2 FIX: strong reference prevents GC
+    bg_task.add_done_callback(_bg_tasks.discard)  # auto-clean on completion
+
 
     yield  # Application runs here
+
+    # ── Shutdown Neo4j ────────────────────────────────────────────────────────
+    try:
+        from app.graph.neo4j_client import neo4j_client
+        await neo4j_client.close()
+    except Exception:
+        pass
+
+    # ── Shutdown ToolRegistry MCP clients ─────────────────────────────────────
+    try:
+        from app.tools.registry import ToolRegistry
+        await ToolRegistry().shutdown()
+    except Exception as _tr_err:
+        logger.warning(f"Error shutting down ToolRegistry: {_tr_err}")
 
     # Shutdown: cancel task
     bg_task.cancel()
@@ -187,6 +251,8 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     Logs the full stack trace server-side but returns only a generic 500
     to the client — preventing internal implementation details from leaking.
     """
+    if isinstance(exc, StarletteHTTPException):
+        return await http_exception_handler(request, exc)
     tb = traceback.format_exc()
     logger.error(
         f"Unhandled exception on {request.method} {request.url.path}: {exc}\n{tb}"
@@ -204,20 +270,6 @@ app.add_middleware(SecureHeadersMiddleware)
 app.add_middleware(PayloadLimitMiddleware)
 app.add_middleware(InputSanitizationMiddleware)
 
-# CORSMiddleware MUST be added LAST so it becomes the outermost middleware,
-# ensuring Access-Control-Allow-Origin headers are attached to all responses,
-# preflight OPTIONS requests, and unhandled exception responses.
-if settings.BACKEND_CORS_ORIGINS:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=settings.BACKEND_CORS_ORIGINS,
-        allow_origin_regex=r"https://.*\.vercel\.app",
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-        expose_headers=["X-Request-ID", "X-Process-Time", "X-Trace-ID"],
-    )
-
 from app.api import preferences
 from app.resume.routes import router as resume_router
 
@@ -232,7 +284,11 @@ app.include_router(admin.router,        prefix=settings.API_V1_STR)
 app.include_router(mcp_servers.router,  prefix=settings.API_V1_STR)
 app.include_router(preferences.router,  prefix=settings.API_V1_STR)
 app.include_router(metrics_router.router, prefix=settings.API_V1_STR)
+app.include_router(evaluation_router.router, prefix=settings.API_V1_STR)
 app.include_router(resume_router,       prefix=settings.API_V1_STR)
+app.include_router(graph_router.router, prefix=settings.API_V1_STR)
+app.include_router(analytics_router.router, prefix=settings.API_V1_STR)
+app.include_router(monitoring_router.router, prefix=settings.API_V1_STR)
 
 
 # ── Cache metrics endpoint ─────────────────────────────────────────────────────
@@ -241,7 +297,6 @@ async def get_cache_metrics():
     """Return cache hit/miss statistics for all caches."""
     return {"caches": get_all_cache_stats()}
 
-# (CORS registered above, before security middlewares — see line ~97)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -259,6 +314,10 @@ async def request_lifecycle_middleware(request: Request, call_next):
       5. Records Prometheus HTTP request metrics.
       6. Emits a structured JSON access log line containing trace contexts.
     """
+    # Fast-path OPTIONS preflight requests directly to CORSMiddleware
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
     request_id = str(uuid.uuid4())[:8]
     client_ip  = request.client.host if request.client else "unknown"
 
@@ -297,9 +356,15 @@ async def request_lifecycle_middleware(request: Request, call_next):
             "span_id":    span_id,
             "path":       request.url.path,
         }))
+        headers = {}
+        origin = request.headers.get("origin")
+        if origin and settings.BACKEND_CORS_ORIGINS:
+            headers["Access-Control-Allow-Origin"] = origin
+            headers["Access-Control-Allow-Credentials"] = "true"
         return JSONResponse(
             status_code=429,
             content={"detail": "Too many requests. Please slow down."},
+            headers=headers,
         )
 
     start = time.perf_counter()
@@ -330,10 +395,25 @@ async def request_lifecycle_middleware(request: Request, call_next):
     return response
 
 
+# CORSMiddleware MUST be added LAST so it becomes the outermost middleware,
+# ensuring Access-Control-Allow-Origin headers are attached to all responses,
+# preflight OPTIONS requests, and unhandled exception responses.
+if settings.BACKEND_CORS_ORIGINS:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.BACKEND_CORS_ORIGINS,
+        allow_origin_regex=r"https://.*\.vercel\.app",
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=["X-Request-ID", "X-Process-Time", "X-Trace-ID"],
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  Dev server entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)

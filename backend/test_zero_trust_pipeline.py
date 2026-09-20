@@ -247,10 +247,13 @@ async def main():
         app_graph = workflow.compile()
 
         passed_scenarios = 0
-        for scenario in TEST_SCENARIOS:
-            success = await run_scenario(scenario, app_graph, vector_store, registry)
-            if success:
-                passed_scenarios += 1
+        try:
+            for scenario in TEST_SCENARIOS:
+                success = await run_scenario(scenario, app_graph, vector_store, registry)
+                if success:
+                    passed_scenarios += 1
+        finally:
+            await registry.shutdown()
 
         print("\n" + "="*70)
         print(f" VERIFICATION RESULTS SUMMARY: {passed_scenarios}/{len(TEST_SCENARIOS)} SCENARIOS PASSED")
@@ -258,11 +261,12 @@ async def main():
 
         if passed_scenarios == len(TEST_SCENARIOS):
             print("\nZERO-TRUST AUDIT VERDICT: PASSED 10/10. ZERO HARDCODED ROUTING DETECTED.\n")
-            sys.exit(0)
+            return 0
         else:
             print(f"\nZERO-TRUST AUDIT VERDICT: FAILED. {len(TEST_SCENARIOS) - passed_scenarios} scenarios failed.\n")
-            sys.exit(1)
+            return 1
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    exit_code = asyncio.run(main())
+    sys.exit(exit_code)

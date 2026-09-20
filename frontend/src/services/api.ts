@@ -1,7 +1,7 @@
 import { useAuthStore } from '../store/authStore';
 import { ProviderKeyManager } from './providerKeyManager';
 
-const API_BASE = ((import.meta.env.VITE_API_BASE_URL as string | undefined) || '').replace(/\/+$/, '');
+const API_BASE = (((import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_BACKEND_URL) as string | undefined) || '').replace(/\/+$/, '');
 export const BASE_URL = `${API_BASE}/api/v1`;
 
 
@@ -116,13 +116,10 @@ export async function apiRequest<T = any>(
       headers.set('Authorization', `Bearer ${newToken}`);
       response = await fetchWithTimeout(url, { ...options, headers, credentials: 'include' }, timeoutMs);
     } else {
-      // Refresh failed — try once more with current token before giving up.
-      // This handles transient network errors on the refresh endpoint.
-      response = await fetchWithTimeout(url, { ...options, headers, credentials: 'include' }, timeoutMs);
-      if (response.status === 401) {
-        // Confirmed dead session — only NOW force logout
-        forceLogout('Session expired. Please log in again.');
-      }
+      // BUG-12 FIX: Refresh failed — the session is dead. Previously the code
+      // retried the original request with the same expired token (guaranteed 401)
+      // which wasted the full 30s timeout before giving up. Skip straight to logout.
+      forceLogout('Session expired. Please log in again.');
     }
   }
 

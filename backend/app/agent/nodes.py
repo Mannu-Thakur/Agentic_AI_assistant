@@ -69,6 +69,13 @@ from app.agent.prompts import (
     INTENT_CURRENT_EVENTS,
     INTENT_MATH,
     INTENT_PROGRAMMING,
+    INTENT_PDF_QA,
+    INTENT_DATABASE,
+    INTENT_SUMMARIZATION,
+    INTENT_TRANSLATION,
+    INTENT_REASONING,
+    INTENT_LONG_CONTEXT,
+    INTENT_MULTI_STEP,
     AMBIGUITY_DETECTOR_PROMPT,
     CLARIFICATION_QUESTION_PROMPT,
     QUERY_RECONSTRUCTOR_PROMPT,
@@ -102,6 +109,8 @@ from app.services.web_search import (
 )
 
 
+logger = logging.getLogger("agent.nodes")
+
 async def _notify_step(config: Optional[RunnableConfig], step_message: str) -> None:
     """Send live progress step message to frontend via config on_step callback."""
     if not config:
@@ -116,7 +125,6 @@ async def _notify_step(config: Optional[RunnableConfig], step_message: str) -> N
         except Exception as err:
             logger.debug(f"_notify_step error (non-fatal): {err}")
 
-logger = logging.getLogger("agent.nodes")
 
 # ── Singleton provider instances ──────────────────────────────────────────────
 gemini_provider     = GeminiProvider()
@@ -635,12 +643,6 @@ def _build_section_breakdown(corrected_lines: list, sections_found: list) -> str
     return "\n\n".join(output_parts)
 
 
-def _format_ocr_text_to_markdown(text: str) -> str:
-    """Format extracted text cleanly into Markdown paragraphs."""
-    if not text:
-        return ""
-    lines = [l.strip() for l in text.splitlines() if l.strip()]
-    return "\n".join(lines)
 
 
 def _reconstruct_ocr_diagram_and_notes(raw_ocr_text: str, image_index: int = 1) -> str:
@@ -1238,9 +1240,12 @@ def _heuristic_fallback_intent(
     if is_expense or is_math or is_reminder or is_email:
         return INTENT_MCP_TOOL, False, None, None
 
-    # 5. WEB_SEARCH
+    # 5. CURRENT_EVENTS & WEB_SEARCH
+    if _re.search(r"\b(current events|current education minister|current minister|current pm|current president)\b", q, _re.IGNORECASE):
+        return INTENT_CURRENT_EVENTS, False, None, None
+
     if _re.search(
-        r"\b(who is|weather in|price of|latest|today'?s|score of|live score|news on|current events|search for|search the web|read (the )?webpage|fetch (the )?webpage|https?:\/\/|forecast in)\b",
+        r"\b(who is|weather in|price of|latest|today'?s|score of|live score|news on|search for|search the web|read (the )?webpage|fetch (the )?webpage|https?:\/\/|forecast in)\b",
         q,
         _re.IGNORECASE,
     ):
@@ -1461,9 +1466,11 @@ async def classify_intent_node(
             # If the LLM already classified as WEB_SEARCH or COMPLEX, escalate to COMPLEX
             # (need both web + doc context). Otherwise go to DOCUMENT_QA.
             if intent not in (INTENT_MCP_TOOL, INTENT_CODE_EXECUTION, INTENT_MEMORY_WRITE, INTENT_VISION):
-                if intent == INTENT_WEB_SEARCH:
+                if intent in (INTENT_WEB_SEARCH, INTENT_COMPLEX):
                     intent = INTENT_COMPLEX
-                else:
+                elif intent in (INTENT_PDF_QA,):
+                    pass
+                elif intent not in (INTENT_PROGRAMMING, INTENT_MATH, INTENT_FINANCE, INTENT_REASONING, INTENT_MULTI_STEP):
                     intent = INTENT_DOCUMENT_QA
 
     # ── Final image guard: if image attached but user typed nothing, force VISION
@@ -1490,6 +1497,18 @@ async def classify_intent_node(
                         memory_write_category = "compound_memory"
         except Exception as _cq_err:
             logger.debug(f"[CompoundQuery] detection failed (non-fatal): {_cq_err}")
+
+        # Deterministic fallback for compound queries when LLM judge is offline / returns None
+        if not sub_questions and " and " in last_query_clean.lower():
+            import re as _re
+            _m_split = _re.match(r"^(.*?)(?:of|in|for)\s+([^?]+?)\s+and\s+([^?]+?)(\??)$", last_query_clean, _re.IGNORECASE)
+            if _m_split:
+                _prefix, _e1, _e2, _qmark = _m_split.group(1).strip(), _m_split.group(2).strip(), _m_split.group(3).strip(), _m_split.group(4) or "?"
+                _prep = "of" if " of " in last_query_clean.lower() else ("in" if " in " in last_query_clean.lower() else "for")
+                sub_questions = [
+                    f"{_prefix} {_prep} {_e1}{_qmark}",
+                    f"{_prefix} {_prep} {_e2}{_qmark}"
+                ]
 
     # ── Tool discovery via registry (semantic, no whitelist) ──────────────────
     # For tool-eligible intents, expose ALL registered tools to the semantic router.
@@ -1540,6 +1559,11 @@ async def classify_intent_node(
         except Exception as _tel_err:
             logger.debug(f"Telemetry record_routing failed (non-fatal): {_tel_err}")
 
+    freshness_required = intent in (INTENT_CURRENT_EVENTS, INTENT_NEWS) or any(
+        k in (last_query_clean or "").lower()
+        for k in ("latest", "current", "today", "news", "recent", "now", "price", "minister")
+    )
+
     steps.append("classify_intent")
     dur = (time.time() - node_start) * 1000
     record_node_execution(
@@ -1551,6 +1575,7 @@ async def classify_intent_node(
             "intent": intent,
             "allowed_tools": allowed_tools,
             "is_private_doc_query": is_private_doc_query,
+            "freshness_required": freshness_required,
         },
         duration_ms=dur
     )
@@ -2077,10 +2102,13 @@ async def check_retrieval_node(
     needs_retrieval = False
     reason = "Default conversational query — retrieval not required"
 
-    if intent in (INTENT_WEB_SEARCH, INTENT_MCP_TOOL, INTENT_MEMORY_WRITE, INTENT_VISION, INTENT_CODE_EXECUTION, INTENT_MATH) and not is_private_doc:
+    if intent in (
+        INTENT_WEB_SEARCH, INTENT_MCP_TOOL, INTENT_MEMORY_WRITE, INTENT_VISION,
+        INTENT_CODE_EXECUTION, INTENT_MATH, INTENT_PROGRAMMING, INTENT_TRANSLATION
+    ) and not is_private_doc:
         needs_retrieval = False
         reason = f"Intent {intent} does not require vector retrieval"
-    elif intent in (INTENT_DOCUMENT_QA, INTENT_COMPLEX) or is_private_doc or (uploaded_paths and is_private_doc):
+    elif intent in (INTENT_DOCUMENT_QA, INTENT_COMPLEX, INTENT_PDF_QA, INTENT_LONG_CONTEXT) or is_private_doc or (uploaded_paths and is_private_doc):
         needs_retrieval = True
         reason = f"Intent {intent} or private document query requires vector retrieval"
     elif intent in (INTENT_NORMAL_CHAT,):
@@ -2137,34 +2165,6 @@ async def check_retrieval_node(
         "execution_trace": state["execution_trace"],
         "semantic_status": state["semantic_status"],
     }
-
-    last_query = state.get("resolved_query")
-    if not last_query:
-        for msg in reversed(messages):
-            if hasattr(msg, "type") and msg.type in ("human", "user"):
-                last_query = msg.content if isinstance(msg.content, str) else ""
-                break
-
-    needs_retrieval = False
-
-    if last_query:
-        prompt = RETRIEVAL_CHECK_PROMPT.format(query=last_query)
-        parsed = await _call_llm_judge(prompt, config)
-        if parsed is not None:
-            needs_retrieval = bool(parsed.get("needs_retrieval", False))
-        else:
-            doc_signals = (
-                "my document", "my file", "my notes", "my cheat", "in the file",
-                "uploaded", "the pdf", "the doc", "my code", "in my", "from the file",
-            )
-            query_lower = last_query.lower()
-            needs_retrieval = any(sig in query_lower for sig in doc_signals)
-
-    logger.info(
-        f"Self-RAG: needs_retrieval={needs_retrieval} for query='{last_query[:60]}'"
-    )
-    steps.append("check_retrieval")
-    return {"needs_retrieval": needs_retrieval, "steps": steps}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2393,7 +2393,7 @@ async def retrieve_context_node(
                     logger.error(f"VectorStore query failed for sub-query '{q}': {ex}")
                     return []
 
-            tasks = [retrieve_for_query(q) for q in queries]
+            tasks = [asyncio.create_task(retrieve_for_query(q)) for q in queries]
             if tasks:
                 raw_results = await asyncio.gather(*tasks, return_exceptions=True)
                 results_lists = [r if isinstance(r, list) else [] for r in raw_results]
@@ -2477,7 +2477,39 @@ async def retrieve_context_node(
 
     retrieved_items = memories + doc_chunks
 
-    # source_documents starts empty — only CRAG-validated chunks will populate it
+    # ── GraphRAG: Augment with Knowledge Graph evidence ─────────────────────
+    # When Neo4j is configured and GRAPHRAG_ENABLED=true, fetch graph evidence
+    # and include it in the retrieved context. Falls back silently if unavailable.
+    graph_evidence: List[Dict[str, Any]] = []
+    graph_retrieval_attempted = False
+    try:
+        if settings.GRAPHRAG_ENABLED and last_query:
+            from app.graph.neo4j_client import neo4j_client
+            if neo4j_client.is_available:
+                from app.graph.graph_retriever import (
+                    retrieve_graph_context, format_graph_context_for_llm
+                )
+                graph_retrieval_attempted = True
+                graph_evidence = await retrieve_graph_context(
+                    query=last_query,
+                    max_results=settings.GRAPHRAG_MAX_GRAPH_RESULTS,
+                )
+                if graph_evidence:
+                    logger.info(f"[GraphRAG] Retrieved {len(graph_evidence)} graph evidence items for query")
+                    # Add formatted graph context as a special chunk
+                    graph_text = format_graph_context_for_llm(graph_evidence)
+                    if graph_text:
+                        retrieved_items.append({
+                            "type": "graph_evidence",
+                            "content": graph_text,
+                            "source": "knowledge_graph",
+                            "confidence": 0.85,
+                            "filename": "Knowledge Graph",
+                        })
+    except Exception as _graph_err:
+        logger.warning(f"[GraphRAG] Graph retrieval failed (non-fatal): {_graph_err}")
+
+
     # (grade_documents_node is responsible for the final authoritative list)
     source_documents: List[Dict[str, Any]] = [
         {
@@ -2535,12 +2567,15 @@ async def retrieve_context_node(
         "steps":               steps,
         "execution_trace":     state["execution_trace"],
         "semantic_status":     state["semantic_status"],
+        # GraphRAG fields (populated when Neo4j is available)
+        "graph_evidence":           graph_evidence,
+        "graph_entities":           [e.get("entity") for e in graph_evidence if e.get("entity")],
+        "graph_retrieval_attempted": graph_retrieval_attempted,
+        "graph_evidence_count":     len(graph_evidence),
     }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  Node 5: CRAG — grade document relevance  (P0 fix: private-doc guard)
-# ─────────────────────────────────────────────────────────────────────────────
+
 
 async def grade_documents_node(
     state: AgentState, config: RunnableConfig = None
@@ -3062,6 +3097,36 @@ async def generate_response_node(
     on_metrics = config.get("configurable", {}).get("on_metrics")
     keys       = _extract_api_keys(config)
 
+    # ── Intelligent Router: complexity analysis + cost tracking ───────────────
+    # The router logs routing decisions and tracks cost. The model may already be
+    # set by the user (user_override=True) — in that case we only track.
+    routing_decision = None
+    try:
+        from app.routing.model_router import route_query
+        last_msg_content = ""
+        for msg in reversed(messages):
+            if hasattr(msg, "type") and msg.type in ("human", "user"):
+                last_msg_content = msg.content if isinstance(msg.content, str) else ""
+                break
+        if last_msg_content:
+            routing_context = {
+                "intent": intent,
+                "has_images": bool(images),
+                "document_count": len(state.get("source_documents") or []),
+            }
+            routing_decision = route_query(
+                query=last_msg_content,
+                user_selected_model=model,
+                context=routing_context,
+            )
+            logger.info(
+                f"[Router] model={model} tier={routing_decision.selected_tier} "
+                f"complexity={routing_decision.complexity_score.complexity_score:.2f} "
+                f"user_override={routing_decision.user_override}"
+            )
+    except Exception as _router_err:
+        logger.debug(f"[Router] Routing analysis skipped (non-fatal): {_router_err}")
+
     # ── Image-provider vision-capability guard with auto-fallback ──────────────
     # Determine whether the active model supports vision / image input.
     # We check the full model string (including openrouter/ prefix) so that
@@ -3259,7 +3324,7 @@ async def generate_response_node(
             query=last_user_query,
             allowed_tools=None,   # None = evaluate all registered tools, not just whitelist
             top_k=6,
-            api_key=keys.get("gemini_api_key")
+            api_key=keys.get("gemini") or keys.get("google")
         )
         if not tool_schemas and allowed_tools:
             # Fallback to whitelisted tools if semantic router returned empty (e.g. short query or offline embeddings)
@@ -3933,6 +3998,25 @@ async def generate_response_node(
         except Exception as _tel_err:
             logger.debug(f"Telemetry record_llm failed (non-fatal): {_tel_err}")
 
+    # ── Cost tracker: record per-request estimated cost ───────────────────────
+    _routing_tier = "unknown"
+    try:
+        from app.routing.cost_tracker import cost_tracker
+        from app.routing.model_profiles import get_profile_for_model
+        _profile = get_profile_for_model(model_used_final)
+        if _profile:
+            _routing_tier = _profile.tier
+            _token_est = max(len(full_response) // 4, 1)
+            cost_tracker.record(
+                model=model_used_final,
+                tier=_routing_tier,
+                input_tokens=_token_est,
+                output_tokens=_token_est // 2,
+                latency_ms=round((_wall_time.monotonic() - _llm_start_time) * 1000, 2),
+            )
+    except Exception as _cost_err:
+        logger.debug(f"[CostTracker] Record failed (non-fatal): {_cost_err}")
+
     steps = list(state.get("steps") or []) + ["generate_response"]
     if tool_calls:
         ai_msg = AIMessage(content=f"Processing your request...")
@@ -3947,6 +4031,7 @@ async def generate_response_node(
             "active_model":     model_used_final,
             "model_used":       model_used_final,
             "provider_used":    provider_used_final,
+            "model_tier":       _routing_tier,
         }
 
     # Only append to conversation history when the response is a real AI turn.
@@ -3969,6 +4054,7 @@ async def generate_response_node(
         "active_model":     model_used_final,
         "model_used":       model_used_final,
         "provider_used":    provider_used_final,
+        "model_tier":       _routing_tier,
     }
 
 

@@ -27,7 +27,17 @@ COPY . .
 
 EXPOSE 8000
 
-# Render free tier provides 512MB RAM. Use 1 worker to prevent OOM.
-# Bind dynamically to $PORT provided by Render (default to 8000).
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1"]
+# Security: run as non-root user
+RUN groupadd -r appuser && useradd -r -g appuser appuser
 
+# Copy Alembic entrypoint (runs migrations before uvicorn)
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Transfer ownership of app directory to non-root user
+RUN chown -R appuser:appuser /app
+USER appuser
+
+# Render free tier provides 512MB RAM. Use 1 worker to prevent OOM.
+# Alembic migrations run automatically via entrypoint.sh before uvicorn starts.
+ENTRYPOINT ["/entrypoint.sh"]

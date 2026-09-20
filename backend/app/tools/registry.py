@@ -391,25 +391,32 @@ class ToolRegistry:
         # 2. Route to MCP tool
         elif name in self.mcp_tools_map:
             server_name = self.mcp_tools_map[name]
-            client      = self.mcp_clients[server_name]
-            logger.info(
-                f"Invoking MCP tool '{name}' on server '{server_name}' "
-                f"with arguments: {arguments}"
-            )
-            try:
-                result_str = await client.call_tool(name, arguments or {})
-            except Exception as e:
-                logger.warning(f"Initial call to MCP tool '{name}' on '{server_name}' failed ({e}). Attempting client reconnection...")
+            # KeyError guard: client may have been removed after shutdown/unregister
+            client = self.mcp_clients.get(server_name)
+            if client is None:
+                status_label = "error"
+                err_msg = f"MCP client for server '{server_name}' is no longer connected"
+                logger.error(f"[ToolRegistry] {err_msg} (tool='{name}')")
+                result_str = f"Tool execution failed: {err_msg}"
+            else:
+                logger.info(
+                    f"Invoking MCP tool '{name}' on server '{server_name}' "
+                    f"with arguments: {arguments}"
+                )
                 try:
-                    await client.connect()
                     result_str = await client.call_tool(name, arguments or {})
-                except Exception as retry_err:
-                    status_label = "error"
-                    err_msg = str(retry_err)
-                    logger.error(
-                        f"Error calling MCP tool '{name}' on server '{server_name}' after reconnect: {str(retry_err)}"
-                    )
-                    result_str = f"Tool execution failed. Server returned: {str(retry_err)}"
+                except Exception as e:
+                    logger.warning(f"Initial call to MCP tool '{name}' on '{server_name}' failed ({e}). Attempting client reconnection...")
+                    try:
+                        await client.connect()
+                        result_str = await client.call_tool(name, arguments or {})
+                    except Exception as retry_err:
+                        status_label = "error"
+                        err_msg = str(retry_err)
+                        logger.error(
+                            f"Error calling MCP tool '{name}' on server '{server_name}' after reconnect: {str(retry_err)}"
+                        )
+                        result_str = f"Tool execution failed. Server returned: {str(retry_err)}"
 
         else:
             status_label = "error"
@@ -449,3 +456,6 @@ class ToolRegistry:
         self.mcp_tools_map.clear()
         self.mcp_tools_schemas.clear()
         self.is_initialized = False
+        self._local_initialized = False
+        self._sync_lock = None
+

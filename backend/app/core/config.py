@@ -193,6 +193,19 @@ class Settings(BaseSettings):
     # Password reset token lifetime (minutes)
     PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: int = 15
 
+    # Knowledge Graph — Neo4j
+    NEO4J_URI: Optional[str] = None
+    NEO4J_USER: str = "neo4j"
+    NEO4J_PASSWORD: Optional[str] = None
+    NEO4J_DATABASE: str = "neo4j"
+    GRAPHRAG_ENABLED: bool = False
+    GRAPHRAG_MAX_GRAPH_RESULTS: int = 10
+
+    # Business Domain Mode
+    # One of: "claims" | "warranty" | "fraud" | "enterprise" | None (generic)
+    # When set, injects domain-specific context into agent system prompts.
+    DOMAIN_MODE: Optional[str] = None
+
     model_config = SettingsConfigDict(
         env_file=(".env", "backend/.env"),
         env_file_encoding="utf-8",

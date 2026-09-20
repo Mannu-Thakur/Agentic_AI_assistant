@@ -263,7 +263,10 @@ class BM25IndexManager:
             from app.core.config import settings
             import os
 
-            loop = _asyncio.get_event_loop()
+            try:
+                loop = _asyncio.get_running_loop()
+            except RuntimeError:
+                loop = _asyncio.get_event_loop()
 
             # Open the persistent ChromaDB client (same path as VectorStore)
             def _get_chunks():
@@ -332,7 +335,10 @@ class BM25IndexManager:
             return []
 
         # Score is CPU-bound but typically < 5 ms; run in executor for safety
-        loop = asyncio.get_event_loop()
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.get_event_loop()
         scored = await loop.run_in_executor(None, index.score, query)
 
         results: List[Dict[str, Any]] = []

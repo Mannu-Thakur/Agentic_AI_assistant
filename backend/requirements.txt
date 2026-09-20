@@ -36,6 +36,9 @@ chromadb>=0.4.0
 openai>=1.0.0
 requests>=2.31.0
 
+# ── Knowledge Graph ──────────────────────────────────────────────────────────
+neo4j>=5.14.0                # Official async Neo4j Python driver
+
 # ── Production Reranker (Fix 3) ───────────────────────────────────────────────
 # Local cross-encoder model — replaces 10 LLM API calls per query reranking.
 # Model: cross-encoder/ms-marco-MiniLM-L-6-v2 (~22 MB, CPU-compatible)
@@ -70,6 +73,7 @@ python-dotenv>=1.0.0
 
 # ── Testing (dev only) ───────────────────────────────────────────────────────
 pytest>=7.4.0
-pytest-anyio>=0.0.0
+pytest-asyncio>=0.23.0
 anyio>=4.0.0
 httpx>=0.24.0
+ragas>=0.1.0 # Opt-in for evaluation

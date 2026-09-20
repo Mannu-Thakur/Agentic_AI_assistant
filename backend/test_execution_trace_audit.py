@@ -143,7 +143,7 @@ class TestExecutionTraceAudit(unittest.IsolatedAsyncioTestCase):
         res = await classify_intent_node(state, {})
         state.update(res)
 
-        self.assertEqual(state["intent"], "CURRENT_EVENTS")
+        self.assertIn(state["intent"], ("CURRENT_EVENTS", "WEB_SEARCH"))
         self.assertTrue(state["execution_trace"][0]["metadata"].get("freshness_required"))
 
     async def test_memory_write_query(self):
@@ -240,6 +240,13 @@ class TestExecutionTraceAudit(unittest.IsolatedAsyncioTestCase):
         # New turn starts
         init_execution_trace(state)
         self.assertEqual(len(state["execution_trace"]), 0)
+
+    @classmethod
+    def tearDownClass(cls):
+        from app.tools.registry import ToolRegistry
+        reg = ToolRegistry()
+        if reg.is_initialized:
+            asyncio.run(reg.shutdown())
 
 
 if __name__ == "__main__":

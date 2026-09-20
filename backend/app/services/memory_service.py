@@ -51,9 +51,35 @@ class MemoryService:
         """
         cache_key = _memory_cache_key(user_id)
         cached = await cache_get(cache_key)
-        if cached is not None:
+        if cached is not None and isinstance(cached, list):
             logger.debug(f"Memory cache HIT for user {user_id} ({len(cached)} items)")
-            return cached  # type: ignore[return-value]
+            restored: List[Memory] = []
+            for item in cached:
+                if isinstance(item, dict):
+                    m = Memory(
+                        id=item.get("id"),
+                        user_id=item.get("user_id"),
+                        category=item.get("category"),
+                        content=item.get("content"),
+                        importance_score=item.get("importance_score", 5),
+                        project_id=item.get("project_id"),
+                        session_id=item.get("session_id"),
+                        confidence=item.get("confidence", 1.0),
+                    )
+                    if item.get("expires_at"):
+                        try:
+                            m.expires_at = datetime.fromisoformat(item["expires_at"])
+                        except Exception:
+                            pass
+                    if item.get("created_at"):
+                        try:
+                            m.created_at = datetime.fromisoformat(item["created_at"])
+                        except Exception:
+                            pass
+                    restored.append(m)
+                elif isinstance(item, Memory):
+                    restored.append(item)
+            return restored
 
         now = datetime.now(timezone.utc)
         result = await db.execute(
@@ -462,14 +488,16 @@ def _rule_based_extraction(user_content: str) -> List[dict]:
 
 async def _llm_based_extraction(
     provider, api_key: str, model: str, user_content: str, assistant_content: str
-) -> List[dict]:
+) -> Optional[List[dict]]:
     """
     LLM-based memory extraction.
 
     Accepts any provider instance that implements .generate().
     The model parameter specifies which model to use for this provider.
-    Returns [] if extraction fails (caller should try next provider or rule-based fallback).
+    Returns None if extraction fails (caller should try next provider or rule-based fallback).
+    Returns [] if the LLM ran but found nothing worth saving.
     """
+
     system_instruction = (
         "You are an AI memory consolidation module.\n"
         "Extract user facts, preferences, goals, interests, and project context from this conversation.\n"
@@ -488,17 +516,21 @@ async def _llm_based_extraction(
     try:
         response = await provider.generate(messages, model=model, api_key=api_key)
         raw_text = response.get("text", "").strip()
-        if raw_text.startswith("```"):
-            raw_text = raw_text.split("```", 1)[1]
-            if raw_text.startswith("json"):
-                raw_text = raw_text[4:]
-            if raw_text.endswith("```"):
-                raw_text = raw_text[:-3]
-            raw_text = raw_text.strip()
+        if "```" in raw_text:
+            match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", raw_text)
+            if match:
+                raw_text = match.group(1).strip()
+            else:
+                raw_text = raw_text.strip("`").strip()
+                if raw_text.startswith("json"):
+                    raw_text = raw_text[4:].strip()
         if raw_text:
             parsed = json.loads(raw_text)
             if isinstance(parsed, list):
                 return parsed
+            elif isinstance(parsed, dict) and "memories" in parsed and isinstance(parsed["memories"], list):
+                return parsed["memories"]
+        return []
     except Exception as exc:
-        logger.error(f"[MemoryService] LLM extraction failed: {exc}")
-    return []
+        logger.warning(f"[MemoryService] LLM extraction via {model} failed: {exc}")
+        return None

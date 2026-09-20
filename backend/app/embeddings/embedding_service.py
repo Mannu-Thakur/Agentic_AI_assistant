@@ -124,11 +124,14 @@ class EmbeddingService:
     """
 
     CANDIDATE_MODELS = [
+        "models/gemini-embedding-001",
+        "models/gemini-embedding-2",
         "models/text-embedding-004",
-        "models/embedding-001",
     ]
 
     MAX_BATCH_SIZE = 50
+    _gemini_failure_cooldown: float = 0.0
+    _GEMINI_COOLDOWN_SECONDS: float = 60.0
 
     @classmethod
     async def _resolve_api_key(cls, api_key: Optional[str] = None) -> Optional[str]:
@@ -194,6 +197,10 @@ class EmbeddingService:
         if not clean_text:
             return [0.0] * 768
 
+        import time as _time
+        if _time.time() < cls._gemini_failure_cooldown:
+            return await cls._get_local_embedding(clean_text)
+
         key_to_use = await cls._resolve_api_key(api_key)
         if not key_to_use:
             logger.info("[EmbeddingService] No Gemini key found; using local neural embedding.")
@@ -218,6 +225,7 @@ class EmbeddingService:
                         response = await client.post(url, json=payload)
 
                     if response.status_code == 200:
+                        cls._gemini_failure_cooldown = 0.0
                         data = response.json()
                         return data["embedding"]["values"]
 
@@ -228,6 +236,7 @@ class EmbeddingService:
 
                     # If project access is denied (403) or unauthenticated (401), immediate fallback
                     if response.status_code in (401, 403):
+                        cls._gemini_failure_cooldown = _time.time() + cls._GEMINI_COOLDOWN_SECONDS
                         logger.warning(
                             f"[EmbeddingService] Gemini API returned HTTP {response.status_code} "
                             f"(project access denied or unauthorized). Seamlessly falling back to local neural embeddings."
@@ -251,6 +260,7 @@ class EmbeddingService:
                     errors[model] = f"Network error ({model}): {exc}"
                     break
 
+        cls._gemini_failure_cooldown = _time.time() + cls._GEMINI_COOLDOWN_SECONDS
         error_details = "; ".join(f"{m} -> {e}" for m, e in errors.items())
         logger.warning(
             f"[EmbeddingService] Gemini embedding API unavailable ({error_details}). "
@@ -274,6 +284,10 @@ class EmbeddingService:
             t.strip() if t and t.strip() else " "
             for t in texts
         ]
+
+        import time as _time
+        if _time.time() < cls._gemini_failure_cooldown:
+            return await cls._get_local_embeddings(sanitized_texts)
 
         key_to_use = await cls._resolve_api_key(api_key)
         if not key_to_use:
@@ -309,6 +323,7 @@ class EmbeddingService:
                             response = await client.post(url, json=payload)
 
                         if response.status_code == 200:
+                            cls._gemini_failure_cooldown = 0.0
                             data = response.json()
                             slice_embeddings = [item["values"] for item in data["embeddings"]]
                             all_embeddings.extend(slice_embeddings)
@@ -322,6 +337,7 @@ class EmbeddingService:
 
                         # If project access is denied (403) or key invalid (401), fallback all chunks to local neural
                         if response.status_code in (401, 403):
+                            cls._gemini_failure_cooldown = _time.time() + cls._GEMINI_COOLDOWN_SECONDS
                             logger.warning(
                                 f"[EmbeddingService] Gemini batch embedding returned HTTP {response.status_code} "
                                 f"(project access denied or unauthorized). Seamlessly falling back to local neural embeddings for all {len(sanitized_texts)} chunks."
@@ -348,6 +364,7 @@ class EmbeddingService:
                     break
 
             if not batch_success:
+                cls._gemini_failure_cooldown = _time.time() + cls._GEMINI_COOLDOWN_SECONDS
                 error_details = "; ".join(f"{m} -> {e}" for m, e in errors.items())
                 logger.warning(
                     f"[EmbeddingService] Gemini batch embedding failed for chunks [{batch_start}:{batch_start+len(batch_slice)}] "

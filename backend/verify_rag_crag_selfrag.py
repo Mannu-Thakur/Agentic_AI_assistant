@@ -219,8 +219,8 @@ async def test_self_rag():
         state_need = make_state(needs_retrieval=True)
         state_skip = make_state(needs_retrieval=False)
         assert route_retrieval(state_need) == "retrieve_context"
-        assert route_retrieval(state_skip) == "grade_documents"
-        results.append(("Self-RAG Conditional Edge (route_retrieval)", True, "Routes correctly to retrieve_context or grade_documents"))
+        assert route_retrieval(state_skip) == "generate_response"
+        results.append(("Self-RAG Conditional Edge (route_retrieval)", True, "Routes correctly to retrieve_context or generate_response"))
     except Exception as e:
         results.append(("Self-RAG Conditional Edge (route_retrieval)", False, str(e)))
 

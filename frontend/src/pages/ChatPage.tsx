@@ -34,7 +34,7 @@ import {
   BookOpen, Share2, Download, FileJson, FileText,
   MoreHorizontal, Archive, FolderClosed, ChevronDown, ChevronUp, Files,
   Settings, LogOut, GitBranch, Link, PenLine, Eye, ExternalLink, Globe,
-  SquarePen, Folder, SquareTerminal
+  SquarePen, Folder, SquareTerminal, BarChart2
 } from 'lucide-react';
 
 
@@ -1053,20 +1053,32 @@ export default function ChatPage() {
         const [loadedChats, loadedMessages] = await Promise.all([chatsPromise, messagesPromise]);
 
         if (!active) return;
-        setChats(loadedChats);
+        // Merge with optimistic chats already in the store so newly created chats don't vanish
+        const currentStoreChats = useChatStore.getState().chats;
+        const chatMap = new Map<string, any>();
+        (loadedChats || []).forEach((c: any) => chatMap.set(c.id, c));
+        currentStoreChats.forEach((c: any) => {
+          if (!chatMap.has(c.id)) chatMap.set(c.id, c);
+        });
+        setChats(Array.from(chatMap.values()));
 
         if (urlChatId) {
           // Hydrate the cache BEFORE setting activeChatId so the effect at line ~993
           // sees hasCachedMessages=true and skips the redundant second fetch
           if (loadedMessages && Array.isArray(loadedMessages)) {
-            const hydratedMsgs = loadedMessages.map((m: import('../types/chat').Message) => ({
-              ...m,
-              imagePreviewUrls:
-                m.images && m.images.length > 0
-                  ? m.images.map((img) => `data:${img.mimeType};base64,${img.base64}`)
-                  : m.imagePreviewUrls,
-            }));
-            setMessagesForChat(urlChatId, hydratedMsgs);
+            const store = useChatStore.getState();
+            const currentCached = store.messageCache[urlChatId] || [];
+            const isStreaming = store.isStreaming;
+            if (!isStreaming && (currentCached.length <= loadedMessages.length || currentCached.length === 0)) {
+              const hydratedMsgs = loadedMessages.map((m: import('../types/chat').Message) => ({
+                ...m,
+                imagePreviewUrls:
+                  m.images && m.images.length > 0
+                    ? m.images.map((img) => `data:${img.mimeType};base64,${img.base64}`)
+                    : m.imagePreviewUrls,
+              }));
+              setMessagesForChat(urlChatId, hydratedMsgs);
+            }
           }
           setActiveChatId(urlChatId);
         }
@@ -1085,6 +1097,7 @@ export default function ChatPage() {
   useEffect(() => {
     const targetChatId = urlChatId || null;
     if (targetChatId !== activeChatId) {
+      if (useChatStore.getState().isStreaming && targetChatId === null) return;
       setActiveChatId(targetChatId);
     }
   }, [urlChatId, activeChatId, setActiveChatId]);
@@ -1394,6 +1407,7 @@ export default function ChatPage() {
         chatId = nc.id;
         skipFetchRef.current = true;
         setActiveChatId(chatId);
+        window.history.replaceState(null, '', `/c/${chatId}`);
         navigate(`/c/${chatId}`, { replace: true });
       } catch (err) {
         creatingChatRef.current = false;
@@ -2417,6 +2431,14 @@ export default function ChatPage() {
                     </span>
                   )}
                 </button>
+
+                <button
+                  onClick={() => navigate('/analytics')}
+                  className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-medium text-foreground-2 hover:text-foreground hover:bg-surface-2 transition-all duration-150 text-left"
+                >
+                  <BarChart2 className="w-4 h-4 text-foreground-3" />
+                  <span>Analytics</span>
+                </button>
               </div>
             </div>
 
@@ -2531,6 +2553,16 @@ export default function ChatPage() {
                 }`}
               >
                 <SquareTerminal className="w-4 h-4" />
+              </button>
+            </Tooltip>
+
+            <Tooltip content="Analytics" side="right">
+              <button
+                onClick={() => navigate('/analytics')}
+                aria-label="Analytics"
+                className="w-9 h-9 rounded-xl flex items-center justify-center text-foreground-3 hover:text-foreground hover:bg-surface-2 transition-all duration-150"
+              >
+                <BarChart2 className="w-4 h-4" />
               </button>
             </Tooltip>
           </div>

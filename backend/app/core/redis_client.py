@@ -38,11 +38,18 @@ logger = logging.getLogger("core.redis_client")
 # Stores (value_json, expire_at) where expire_at is a monotonic timestamp.
 # expire_at == None means no expiry.
 _MEM_STORE: Dict[str, Tuple[str, Optional[float]]] = {}
-_MEM_LOCK = asyncio.Lock()
+_MEM_LOCK: Optional[asyncio.Lock] = None
+
+
+def _get_mem_lock() -> asyncio.Lock:
+    global _MEM_LOCK
+    if _MEM_LOCK is None:
+        _MEM_LOCK = asyncio.Lock()
+    return _MEM_LOCK
 
 
 async def _mem_get(key: str) -> Optional[Any]:
-    async with _MEM_LOCK:
+    async with _get_mem_lock():
         entry = _MEM_STORE.get(key)
         if entry is None:
             return None
@@ -58,12 +65,12 @@ async def _mem_get(key: str) -> Optional[Any]:
 
 async def _mem_set(key: str, value: Any, ttl_seconds: int = 300) -> None:
     expire_at = time.monotonic() + ttl_seconds if ttl_seconds > 0 else None
-    async with _MEM_LOCK:
+    async with _get_mem_lock():
         _MEM_STORE[key] = (json.dumps(value, default=str), expire_at)
 
 
 async def _mem_delete(key: str) -> bool:
-    async with _MEM_LOCK:
+    async with _get_mem_lock():
         existed = key in _MEM_STORE
         _MEM_STORE.pop(key, None)
         return existed
@@ -72,7 +79,7 @@ async def _mem_delete(key: str) -> bool:
 async def _mem_delete_pattern(pattern: str) -> int:
     """Delete all in-memory keys matching a simple glob pattern (only * wildcard)."""
     import fnmatch
-    async with _MEM_LOCK:
+    async with _get_mem_lock():
         matching = [k for k in list(_MEM_STORE.keys()) if fnmatch.fnmatch(k, pattern)]
         for k in matching:
             _MEM_STORE.pop(k, None)
@@ -80,7 +87,7 @@ async def _mem_delete_pattern(pattern: str) -> int:
 
 
 async def _mem_incr(key: str, ttl_seconds: int = 60) -> int:
-    async with _MEM_LOCK:
+    async with _get_mem_lock():
         entry = _MEM_STORE.get(key)
         now = time.monotonic()
         if entry is not None:
@@ -244,14 +251,19 @@ async def rate_limit_check(key: str, limit: int, window_seconds: int = 60) -> bo
     Returns True  when the caller is WITHIN the limit (request allowed).
     Returns False when the limit has been exceeded.
 
-    Uses Redis INCR + EXPIRE.  Falls back to in-memory INCR so rate limiting
-    is ALWAYS enforced even without a running Redis server.
+    Uses Redis INCR — EXPIRE is only set when the counter is first created (value == 1)
+    so the window TTL is never reset by subsequent increments within the same window.
+    Falls back to in-memory INCR so rate limiting is ALWAYS enforced even without Redis.
     """
     try:
         r = await get_redis()
         if r is not None:
+            # BUG-4 FIX: Use a pipeline but only set EXPIRE when count==1 (new key).
+            # Setting EXPIRE unconditionally in the same pipeline would reset the
+            # sliding window on every hit, making the key immortal under load.
             current = await r.incr(key)
             if current == 1:
+                # First request in this window — set TTL now
                 await r.expire(key, window_seconds)
             return current <= limit
     except Exception as e:

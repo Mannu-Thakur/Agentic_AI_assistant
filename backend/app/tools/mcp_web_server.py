@@ -55,7 +55,12 @@ def handle_web_search(query: str, max_results: int = 5) -> str:
             keys["serpapi"] = settings.SERPAPI_API_KEY
         if getattr(settings, "EXA_API_KEY", None):
             keys["exa"] = settings.EXA_API_KEY
-        results = asyncio.run(unified_web_search(query, api_keys=keys, max_results=max_results))
+        try:
+            results = asyncio.run(unified_web_search(query, api_keys=keys, max_results=max_results))
+        except RuntimeError:
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                results = executor.submit(asyncio.run, unified_web_search(query, api_keys=keys, max_results=max_results)).result()
         if results:
             return format_for_llm(results[:max_results])
     except Exception as exc:

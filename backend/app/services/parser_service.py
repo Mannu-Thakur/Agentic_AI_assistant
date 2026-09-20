@@ -276,9 +276,13 @@ class ParserService:
     @staticmethod
     def extract_text_docx(file_path: str) -> str:
         """Extract text from a Word document using python-docx."""
-        import docx
-        doc = docx.Document(file_path)
-        return "\n".join(p.text for p in doc.paragraphs)
+        try:
+            import docx
+            doc = docx.Document(file_path)
+            return "\n".join(p.text for p in doc.paragraphs)
+        except Exception as e:
+            logger.error(f"[Parser] Failed to extract docx text from {file_path}: {e}")
+            raise ValueError(f"Could not read DOCX document: {e}")
 
     # ── XLSX ─────────────────────────────────────────────────────────────────
 
@@ -288,44 +292,52 @@ class ParserService:
         Extract text from an Excel sheet in a table-preserving TSV-like format.
         Headers are separated from data rows by a dashed separator.
         """
-        import openpyxl
-        wb   = openpyxl.load_workbook(file_path, data_only=True)
-        parts: List[str] = []
+        try:
+            import openpyxl
+            wb   = openpyxl.load_workbook(file_path, data_only=True)
+            parts: List[str] = []
 
-        for sheet in wb.worksheets:
-            parts.append(f"=== Sheet: {sheet.title} ===")
-            rows = list(sheet.iter_rows(values_only=True))
-            if not rows:
-                continue
+            for sheet in wb.worksheets:
+                parts.append(f"=== Sheet: {sheet.title} ===")
+                rows = list(sheet.iter_rows(values_only=True))
+                if not rows:
+                    continue
 
-            # Attempt to preserve table structure: header row + data rows
-            header = " | ".join(str(c) if c is not None else "" for c in rows[0])
-            parts.append(header)
-            parts.append("-" * max(len(header), 20))
+                # Attempt to preserve table structure: header row + data rows
+                header = " | ".join(str(c) if c is not None else "" for c in rows[0])
+                parts.append(header)
+                parts.append("-" * max(len(header), 20))
 
-            for row in rows[1:]:
-                row_str = " | ".join(str(c) if c is not None else "" for c in row)
-                if row_str.strip().replace("|", "").strip():
-                    parts.append(row_str)
+                for row in rows[1:]:
+                    row_str = " | ".join(str(c) if c is not None else "" for c in row)
+                    if row_str.strip().replace("|", "").strip():
+                        parts.append(row_str)
 
-        return "\n".join(parts)
+            return "\n".join(parts)
+        except Exception as e:
+            logger.error(f"[Parser] Failed to extract xlsx text from {file_path}: {e}")
+            raise ValueError(f"Could not read XLSX spreadsheet: {e}")
 
     # ── PPTX ─────────────────────────────────────────────────────────────────
 
     @staticmethod
     def extract_text_pptx(file_path: str) -> str:
         """Extract text from a PowerPoint, injecting [Slide N] markers."""
-        import pptx
-        prs   = pptx.Presentation(file_path)
-        parts: List[str] = []
+        try:
+            import pptx
+            prs   = pptx.Presentation(file_path)
+            parts: List[str] = []
 
-        for i, slide in enumerate(prs.slides, start=1):
-            parts.append(f"\n[Slide {i}]")
-            for shape in slide.shapes:
-                if hasattr(shape, "text") and shape.text.strip():
-                    parts.append(shape.text)
+            for i, slide in enumerate(prs.slides, start=1):
+                parts.append(f"\n[Slide {i}]")
+                for shape in slide.shapes:
+                    if hasattr(shape, "text") and shape.text.strip():
+                        parts.append(shape.text)
 
-        return "\n".join(parts)
+            return "\n".join(parts)
+        except Exception as e:
+            logger.error(f"[Parser] Failed to extract pptx text from {file_path}: {e}")
+            raise ValueError(f"Could not read PPTX presentation: {e}")
 
     # ── OCR (images, scans, invoices, receipts) ───────────────────────────────
 
@@ -933,8 +945,8 @@ class ParserService:
             ext = os.path.splitext(file_path)[1].lower()
 
             # ── FIX-10: Delete any existing chunks before re-indexing ──────────
+            vector_store = VectorStore()
             try:
-                vector_store = VectorStore()
                 await vector_store.delete_document_chunks(document_id)
             except Exception as del_exc:
                 # Log but don't abort — worst case we get a small number of stale chunks
@@ -1033,6 +1045,8 @@ class ParserService:
                     await db.commit()
             raise
         except BaseException as exc:
+            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                raise
             logger.error(f"[Parser] Failed to ingest document {document_id}: {exc}")
             logger.error(traceback.format_exc())
             async with AsyncSessionLocal() as db:

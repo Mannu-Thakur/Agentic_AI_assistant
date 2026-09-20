@@ -52,10 +52,13 @@ def _build_sync_engine():
 def _build_async_engine():
     url = settings.ASYNC_DATABASE_URL
     if _is_sqlite(url):
+        # BUG-5 FIX: aiosqlite does NOT accept check_same_thread — it manages
+        # thread-safety internally. Only the stdlib sqlite3 sync driver requires it.
+        # Passing it here causes TypeError on some aiosqlite versions.
         return create_async_engine(
             url,
             pool_pre_ping=True,
-            connect_args={"check_same_thread": False, "timeout": 30},
+            connect_args={"timeout": 30},
         )
     # PostgreSQL: full production pool configuration
     # For asyncpg, query params like sslmode=require or channel_binding=require
@@ -144,6 +147,7 @@ def run_schema_migrations() -> None:
     """
     from sqlalchemy import inspect
     import app.models  # Ensure model registries are imported
+    from app.models.evaluation import EvalResult
 
     try:
         Base.metadata.create_all(bind=engine)
@@ -153,7 +157,7 @@ def run_schema_migrations() -> None:
         if inspector.has_table("memories"):
             existing_memories_cols = {col["name"] for col in inspector.get_columns("memories")}
             new_memories_cols = [
-                ("expires_at",  "DATETIME"),
+                ("expires_at",  "TIMESTAMP"),
                 ("project_id",  "VARCHAR(128)"),
                 ("session_id",  "VARCHAR(128)"),
                 ("confidence",  "FLOAT DEFAULT 1.0"),
@@ -220,7 +224,7 @@ def run_schema_migrations() -> None:
                     event_type VARCHAR(50) NOT NULL,
                     details TEXT,
                     ip_address VARCHAR(45),
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE SET NULL
                 )
                 """
@@ -245,14 +249,14 @@ def run_schema_migrations() -> None:
                             provider_name VARCHAR(50) NOT NULL,
                             encrypted_api_key VARCHAR(500),
                             status VARCHAR(50) DEFAULT 'UNCONFIGURED' NOT NULL,
-                            verified_at DATETIME,
-                            last_checked DATETIME,
+                            verified_at TIMESTAMP,
+                            last_checked TIMESTAMP,
                             last_error TEXT,
                             available_models TEXT,
                             quota VARCHAR(255),
                             organization VARCHAR(255),
-                            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                            updated_at DATETIME,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP,
                             FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
                         )
                     """))
@@ -283,13 +287,13 @@ def run_schema_migrations() -> None:
                 # Add other new fields
                 new_cols = [
                     ("status", "VARCHAR(50) DEFAULT 'UNCONFIGURED' NOT NULL"),
-                    ("verified_at", "DATETIME"),
-                    ("last_checked", "DATETIME"),
+                    ("verified_at", "TIMESTAMP"),
+                    ("last_checked", "TIMESTAMP"),
                     ("last_error", "TEXT"),
                     ("available_models", "TEXT"),  # JSON string
                     ("quota", "VARCHAR(255)"),
                     ("organization", "VARCHAR(255)"),
-                    ("updated_at", "DATETIME"),
+                    ("updated_at", "TIMESTAMP"),
                 ]
                 with engine.begin() as conn:
                     for col_name, col_type in new_cols:
@@ -318,15 +322,15 @@ def run_schema_migrations() -> None:
             pref_cols = [
                 ("temperature", "FLOAT DEFAULT 0.7"),
                 ("max_tokens", "INTEGER DEFAULT 2048"),
-                ("streaming", "BOOLEAN DEFAULT 1"),
+                ("streaming", "BOOLEAN DEFAULT TRUE"),
                 ("font_size", "VARCHAR(20) DEFAULT 'md'"),
-                ("compact_mode", "BOOLEAN DEFAULT 0"),
+                ("compact_mode", "BOOLEAN DEFAULT FALSE"),
                 ("contrast_mode", "VARCHAR(20) DEFAULT 'normal'"),
                 ("accent_color", "VARCHAR(20) DEFAULT 'blue'"),
                 ("language", "VARCHAR(20) DEFAULT 'en'"),
-                ("higher_intelligence", "BOOLEAN DEFAULT 1"),
-                ("enable_dictation", "BOOLEAN DEFAULT 1"),
-                ("improve_model", "BOOLEAN DEFAULT 1"),
+                ("higher_intelligence", "BOOLEAN DEFAULT TRUE"),
+                ("enable_dictation", "BOOLEAN DEFAULT TRUE"),
+                ("improve_model", "BOOLEAN DEFAULT TRUE"),
                 ("features", "TEXT"),
             ]
             with engine.begin() as conn:
@@ -336,4 +340,21 @@ def run_schema_migrations() -> None:
                         logger.info(f"[schema] Added column user_preferences.{col_name}")
 
     except Exception as exc:
-        logger.warning(f"[schema] Migration warning: {exc}")
+        # MED-5 FIX: distinguish non-fatal "column already exists" warnings from
+        # fatal errors (DB unreachable, permission denied).  Swallowing ALL
+        # exceptions here lets the server start with missing tables, causing a
+        # cascade of confusing 500s that are very hard to diagnose.
+        _msg = str(exc).lower()
+        _non_fatal_hints = (
+            "duplicate column",      # SQLite: column already exists
+            "already exists",        # PostgreSQL
+            "no such table",         # inspection on empty db (first run)
+            "operational error",     # transient; create_all will retry
+        )
+        if any(hint in _msg for hint in _non_fatal_hints):
+            logger.warning(f"[schema] Non-fatal migration note: {exc}")
+        else:
+            # Fatal: DB connection refused, permission denied, etc.
+            logger.error(f"[schema] Fatal migration error — server may not function correctly: {exc}")
+            raise
+

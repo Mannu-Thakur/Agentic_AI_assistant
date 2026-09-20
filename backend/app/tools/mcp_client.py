@@ -234,6 +234,11 @@ class McpStdioClient:
 
         if self.proc:
             try:
+                if self.proc.stdin and not self.proc.stdin.is_closing():
+                    try:
+                        self.proc.stdin.close()
+                    except Exception:
+                        pass
                 pid = self.proc.pid
                 if os.name == "nt" and pid:
                     import subprocess
@@ -244,12 +249,22 @@ class McpStdioClient:
                     )
                 else:
                     self.proc.terminate()
-                    await asyncio.wait_for(self.proc.wait(), timeout=2.0)
-            except Exception:
                 try:
-                    self.proc.kill()
+                    await asyncio.wait_for(self.proc.wait(), timeout=2.0)
                 except Exception:
-                    pass
+                    try:
+                        self.proc.kill()
+                        await asyncio.wait_for(self.proc.wait(), timeout=1.0)
+                    except Exception:
+                        pass
+                transport = getattr(self.proc, "_transport", None)
+                if transport and not transport.is_closing():
+                    try:
+                        transport.close()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
             self.proc = None
 
 
@@ -497,8 +512,13 @@ class McpHttpClient:
 
     async def close(self):
         self.is_connected = False
-        if self._client and not self._client.is_closed:
-            await self._client.aclose()
-            self._client = None
+        if self._client:
+            try:
+                if not self._client.is_closed:
+                    await self._client.aclose()
+            except Exception:
+                pass
+            finally:
+                self._client = None
 
 

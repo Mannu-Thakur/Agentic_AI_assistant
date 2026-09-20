@@ -9,6 +9,26 @@ function safeSetItem(key: string, val: string) {
   }
 }
 
+// BUG-13 FIX: Cap the in-memory message cache at MAX_CACHED_CHATS entries.
+// Without eviction, each chat switch accumulates serialized message history
+// indefinitely, eventually OOM-ing the browser tab in long sessions.
+const MAX_CACHED_CHATS = 10;
+
+function evictMessageCache(
+  cache: Record<string, any[]>,
+  activeId: string | null
+): Record<string, any[]> {
+  const keys = Object.keys(cache);
+  if (keys.length <= MAX_CACHED_CHATS) return cache;
+  // Keep the active chat and the N-1 most recently added keys
+  const evicted = { ...cache };
+  const toRemove = keys
+    .filter((k) => k !== activeId)
+    .slice(0, keys.length - MAX_CACHED_CHATS);
+  toRemove.forEach((k) => delete evicted[k]);
+  return evicted;
+}
+
 export interface Provider {
   id: string;
   status: 'VERIFIED' | 'INVALID' | 'UNCONFIGURED' | 'VERIFYING' | 'ERROR' | string;
@@ -125,18 +145,22 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   setMessages: (messages) => {
     const activeId = get().activeChatId;
-    set((state) => ({
-      messages,
-      messageCache: activeId
-        ? { ...state.messageCache, [activeId]: messages }
-        : state.messageCache,
-    }));
+    set((state) => {
+      const nextCache = activeId
+        ? evictMessageCache({ ...state.messageCache, [activeId]: messages }, activeId)
+        : state.messageCache;
+      return { messages, messageCache: nextCache };
+    });
   },
 
   setMessagesForChat: (chatId, messages) => {
     set((state) => {
+      const nextCache = evictMessageCache(
+        { ...state.messageCache, [chatId]: messages },
+        state.activeChatId
+      );
       return {
-        messageCache: { ...state.messageCache, [chatId]: messages },
+        messageCache: nextCache,
         messages: state.activeChatId === chatId ? messages : state.messages,
       };
     });
@@ -219,12 +243,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   addMessage: (msg) => set((state) => {
     const nextMsgs = [...state.messages, msg];
     const activeId = state.activeChatId || (msg.chat_id && !msg.chat_id.startsWith('temp-') ? msg.chat_id : null);
-    return {
-      messages: nextMsgs,
-      messageCache: activeId
-        ? { ...state.messageCache, [activeId]: nextMsgs }
-        : state.messageCache,
-    };
+    const nextCache = activeId
+      ? evictMessageCache({ ...state.messageCache, [activeId]: nextMsgs }, activeId)
+      : state.messageCache;
+    return { messages: nextMsgs, messageCache: nextCache };
   }),
 
   updateLastMessageContent: (content) => set((state) => {

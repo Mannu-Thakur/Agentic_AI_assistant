@@ -59,7 +59,12 @@ mock_user = UserOut(
     is_admin=False,
     created_at=datetime.utcnow()
 )
-app.dependency_overrides[get_current_user] = lambda: mock_user
+@pytest.fixture(autouse=True)
+def override_auth():
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    yield
+    app.dependency_overrides.pop(get_current_user, None)
+
 client = TestClient(app)
 
 

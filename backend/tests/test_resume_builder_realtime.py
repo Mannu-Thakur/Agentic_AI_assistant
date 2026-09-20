@@ -15,6 +15,7 @@ Tests every endpoint and subsystem in real time:
 import os
 import sys
 import tempfile
+import pytest
 from datetime import datetime
 from fastapi.testclient import TestClient
 
@@ -35,7 +36,11 @@ mock_user = UserOut(
     created_at=datetime.utcnow()
 )
 
-app.dependency_overrides[get_current_user] = lambda: mock_user
+@pytest.fixture(autouse=True)
+def override_auth():
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    yield
+    app.dependency_overrides.pop(get_current_user, None)
 
 client = TestClient(app)
 

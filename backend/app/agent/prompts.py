@@ -473,6 +473,54 @@ HAS ATTACHED IMAGES: {has_images}
    multiple tools simultaneously across completely different domains.
    ✓ "Search the web for AI trends and compare them with my uploaded research paper"
 
+9. PROGRAMMING
+   Writing, debugging, or optimizing code or software development tasks.
+   ✓ "Write a Python function to parse CSV files safely"
+
+10. MATH
+   Pure mathematical calculations, algebra, calculus, or arithmetic evaluation.
+   ✓ "What is the square root of 529 plus 14 * 8?"
+
+11. FINANCE
+   Personal spending analysis, expense summaries, budget queries, or monetary totals.
+   ✓ "What is my total spending on groceries for this month?"
+
+12. NEWS
+   Breaking news, journalism, press releases, or recent developments worldwide.
+   ✓ "What is the latest news regarding AI chip regulations?"
+
+13. CURRENT_EVENTS
+   Ongoing real-time world events, recent international summits, elections, or public figures.
+   ✓ "What are the latest developments in the global climate summit?"
+
+14. PDF_QA
+   Questions explicitly asking about or querying an uploaded PDF document.
+   ✓ "Summarize page 4 of the uploaded quarterly report PDF"
+
+15. DATABASE
+   SQL queries, schema design, database indexing, or database management questions.
+   ✓ "Write an optimized SQL query to find duplicate user records"
+
+16. SUMMARIZATION
+   Direct, explicit requests to summarize provided or long texts, articles, or transcripts.
+   ✓ "Summarize the following article into 3 key takeaways"
+
+17. TRANSLATION
+   Direct requests to translate text between languages or transliterate scripts.
+   ✓ "Translate this greeting into French, German, and Japanese"
+
+18. REASONING
+   Complex logic puzzles, deductive reasoning, riddles, or step-by-step proofs.
+   ✓ "Solve this riddle step by step: A farmer needs to cross a river with a wolf..."
+
+19. LONG_CONTEXT
+   Deep analytical synthesis requiring understanding of large texts or documents.
+   ✓ "Analyze the entire chapter and list all character relationship shifts"
+
+20. MULTI_STEP
+   Tasks explicitly requiring sequential multi-phase problem solving across multiple distinct steps.
+   ✓ "First calculate my total expenses, then search online for cheaper alternatives, and draft an email"
+
 ════════════════════════════════════════════════════════
  is_private_doc_query RULES
 ════════════════════════════════════════════════════════
@@ -482,12 +530,12 @@ personal projects, or private data. General public information is NOT private.
 ════════════════════════════════════════════════════════
  CRITICAL RULE FOR REAL-WORLD FACTS & ENTITIES
 ════════════════════════════════════════════════════════
-- Any query about real-world people, athletes, organizations, protests, events, news, or current facts → MUST BE CLASSIFIED AS WEB_SEARCH.
+- Any query about real-world people, athletes, organizations, protests, events, news, or current facts → MUST BE CLASSIFIED AS WEB_SEARCH, NEWS, or CURRENT_EVENTS.
 - This ensures live web verification and prevents outdated or hallucinated answers.
 
 Reply with ONLY this JSON object (no markdown, no extra text):
 {{
-  "intent": "<MEMORY_WRITE | NORMAL_CHAT | WEB_SEARCH | CODE_EXECUTION | MCP_TOOL | DOCUMENT_QA | VISION | COMPLEX>",
+  "intent": "<MEMORY_WRITE | NORMAL_CHAT | WEB_SEARCH | CODE_EXECUTION | MCP_TOOL | DOCUMENT_QA | VISION | COMPLEX | PROGRAMMING | MATH | FINANCE | NEWS | CURRENT_EVENTS | PDF_QA | DATABASE | SUMMARIZATION | TRANSLATION | REASONING | LONG_CONTEXT | MULTI_STEP>",
   "is_private_doc_query": <true|false>,
   "memory_content": "<extracted fact if MEMORY_WRITE, else null>",
   "memory_category": "<fact|preference|goal|topic if MEMORY_WRITE, else null>",

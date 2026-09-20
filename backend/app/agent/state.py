@@ -176,3 +176,17 @@ class AgentState(TypedDict):
     client_time: Optional[str]
     client_location: Optional[str]
 
+    # ── Knowledge Graph / GraphRAG ────────────────────────────────────────────
+    # Graph evidence retrieved from Neo4j for this query
+    graph_evidence: Optional[List[Dict[str, Any]]]
+    # Entities extracted from the graph context
+    graph_entities: Optional[List[str]]
+    # Whether graph retrieval was attempted
+    graph_retrieval_attempted: bool
+    # Number of graph evidence items retrieved
+    graph_evidence_count: int
+
+    # ── Intelligent Routing ───────────────────────────────────────────────────
+    # Tier selected by the model router: "slm" | "llm-medium" | "llm-strong" | "unknown"
+    model_tier: Optional[str]
+

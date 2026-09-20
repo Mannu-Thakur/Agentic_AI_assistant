@@ -1,5 +1,6 @@
 import json
 from typing import List, Dict, Any, Optional
+from datetime import datetime, timezone
 from sqlalchemy import select, delete, desc, func
 import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -129,7 +130,7 @@ class ChatService:
     chat_res = await db.execute(select(Chat).where(Chat.id == chat_id))
     chat = chat_res.scalar_one_or_none()
     if chat:
-      chat.updated_at = func.now()
+      chat.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(message)
     return message
@@ -162,14 +163,19 @@ class ChatService:
       ref_msg = ref.scalar_one_or_none()
       if not ref_msg:
         return 0
+      # NEW-HIGH-3 FIX: Use >= (not >) so messages with the exact same created_at
+      # timestamp as the parent (possible under SQLite millisecond resolution) are
+      # also deleted. Exclude the parent itself by ID to avoid deleting it too.
       result = await db.execute(
           delete(Message).where(
               Message.chat_id == chat_id,
-              Message.created_at > ref_msg.created_at,
+              Message.created_at >= ref_msg.created_at,
+              Message.id != parent_message_id,
           )
       )
     await db.commit()
     return result.rowcount
+
 
   @staticmethod
   async def delete_single_message(
@@ -197,16 +203,24 @@ class ChatService:
       for m in all_after:
         if m.id == target.id:
           continue
+        # NEW-MED-4 FIX: Stop at the next *different* user message — only collect
+        # the assistant messages that form the direct reply to the deleted message.
+        # The old condition `m.role == "assistant" and not m.parent_id` was too broad:
+        # it would match ANY parentless assistant message, including ones much later
+        # in the conversation that happen to have no parent_id set.
+        if m.role == "user":
+          break
+        # Only include the assistant reply if it directly references this message
+        # OR is the immediate assistant turn right after it (no parent tracking).
         if m.parent_id == target.id or m.role == "assistant":
           ids_to_delete.append(m.id)
-        if m.role == "user" and m.id != target.id:
-          break
 
     result = await db.execute(
         delete(Message).where(Message.id.in_(ids_to_delete))
     )
     await db.commit()
     return result.rowcount
+
 
 
   @staticmethod
@@ -218,11 +232,10 @@ class ChatService:
         select(Chat).where(Chat.id == chat_id, Chat.user_id == user_id)
     )
     chat = result.scalar_one_or_none()
-    if not chat:
-      return None
-    chat.title = title[:100].strip() or "New Chat"
-    await db.commit()
-    await db.refresh(chat)
+    if chat:
+      chat.title = title
+      await db.commit()
+      await db.refresh(chat)
     return chat
 
   @staticmethod
@@ -236,6 +249,12 @@ class ChatService:
 
   @staticmethod
   async def delete_all_chats(db: AsyncSession, user_id: str) -> int:
+    """Delete all chats belonging to a user (and cascades messages/shares)."""
+    chats_res = await db.execute(select(Chat.id).where(Chat.user_id == user_id))
+    chat_ids = chats_res.scalars().all()
+    if not chat_ids:
+      return 0
+
     chat_ids_subquery = select(Chat.id).where(Chat.user_id == user_id)
     await db.execute(delete(SharedLink).where(SharedLink.chat_id.in_(chat_ids_subquery)))
     await db.execute(delete(Message).where(Message.chat_id.in_(chat_ids_subquery)))
@@ -245,8 +264,14 @@ class ChatService:
 
   @staticmethod
   async def get_user_memories(db: AsyncSession, user_id: str) -> List[Dict[str, Any]]:
+    now = datetime.now(timezone.utc)
     result = await db.execute(
-        select(Memory).where(Memory.user_id == user_id).order_by(desc(Memory.importance_score))
+        select(Memory)
+        .where(
+            Memory.user_id == user_id,
+            (Memory.expires_at.is_(None)) | (Memory.expires_at > now),
+        )
+        .order_by(desc(Memory.importance_score))
     )
     memories_list = result.scalars().all()
     return [

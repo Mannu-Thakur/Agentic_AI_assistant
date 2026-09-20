@@ -136,7 +136,10 @@ class CrossEncoderReranker:
         candidates = chunks[:10]   # match the existing cap of 10
 
         try:
-            loop = asyncio.get_event_loop()
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = asyncio.get_event_loop()
             scored = await loop.run_in_executor(
                 None, self._predict_sync, query, candidates
             )

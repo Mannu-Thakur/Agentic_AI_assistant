@@ -522,7 +522,7 @@ class GeminiProvider(BaseLLMProvider):
                                 raise Exception(block_msg)
 
                             try:
-                                parts = candidate["content"]["parts"]
+                                parts = (candidate.get("content") or {}).get("parts") or []
                                 for part in parts:
                                     if "text" in part:
                                         chunk_text  = part["text"]
@@ -534,7 +534,7 @@ class GeminiProvider(BaseLLMProvider):
                                             "name":      fc["name"],
                                             "arguments": fc.get("args", {}),
                                         })
-                            except (KeyError, IndexError):
+                            except (KeyError, IndexError, TypeError, AttributeError):
                                 continue
 
                         break  # successful stream completed

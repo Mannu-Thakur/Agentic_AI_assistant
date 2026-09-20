@@ -52,3 +52,23 @@ class Memory(Base):
 
     # Relationships
     user = relationship("User", back_populates="memories")
+
+    def __getitem__(self, key: str):
+        return getattr(self, key)
+
+    def get(self, key: str, default=None):
+        return getattr(self, key, default)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "category": self.category,
+            "content": self.content,
+            "importance_score": self.importance_score,
+            "project_id": self.project_id,
+            "session_id": self.session_id,
+            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
+            "confidence": self.confidence,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }

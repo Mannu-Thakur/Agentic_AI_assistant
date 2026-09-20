@@ -95,23 +95,26 @@ class DocumentService:
         if not doc:
             return False
 
-        # 1. Clean up physical file on disk
-        if os.path.exists(doc.storage_path):
-            try:
-                os.remove(doc.storage_path)
-            except Exception as e:
-                logger.error(f"Failed to delete file {doc.storage_path} from disk: {str(e)}")
+        storage_path = doc.storage_path
 
-        # 2. Clean up vectorized chunks in ChromaDB and invalidate user BM25 index
+        # 1. Clean up vectorized chunks in ChromaDB and invalidate user BM25 index
         try:
             vector_store = VectorStore()
             await vector_store.delete_document_chunks(doc.id, user_id=user_id)
         except Exception as e:
             logger.error(f"Failed to delete ChromaDB chunks for document {doc.id}: {str(e)}")
 
-        # 3. Remove relational entry
+        # 2. Remove relational database entry first
         await db.delete(doc)
         await db.commit()
+
+        # 3. Clean up physical file on disk only after DB commit succeeds
+        if storage_path and os.path.exists(storage_path):
+            try:
+                os.remove(storage_path)
+            except Exception as e:
+                logger.error(f"Failed to delete file {storage_path} from disk: {str(e)}")
+
         # Invalidate routing signal cache so deleted filename is no longer a signal
         invalidate_user_signals(user_id)
         return True

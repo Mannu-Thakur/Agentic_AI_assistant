@@ -49,10 +49,17 @@ import ast
 def _check_dangerous(code: str) -> Optional[str]:
     """AST-level analysis to detect obfuscated dynamic imports, dangerous reflection, and system calls."""
     hits = set()
+    # NEW-LOW-1 FIX: Use word-boundary regex instead of bare `m in code` substring
+    # search. The old check matched "os" inside words like "cosmos", "awesome",
+    # or inside string literals / comments, generating noisy false-positive warnings.
+    import re as _re
     for m in _DANGEROUS_MODULES:
-        if m in code:
+        # \b is a word boundary; escape dots in module names like "os.system"
+        pattern = r"\b" + _re.escape(m).replace(r"\.", r"[.\s]*") + r"\b"
+        if _re.search(pattern, code):
             hits.add(m)
     try:
+
         parsed = ast.parse(code)
         for node in ast.walk(parsed):
             # Detect dynamic imports & dangerous calls like getattr/eval/exec
@@ -239,9 +246,20 @@ async def python_sandbox(code: str) -> str:
     finally:
         if 'proc' in locals() and proc is not None:
             try:
+                if proc.stdin and not proc.stdin.is_closing():
+                    try:
+                        proc.stdin.close()
+                    except Exception:
+                        pass
                 if proc.returncode is None:
                     proc.kill()
                     await proc.wait()
+                transport = getattr(proc, "_transport", None)
+                if transport and not transport.is_closing():
+                    try:
+                        transport.close()
+                    except Exception:
+                        pass
             except Exception:
                 pass
         if os.path.exists(temp_path):

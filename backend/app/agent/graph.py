@@ -78,10 +78,18 @@ from app.agent.prompts import (
     INTENT_CODE_EXECUTION,
     INTENT_MCP_TOOL,
     INTENT_COMPLEX,
+    INTENT_PROGRAMMING,
     INTENT_MATH,
     INTENT_FINANCE,
     INTENT_NEWS,
     INTENT_CURRENT_EVENTS,
+    INTENT_PDF_QA,
+    INTENT_DATABASE,
+    INTENT_SUMMARIZATION,
+    INTENT_TRANSLATION,
+    INTENT_REASONING,
+    INTENT_LONG_CONTEXT,
+    INTENT_MULTI_STEP,
 )
 
 MAX_ITERATIONS = 1  # maximum reflection-driven regeneration passes
@@ -116,6 +124,11 @@ def route_after_classify(state: AgentState) -> str:
         INTENT_NORMAL_CHAT,
         INTENT_DOCUMENT_QA,
         INTENT_VISION,
+        INTENT_PDF_QA,
+        INTENT_SUMMARIZATION,
+        INTENT_TRANSLATION,
+        INTENT_DATABASE,
+        INTENT_LONG_CONTEXT,
     ) or (images and intent in (INTENT_WEB_SEARCH, INTENT_NEWS, INTENT_CURRENT_EVENTS)):
         return "check_retrieval"
     return "plan"

@@ -28,7 +28,10 @@ def _run_sync(fn, /, *args, **kwargs):
     Run a synchronous callable in the default ThreadPoolExecutor so that
     blocking ChromaDB I/O does not stall the async event loop.
     """
-    loop = asyncio.get_event_loop()
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.get_event_loop()
     return loop.run_in_executor(None, functools.partial(fn, *args, **kwargs))
 
 import chromadb

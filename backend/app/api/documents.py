@@ -24,6 +24,20 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/documents", tags=["RAG Documents"])
 
+# CRIT-1 FIX: Strong references to fire-and-forget tasks prevent Python's GC
+# from destroying them before they complete. Tasks add themselves on creation
+# and remove themselves via a done-callback when they finish.
+_background_tasks: set = set()
+
+
+def _make_background_task(coro) -> asyncio.Task:
+    """Create an asyncio task and anchor it in _background_tasks to prevent GC."""
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
+
+
 ALLOWED_MIME_TYPES = {
     ".pdf":  ["application/pdf"],
     ".docx": ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
@@ -307,7 +321,6 @@ async def upload_document(
                 detail="File content contains disallowed prompt injection patterns.",
             )
 
-    await file.seek(0)
 
     # ── 9. Filename sanitisation ─────────────────────────────────────────────
     temp_name = filename.replace("..", "").replace("/", "").replace("\\", "")
@@ -359,16 +372,38 @@ async def upload_document(
         if not user_api_key:
             user_api_key = settings.GEMINI_API_KEY or None
 
-        asyncio.create_task(
-            ParserService.process_document_ingestion(
+        async def _ingest_and_extract():
+            await ParserService.process_document_ingestion(
                 document_id=doc.id,
                 user_id=current_user.id,
                 file_path=storage_path,
                 filename=sanitized_filename,
                 file_type=file_type_cleaned,
-                api_key=user_api_key,  # FIX-12: pass real key for semantic embeddings
+                api_key=user_api_key,
             )
-        )
+            # ── GraphRAG: async entity extraction (non-blocking) ──────────────────────
+            if settings.GRAPHRAG_ENABLED:
+                try:
+                    from app.graph.neo4j_client import neo4j_client
+                    from app.graph.extraction_pipeline import run_extraction_pipeline
+                    if neo4j_client.is_available:
+                        # Get chunks from vector store for this document
+                        from app.retrieval.vector_store import VectorStore
+                        vs = VectorStore()
+                        coll = vs.get_collection()
+                        chunk_data = coll.get(where={"doc_id": str(doc.id)}, include=["documents", "ids"])
+                        if chunk_data and chunk_data.get("ids"):
+                            chunks = [
+                                {"id": cid, "text": cdoc}
+                                for cid, cdoc in zip(chunk_data["ids"], chunk_data["documents"])
+                            ]
+            # CRIT-1 FIX: anchor in _background_tasks to prevent GC before completion.
+                            _make_background_task(run_extraction_pipeline(doc_id=str(doc.id), chunks=chunks))
+                except Exception as ex:
+                    logger.warning(f"[GraphRAG] Background extraction failed to start: {ex}")
+
+        # CRIT-1 FIX: anchor the main ingestion task.
+        _make_background_task(_ingest_and_extract())
         logger.info(f"[Upload] Scheduled ingestion for doc {doc.id} ({sanitized_filename})")
 
         from app.services.audit_service import AuditService
@@ -385,12 +420,14 @@ async def upload_document(
         if os.path.exists(storage_path):
             try:
                 os.remove(storage_path)
-            except Exception:
-                pass
+            except Exception as _cleanup_err:
+                # HIGH-5 FIX: log cleanup failures instead of silently swallowing them.
+                logger.warning(f"[Upload] Failed to clean up orphaned file {storage_path}: {_cleanup_err}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to register uploaded document: {exc}",
         )
+
 
 
 @router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -486,8 +523,8 @@ async def retry_document_indexing(
     if not user_api_key:
         user_api_key = settings.GEMINI_API_KEY or None
 
-    asyncio.create_task(
-        ParserService.process_document_ingestion(
+    async def _retry_ingest_and_extract():
+        await ParserService.process_document_ingestion(
             document_id=doc.id,
             user_id=current_user.id,
             file_path=doc.storage_path,
@@ -495,7 +532,29 @@ async def retry_document_indexing(
             file_type=doc.file_type,
             api_key=user_api_key,
         )
-    )
+        # ── GraphRAG: async entity extraction (non-blocking) ──────────────────────
+        if settings.GRAPHRAG_ENABLED:
+            try:
+                from app.graph.neo4j_client import neo4j_client
+                from app.graph.extraction_pipeline import run_extraction_pipeline
+                if neo4j_client.is_available:
+                    from app.retrieval.vector_store import VectorStore
+                    vs = VectorStore()
+                    coll = vs.get_collection()
+                    chunk_data = coll.get(where={"doc_id": str(doc.id)}, include=["documents", "ids"])
+                    if chunk_data and chunk_data.get("ids"):
+                        chunks = [
+                            {"id": cid, "text": cdoc}
+                            for cid, cdoc in zip(chunk_data["ids"], chunk_data["documents"])
+                        ]
+                        # CRIT-1 FIX: anchor in _background_tasks.
+                        _make_background_task(run_extraction_pipeline(doc_id=str(doc.id), chunks=chunks))
+            except Exception as ex:
+                logger.warning(f"[GraphRAG] Background extraction failed to start: {ex}")
+
+    # CRIT-1 FIX: anchor the main retry ingestion task.
+    _make_background_task(_retry_ingest_and_extract())
+
     logger.info(f"[Retry] Scheduled re-indexing for doc {doc.id} ({doc.filename})")
     return doc
 

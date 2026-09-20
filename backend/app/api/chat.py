@@ -3,11 +3,14 @@ import json
 import os
 import traceback
 import uuid
+from datetime import datetime, timezone
 from typing import List, Optional
+
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
+from app.core.config import settings
 from app.api.auth import get_current_user
 from app.schemas.auth import UserOut
 from app.schemas.chat import (
@@ -280,35 +283,65 @@ async def stream_agent_message(
       if enc_val:
         try:
           user_keys[prov] = decrypt_api_key(enc_val)
-        except Exception:
-          user_keys[prov] = enc_val
+        except Exception as _dec_err:
+          logger.warning(f"Could not decrypt stored API key for provider '{prov}': {_dec_err}")
 
-    # ── Merge request header keys (x-api-keys) if present ─────────────────────
-    x_api_keys_header = request.headers.get("x-api-keys")
-    if x_api_keys_header:
+    # ── Merge client-supplied dynamic keys from x-api-keys header (overrides DB) ──
+    x_api_keys_raw = request.headers.get("x-api-keys")
+    if x_api_keys_raw:
       try:
-        header_keys = json.loads(x_api_keys_header)
-        for hk, hv in header_keys.items():
-          if hk and hv:
-            user_keys[hk.lower()] = hv
-      except Exception:
-        pass
+        header_keys = json.loads(x_api_keys_raw)
+        if isinstance(header_keys, dict):
+          for hk, hv in header_keys.items():
+            if hv and isinstance(hv, str):
+              clean_prov = hk.lower().strip()
+              user_keys[clean_prov] = hv
+              if clean_prov == "gemini":
+                user_keys["google"] = hv
+              elif clean_prov == "google":
+                user_keys["gemini"] = hv
+      except Exception as _hdr_keys_err:
+        logger.warning(f"Failed to parse x-api-keys header: {_hdr_keys_err}")
+
+    # Bidirectional normalization for google/gemini aliases
+    if "gemini" in user_keys and "google" not in user_keys:
+      user_keys["google"] = user_keys["gemini"]
+    elif "google" in user_keys and "gemini" not in user_keys:
+      user_keys["gemini"] = user_keys["google"]
 
     # ── Real-time provider resolution: look up which provider owns this model ──
     from app.providers.registry import provider_registry
     schema.model = provider_registry.remap_model(schema.model)
+    # MED-4 FIX: use a local variable instead of mutating the Pydantic schema object.
+    # Mutating schema.model is non-idiomatic and can cause subtle bugs if FastAPI
+    # re-validates the request or the value is read in a different code path.
+    active_model = schema.model
     resolved_prov = None
     for k in api_keys:
         if k.status == "VERIFIED" and k.available_models:
             prov_name = (getattr(k, "provider_name", "") or "").lower()
             if prov_name == "gemini":
                 prov_name = "google"
-            if schema.model in k.available_models:
+            # CRIT-3 FIX (corrected): available_models is Column(JSON), so SQLAlchemy returns
+            # a Python list directly in normal operation. However, legacy rows written before
+            # this fix may contain a raw JSON string. Handle both forms defensively.
+            try:
+                raw = k.available_models
+                if isinstance(raw, list):
+                    models_list = raw
+                elif isinstance(raw, str):
+                    models_list = json.loads(raw)
+                else:
+                    models_list = []
+            except (json.JSONDecodeError, TypeError, ValueError):
+                models_list = []
+            if active_model in models_list:
                 resolved_prov = prov_name
                 break
+
     # Fallback: keyword-based inference if model not found in any provider's live list
     if not resolved_prov:
-        resolved_prov = resolve_provider_from_model(schema.model)
+        resolved_prov = resolve_provider_from_model(active_model)
 
     final_key = user_keys.get(resolved_prov) or getattr(settings, f"{resolved_prov.upper()}_API_KEY", None)
     if not final_key and resolved_prov == "google":
@@ -329,9 +362,10 @@ async def stream_agent_message(
             available_fallback = ("openrouter", user_keys.get("openrouter") or settings.OPENROUTER_API_KEY, "google/gemini-2.0-flash-001")
         
         if available_fallback:
-            resolved_prov, final_key, schema.model = available_fallback
+            resolved_prov, final_key, active_model = available_fallback   # MED-4 FIX: local var
             key_found = True
-            logger.info(f"Auto-fallback active: using provider {resolved_prov} with model {schema.model}")
+            logger.info(f"Auto-fallback active: using provider {resolved_prov} with model {active_model}")
+
 
     # ── Chat history trimming ──────────────────────────────────────
     _MAX_HISTORY_MESSAGES = 60       # 30 turn pairs
@@ -373,8 +407,9 @@ async def stream_agent_message(
 
     initial_state = {
         "messages": langchain_messages,
-        "active_model": schema.model,
+        "active_model": active_model,   # MED-4 FIX: use local variable, not mutated schema
         "user_id": current_user.id,
+
         "chat_id": chat_id,
         "retrieved_documents": [],
         "metrics": {},
@@ -540,11 +575,12 @@ async def stream_agent_message(
       # GAP-1 FIX: Check for client disconnect inside the queue loop.
       # When the browser tab closes mid-stream, cancel the graph task to avoid
       # wasting LLM tokens and compute.
-      graph_deadline = asyncio.get_event_loop().time() + GRAPH_TIMEOUT_SECONDS
+      loop = asyncio.get_running_loop()
+      graph_deadline = loop.time() + GRAPH_TIMEOUT_SECONDS
       while not task.done() or not queue.empty():
         try:
           # ── Hard-deadline check ───────────────────────────────────────────
-          remaining = graph_deadline - asyncio.get_event_loop().time()
+          remaining = graph_deadline - loop.time()
           if remaining <= 0:
             logger.error(
                 f"Graph task exceeded {GRAPH_TIMEOUT_SECONDS}s hard timeout "
@@ -558,6 +594,12 @@ async def stream_agent_message(
           if await request.is_disconnected():
             logger.info(f"Client disconnected for chat_id={chat_id} — cancelling graph task")
             task.cancel()
+            # HIGH-4 FIX: await so the CancelledError propagates cleanly
+            # and internal cleanup (DB sessions, LLM client teardown) can run.
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
             return
 
           # Event-driven queue fetch with deadline-aware timeout
@@ -578,11 +620,16 @@ async def stream_agent_message(
               yield f"data: {json.dumps(extra)}\n\n"
               queue.task_done()
             # Each yielded chunk refreshes the deadline (model IS responding)
-            graph_deadline = asyncio.get_event_loop().time() + GRAPH_TIMEOUT_SECONDS
+            graph_deadline = loop.time() + GRAPH_TIMEOUT_SECONDS  # BUG-3 FIX: use already-captured loop, not deprecated get_event_loop()
           elif task in done_set:
             # Graph task completed — cancel pending queue get if not finished
             if not get_task.done():
               get_task.cancel()
+              # MED-6 FIX: await to suppress 'Task exception was never retrieved' warnings
+              try:
+                  await get_task
+              except (asyncio.CancelledError, Exception):
+                  pass
 
             # Drain any remaining buffered tokens instantly
             while not queue.empty():
@@ -595,6 +642,12 @@ async def stream_agent_message(
             # Loop will re-check hard deadline at top of next iteration.
             if not get_task.done():
               get_task.cancel()
+              # MED-6 FIX: await to suppress warnings
+              try:
+                  await get_task
+              except (asyncio.CancelledError, Exception):
+                  pass
+
         except Exception as err:
           logger.error(f"ERROR IN QUEUE LOOP: {err}")
           yield f"data: {json.dumps({'event': 'error', 'detail': str(err)})}\n\n"
@@ -621,6 +674,88 @@ async def stream_agent_message(
             logger.debug(f"Telemetry finalized: total_latency_ms={_tel_payload.get('total_latency_ms')}ms")
           except Exception as _tel_fin_err:
             logger.warning(f"Telemetry finalize failed (non-fatal): {_tel_fin_err}")
+
+        # ── Persist telemetry record to DB for analytics dashboard ────────────
+        # Every completed request writes one TelemetryRecord so the analytics
+        # endpoints can query real historical data.
+        if _telemetry is not None and isinstance(final_state, dict):
+          try:
+            import time as _time_mod
+            from app.models.telemetry import TelemetryRecord
+            from app.core.database import AsyncSessionLocal
+            _fs = final_state  # alias for readability
+            _hal_risk = "low"
+            if _fs.get("has_hallucination_risk"):
+                _hal_risk = "high"
+            elif _fs.get("answer_confidence", 1.0) < 0.6:
+                _hal_risk = "medium"
+            _ev_verdict = None
+            if _fs.get("verified_response"):
+                _ev_verdict = "PASS"
+            elif _fs.get("has_hallucination_risk"):
+                _ev_verdict = "WARN"
+
+            # Get routing info from cost tracker
+            _routing_tier = _fs.get("model_tier") or "unknown"
+            _complexity = None
+            try:
+                from app.routing.complexity_analyzer import analyze_complexity
+                _last_q = _fs.get("resolved_query") or ""
+                if _last_q:
+                    _cx = analyze_complexity(_last_q)
+                    _complexity = _cx.complexity_score
+            except Exception:
+                pass
+
+            # Estimate cost
+            _tok = getattr(_telemetry, "token_estimate", 0) or 0
+            _cost = 0.0
+            try:
+                from app.routing.model_profiles import get_profile_for_model
+                _m = _fs.get("model_used") or _fs.get("active_model") or schema.model
+                _prf = get_profile_for_model(_m)
+                if _prf and _tok > 0:
+                    _cost = round(_tok * (_prf.cost_per_1k_tokens / 1000.0), 8)
+            except Exception:
+                pass
+
+            _rec = TelemetryRecord(
+                request_id=getattr(_telemetry, "request_id", str(chat_id) + "_" + str(int(_time_mod.time()))),
+                user_id=str(current_user.id),  # BUG-1 FIX: user_id was undefined; use current_user.id
+                chat_id=str(chat_id),
+                intent=_fs.get("intent"),
+                model_used=_fs.get("model_used") or _fs.get("active_model") or schema.model,
+                provider=_fs.get("provider_used") or resolved_prov,
+                model_tier=_routing_tier,
+                routing_version="1.0.0",
+                user_override=True,  # model came from user selection in this version
+                complexity_score=_complexity,
+                needs_retrieval=_fs.get("needs_retrieval"),
+                chunks_retrieved=len([x for x in (_fs.get("retrieved_documents") or []) if x.get("type") == "chunk"]),
+                graph_evidence_count=_fs.get("graph_evidence_count") or 0,
+                retrieval_confidence=_fs.get("retrieval_confidence"),
+                retrieval_retries=_fs.get("retrieval_retry_count") or 0,
+                llm_latency_ms=getattr(_telemetry, "llm_latency_ms", None),
+                total_latency_ms=getattr(_telemetry, "total_latency_ms", None),
+                token_estimate=_tok,
+                estimated_cost_usd=_cost,
+                answer_confidence=_fs.get("answer_confidence"),
+                hallucination_risk=_hal_risk,
+                evidence_verdict=_ev_verdict,
+                reflection_passed=_fs.get("reflection_passed"),
+                generation_mode=_fs.get("generation_mode"),
+                is_fallback=False,  # BUG-2 FIX: `attempt_idx` is never defined; `dir()` checks module scope not locals
+                prompt_version="3.1.0",
+                embedding_version="1.0.0",
+                created_at=_time_mod.time(),
+            )
+
+            async with AsyncSessionLocal() as _tel_db:
+                _tel_db.add(_rec)
+                await _tel_db.commit()
+          except Exception as _persist_tel_err:
+            logger.debug(f"[Telemetry] DB persist failed (non-fatal): {_persist_tel_err}")
+
 
         # Compile full runtime execution trace & Dev HUD metrics
         if isinstance(final_state, dict):

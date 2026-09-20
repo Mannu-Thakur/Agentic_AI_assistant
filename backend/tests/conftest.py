@@ -47,3 +47,8 @@ async def override_get_db(db_session):
 @pytest.fixture(scope="session")
 def anyio_backend():
     return "asyncio"
+
+@pytest.fixture(autouse=True)
+def reset_dependency_overrides():
+    yield
+    app.dependency_overrides.clear()

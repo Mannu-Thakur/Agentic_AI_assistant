@@ -11,6 +11,9 @@ from app.schemas.auth import UserRegister, UserLogin, Token, UserOut, ForgotPass
 from app.services.auth_service import AuthService
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from app.models.user import User, UserPreference
+import logging
+
+logger = logging.getLogger("app.api.auth")
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 security = HTTPBearer()
@@ -82,7 +85,10 @@ class RoleChecker:
     def __init__(self, allowed_roles: list[str]):
         self.allowed_roles = allowed_roles
 
-    def __call__(self, current_user: UserOut = Depends(get_current_user)):
+    # BUG-9 FIX: `request` must be declared explicitly in __call__ so FastAPI's
+    # dependency injection can pass it through to get_current_user, which requires
+    # a Request object as its first parameter. Without this, DI raises a runtime error.
+    def __call__(self, request: Request, current_user: UserOut = Depends(get_current_user)):
         if getattr(current_user, "role", "user") not in self.allowed_roles:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -178,12 +184,11 @@ async def refresh_token(request: Request, response: Response, db: AsyncSession =
             if user_id:
                 # Blacklist a user-revocation marker to invalidate all their tokens
                 await blacklist_token(f"user_revoked:{user_id}", settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 3600)
-                from main import logger
                 logger.warning(f"Replay attack detected on rotated refresh token! Revoking all sessions for user {user_id}")
         except Exception:
             pass
 
-        response.delete_cookie("refresh_token")
+        response.delete_cookie("refresh_token", path="/")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Refresh token has been revoked"
@@ -768,13 +773,16 @@ async def forgot_password(
             detail="Too many password reset requests for this email. Please try again in 15 minutes."
         )
 
-    # Determine base frontend URL dynamically from request headers if available to prevent port/domain mismatch
+    # Determine base frontend URL dynamically from allowed request origins to prevent open-redirect phishing
     base_url = settings.FRONTEND_URL.rstrip('/')
     raw_origin = request.headers.get("origin") or request.headers.get("referer")
     if raw_origin:
         parsed = urlparse(raw_origin)
         if parsed.scheme and parsed.netloc:
-            base_url = f"{parsed.scheme}://{parsed.netloc}"
+            candidate_origin = f"{parsed.scheme}://{parsed.netloc}"
+            allowed_origins = [o.rstrip('/') for o in (settings.BACKEND_CORS_ORIGINS or [])] + [base_url]
+            if candidate_origin in allowed_origins or candidate_origin.endswith(".vercel.app"):
+                base_url = candidate_origin
 
     # User lookup
     user = await AuthService.get_user_by_email(db, schema.email)

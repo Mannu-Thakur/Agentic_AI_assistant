@@ -452,11 +452,12 @@ class OpenRouterProvider(BaseLLMProvider):
 
                                 try:
                                     parsed     = json.loads(raw_data)
-                                    chunk_text = parsed["choices"][0]["delta"].get("content", "")
+                                    delta      = (parsed.get("choices", [{}])[0].get("delta") or {})
+                                    chunk_text = delta.get("content", "")
                                     if chunk_text:
                                         output_text += chunk_text
                                         yield {"event": "chunk", "text": chunk_text}
-                                except (KeyError, IndexError, json.JSONDecodeError):
+                                except (KeyError, IndexError, AttributeError, json.JSONDecodeError):
                                     continue
 
                         break  # successful stream

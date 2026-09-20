@@ -2,7 +2,7 @@ import bcrypt
 import uuid
 import json
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Union, Optional
 from jose import jwt, JWTError
 from app.core.config import settings
@@ -20,10 +20,11 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     return bcrypt.checkpw(password_bytes, hashed_bytes)
 
 def create_access_token(subject: Union[str, Any], expires_delta: Optional[timedelta] = None) -> str:
+    now = datetime.now(timezone.utc)
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = now + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+        expire = now + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode = {
         "exp": expire,
         "sub": str(subject),
@@ -35,10 +36,11 @@ def create_access_token(subject: Union[str, Any], expires_delta: Optional[timede
     return encoded_jwt
 
 def create_refresh_token(subject: Union[str, Any], expires_delta: Optional[timedelta] = None) -> str:
+    now = datetime.now(timezone.utc)
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = now + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+        expire = now + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
     to_encode = {
         "exp": expire,
         "sub": str(subject),
@@ -131,6 +133,13 @@ _in_memory_blacklist = {}
 
 async def blacklist_token(token: str, expires_in_seconds: int) -> None:
     """Blacklists a token in Redis, falling back to an in-memory storage if Redis is down."""
+    # MED-1 FIX: purge expired entries on every write so the dict doesn't grow
+    # unboundedly in Redis-less (dev) deployments under sustained traffic.
+    _now = datetime.now(timezone.utc)
+    expired_keys = [k for k, v in _in_memory_blacklist.items() if v <= _now]
+    for k in expired_keys:
+        _in_memory_blacklist.pop(k, None)
+
     try:
         from app.core.redis_client import get_redis
         r = await get_redis()
@@ -141,8 +150,8 @@ async def blacklist_token(token: str, expires_in_seconds: int) -> None:
         pass
     
     # Fallback to in-memory blacklist
-    from datetime import datetime, timedelta
-    _in_memory_blacklist[token] = datetime.utcnow() + timedelta(seconds=expires_in_seconds)
+    _in_memory_blacklist[token] = datetime.now(timezone.utc) + timedelta(seconds=expires_in_seconds)
+
 
 async def is_token_blacklisted(token: str) -> bool:
     """Checks if a token is blacklisted in Redis or in the in-memory fallback store."""
@@ -158,8 +167,7 @@ async def is_token_blacklisted(token: str) -> bool:
 
     # Fallback check
     if token in _in_memory_blacklist:
-        from datetime import datetime
-        if _in_memory_blacklist[token] > datetime.utcnow():
+        if _in_memory_blacklist[token] > datetime.now(timezone.utc):
             return True
         else:
             del _in_memory_blacklist[token]
@@ -208,11 +216,12 @@ def _save_persistent_oauth_states(states: dict) -> None:
 
 async def store_oauth_state(state: str, ttl: int = 600) -> None:
     """Stores generated OAuth state in Redis (with in-memory & file-backed fallback when Redis is down)."""
-    expiry_dt = datetime.utcnow() + timedelta(seconds=ttl)
+    now = datetime.now(timezone.utc)
+    expiry_dt = now + timedelta(seconds=ttl)
     _oauth_state_store[state] = expiry_dt
 
     try:
-        now_iso = datetime.utcnow().isoformat()
+        now_iso = now.isoformat()
         states = _load_persistent_oauth_states()
         states = {k: v for k, v in states.items() if isinstance(v, str) and v > now_iso}
         states[state] = expiry_dt.isoformat()
@@ -233,7 +242,7 @@ async def verify_oauth_state(state: str) -> bool:
     """Verifies and consumes the stored OAuth state parameter (Redis with in-memory & persistent fallback)."""
     if not state or not isinstance(state, str):
         return False
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     now_iso = now.isoformat()
 
     # Purge expired states from memory store
@@ -289,8 +298,10 @@ def sanitize_input(text: str) -> str:
     if not text:
         return text
     import re
-    # Remove <script ...>...</script> tags
-    cleaned = re.sub(r"<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>", "", text, flags=re.IGNORECASE)
+    # BUG-8 FIX: Added re.DOTALL so the pattern matches multiline <script> blocks
+    # (content containing newlines between opening and closing tags was previously bypassing the filter).
+    # Also handles whitespace before '>' in </script > variants via \s*.
+    cleaned = re.sub(r"<script\b[^<]*(?:(?!<\/script\s*>)<[^<]*)*<\/script\s*>", "", text, flags=re.IGNORECASE | re.DOTALL)
     # Remove javascript: protocol/schemes to block script execution
     cleaned = re.sub(r"javascript\s*:", "", cleaned, flags=re.IGNORECASE)
     return cleaned
@@ -326,12 +337,13 @@ def _save_persistent_tokens(tokens: dict) -> None:
 
 async def store_reset_token(token: str, user_id: str, ttl_seconds: int) -> None:
     """Stores a password-reset token mapped to the user_id (Redis + memory + file-backed persistent fallback)."""
-    expiry_dt = datetime.utcnow() + timedelta(seconds=ttl_seconds)
+    now = datetime.now(timezone.utc)
+    expiry_dt = now + timedelta(seconds=ttl_seconds)
     _reset_token_store[token] = (user_id, expiry_dt)
 
     # Persist to disk so server reloads / worker restarts don't lose active tokens when Redis is absent
     data = _load_persistent_tokens()
-    now_iso = datetime.utcnow().isoformat()
+    now_iso = now.isoformat()
     # Purge expired entries
     data = {k: v for k, v in data.items() if isinstance(v, dict) and v.get("expires_at", "") > now_iso}
     data[token] = {
@@ -356,7 +368,7 @@ async def verify_reset_token(token: str) -> bool:
     """
     if not token or not isinstance(token, str):
         return False
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     # Try Redis first
     try:
@@ -400,7 +412,7 @@ async def verify_and_consume_reset_token(token: str) -> Optional[str]:
     if not token or not isinstance(token, str):
         return None
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     # Purge expired in-memory entries
     expired = [k for k, (_, exp) in _reset_token_store.items() if exp <= now]
@@ -469,7 +481,7 @@ async def check_reset_rate_limit(email: str, max_requests: int = 3, window_secon
         max_requests = max(max_requests, 20)
 
     key = f"pwd_reset_rl:{email.lower()}"
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     try:
         from app.core.redis_client import get_redis

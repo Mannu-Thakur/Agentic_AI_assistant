@@ -311,7 +311,7 @@ export const ChatInput = React.memo(function ChatInput({
         reader.readAsDataURL(file);
       } else {
         let p = 0;
-        const interval = setInterval(() => {
+        const interval: ReturnType<typeof setInterval> = setInterval(() => {
           p += 25;
           setAttachments((prev) =>
             prev.map((att) =>

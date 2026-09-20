@@ -162,9 +162,13 @@ async def main():
     print("   PRODUCTION RAG, WEB MCP & SEMANTIC TOOL ROUTER VERIFICATION SUITE   ")
     print("="*70)
 
-    t1 = await test_semantic_tool_router()
-    t2 = await test_web_mcp_server()
-    t3 = await test_rag_pipeline_with_semantic_routing()
+    from app.tools.registry import ToolRegistry
+    try:
+        t1 = await test_semantic_tool_router()
+        t2 = await test_web_mcp_server()
+        t3 = await test_rag_pipeline_with_semantic_routing()
+    finally:
+        await ToolRegistry().shutdown()
 
     print("\n" + "="*70)
     print(" VERIFICATION SUMMARY REPORT")
@@ -176,11 +180,12 @@ async def main():
 
     if t1 and t2 and t3:
         print("\nOVERALL STATUS: ALL SYSTEMS FULLY FUNCTIONAL AND VERIFIED FOR PRODUCTION.\n")
-        sys.exit(0)
+        return 0
     else:
         print("\nOVERALL STATUS: SOME CHECKS FAILED.\n")
-        sys.exit(1)
+        return 1
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    code = asyncio.run(main())
+    sys.exit(code)

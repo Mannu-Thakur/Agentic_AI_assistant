@@ -28,10 +28,11 @@ class ApiKeyNetworkError(Exception):
 # ─── Live Provider Verification & Model Fetching ───────────────────────────────────
 
 async def verify_google(api_key: str) -> List[str]:
-    url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
+    url = "https://generativelanguage.googleapis.com/v1beta/models"
+    headers = {"x-goog-api-key": api_key}
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            res = await client.get(url)
+            res = await client.get(url, headers=headers)
             if res.status_code == 200:
                 data = res.json()
                 models = []

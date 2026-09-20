@@ -125,11 +125,11 @@ async def search_tavily(query: str, api_key: str, max_results: int = 8) -> List[
             return results
 
         loop = asyncio.get_running_loop()
-        return await asyncio.wait_for(loop.run_in_executor(None, _sync_search), timeout=8.0)
-    except (ImportError, ModuleNotFoundError, Exception) as exc:
-        logger.info(f"Tavily SDK search failed or not installed ({exc}); using direct HTTP REST call.")
+        return await asyncio.wait_for(loop.run_in_executor(None, _sync_search), timeout=5.5)
+    except (ImportError, ModuleNotFoundError) as exc:
+        logger.info(f"Tavily SDK not installed ({exc}); using direct HTTP REST call.")
         import httpx
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=6.0) as client:
             resp = await client.post(
                 "https://api.tavily.com/search",
                 json={
@@ -189,11 +189,11 @@ async def search_serpapi(query: str, api_key: str, max_results: int = 8) -> List
             return results
 
         loop = asyncio.get_running_loop()
-        return await asyncio.wait_for(loop.run_in_executor(None, _sync_search), timeout=8.0)
-    except (ImportError, ModuleNotFoundError, Exception) as exc:
-        logger.info(f"SerpAPI SDK search failed or not installed ({exc}); using direct HTTP REST call.")
+        return await asyncio.wait_for(loop.run_in_executor(None, _sync_search), timeout=5.5)
+    except (ImportError, ModuleNotFoundError) as exc:
+        logger.info(f"SerpAPI SDK not installed ({exc}); using direct HTTP REST call.")
         import httpx
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=6.0) as client:
             resp = await client.get(
                 "https://serpapi.com/search.json",
                 params={
@@ -250,11 +250,11 @@ async def search_exa(query: str, api_key: str, max_results: int = 8) -> List[Sea
             return results
 
         loop = asyncio.get_running_loop()
-        return await asyncio.wait_for(loop.run_in_executor(None, _sync_search), timeout=8.0)
-    except (ImportError, ModuleNotFoundError, Exception) as exc:
-        logger.info(f"Exa SDK search failed or not installed ({exc}); using direct HTTP REST call.")
+        return await asyncio.wait_for(loop.run_in_executor(None, _sync_search), timeout=5.5)
+    except (ImportError, ModuleNotFoundError) as exc:
+        logger.info(f"Exa SDK not installed ({exc}); using direct HTTP REST call.")
         import httpx
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=6.0) as client:
             resp = await client.post(
                 "https://api.exa.ai/search",
                 headers={"x-api-key": api_key, "Content-Type": "application/json"},
@@ -446,7 +446,21 @@ async def unified_web_search(
     if cached is not None:
         logger.debug(f"[unified_web_search] Cache HIT for query='{query[:60]}'")
         if isinstance(cached, list):
-            return cached
+            res_objs = []
+            for item in cached:
+                if isinstance(item, SearchResult):
+                    res_objs.append(item)
+                elif isinstance(item, dict):
+                    res_objs.append(SearchResult(
+                        title=item.get("title", ""),
+                        url=item.get("url", ""),
+                        snippet=item.get("snippet", ""),
+                        source=item.get("source", "cache"),
+                        score=float(item.get("score", 1.0)),
+                        published=item.get("published"),
+                    ))
+            if res_objs:
+                return res_objs
         if isinstance(cached, str):
             return [SearchResult(
                 title="Web Search Result",
@@ -525,7 +539,18 @@ async def unified_web_search(
                 # so subsequent calls with the same query (e.g. CRAG retry) are served
                 # from cache without hitting external APIs again.
                 try:
-                    await web_search_cache.set(query, ranked)
+                    serializable_results = [
+                        {
+                            "title": r.title,
+                            "url": r.url,
+                            "snippet": r.snippet,
+                            "source": r.source,
+                            "score": r.score,
+                            "published": r.published,
+                        }
+                        for r in ranked
+                    ]
+                    await web_search_cache.set(query, serializable_results)
                 except Exception as _cache_err:
                     logger.debug(f"[unified_web_search] Cache set failed (non-fatal): {_cache_err}")
                 return ranked

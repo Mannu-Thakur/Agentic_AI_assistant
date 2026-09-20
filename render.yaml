@@ -1,4 +1,4 @@
-# ─────────────────────────────────────────────────────────────────────────────
+﻿# ─────────────────────────────────────────────────────────────────────────────
 #  Render Deployment Blueprint (render.yaml)
 #  Automated deployment infrastructure for Render Cloud Platform
 # ─────────────────────────────────────────────────────────────────────────────
@@ -11,6 +11,8 @@ services:
     dockerfilePath: ./backend/Dockerfile
     plan: starter
     healthCheckPath: /api/v1/health
+    # Run Alembic migrations before each deploy
+    preDeployCommand: "alembic upgrade head"
     envVars:
       - key: ENVIRONMENT
         value: production
@@ -62,7 +64,17 @@ services:
         sync: false
       - key: GITHUB_CLIENT_SECRET
         sync: false
-
+      # Email / SMTP - required for password-reset emails in production
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
   # ── React/Vite Frontend Service ────────────────────────────────────────────
   - type: web
     name: ai-assistant-frontend

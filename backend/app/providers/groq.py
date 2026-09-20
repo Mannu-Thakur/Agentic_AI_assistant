@@ -540,14 +540,14 @@ class GroqProvider(BaseLLMProvider):
 
                                 try:
                                     parsed = json.loads(raw_data)
-                                    delta  = parsed["choices"][0]["delta"]
+                                    delta  = (parsed.get("choices", [{}])[0].get("delta") or {})
 
                                     chunk_text = delta.get("content", "")
                                     if chunk_text:
                                         output_text += chunk_text
                                         yield {"event": "chunk", "text": chunk_text}
 
-                                    tool_calls_delta = delta.get("tool_calls", [])
+                                    tool_calls_delta = delta.get("tool_calls") or []
                                     for tc in tool_calls_delta:
                                         idx = tc.get("index", 0)
                                         if idx not in accumulated_tool_calls:
@@ -557,7 +557,7 @@ class GroqProvider(BaseLLMProvider):
                                             accumulated_tool_calls[idx]["name"] = func_delta["name"]
                                         if "arguments" in func_delta:
                                             accumulated_tool_calls[idx]["arguments"] += func_delta["arguments"]
-                                except (KeyError, IndexError, json.JSONDecodeError):
+                                except (KeyError, IndexError, AttributeError, json.JSONDecodeError):
                                     continue
 
                         break  # successful stream
