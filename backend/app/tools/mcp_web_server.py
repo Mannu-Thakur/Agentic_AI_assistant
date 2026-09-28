@@ -60,11 +60,13 @@ def handle_web_search(query: str, max_results: int = 5) -> str:
         except RuntimeError:
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                results = executor.submit(asyncio.run, unified_web_search(query, api_keys=keys, max_results=max_results)).result()
+                results = executor.submit(lambda: asyncio.run(unified_web_search(query, api_keys=keys, max_results=max_results))).result()
         if results:
             return format_for_llm(results[:max_results])
     except Exception as exc:
-        pass
+        import sys
+        sys.stderr.write(f'[web_mcp] Primary search path failed, falling back to DDG: {type(exc).__name__}: {exc}\n')
+        sys.stderr.flush()
 
     # Fallback to DDGS SDK or robust HTML parsing
     try:
@@ -162,7 +164,8 @@ def handle_web_fetch(url: str, max_chars: int = 4000) -> str:
     req = urllib.request.Request(url, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
-            raw_bytes = resp.read()
+            MAX_FETCH_BYTES = 5 * 1024 * 1024  # 5 MB cap
+            raw_bytes = resp.read(MAX_FETCH_BYTES)
             raw_html = raw_bytes.decode("utf-8", errors="ignore")
 
         # Strip scripts, styles, comments cleanly
@@ -300,6 +303,10 @@ def main():
                         }
                     ]
                 })
+
+            elif method == 'ping':
+                send_response(req_id, result={})
+                continue
 
             else:
                 send_response(req_id, error={"code": -32601, "message": f"Method '{method}' not found."})

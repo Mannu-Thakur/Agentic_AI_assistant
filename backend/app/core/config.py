@@ -51,15 +51,27 @@ class Settings(BaseSettings):
 
     # Security & JWT
     SECRET_KEY: str = _DEFAULT_SECRET_KEY
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 hours — prevents unexpected session logouts
+    # M-1 FIX: Reduced from 1440 (24h) to 30 minutes. Short-lived access tokens limit
+    # the blast radius if a token is stolen. Refresh tokens remain 30 days.
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30       # 30 days rolling refresh
     ALGORITHM: str = "HS256"
-    
+
+    @field_validator("ALGORITHM")
+    @classmethod
+    def _validate_algorithm(cls, v: str) -> str:
+        # L-7 FIX: Only allow safe, widely-supported JWT algorithms.
+        allowed = {"HS256", "HS384", "HS512", "RS256", "ES256"}
+        if v not in allowed:
+            raise ValueError(f"ALGORITHM must be one of {allowed}, got {v!r}")
+        return v
+
     JWT_ISSUER: str = "flagship-auth"
     JWT_AUDIENCE: str = "flagship-app"
 
     # Cookie Configuration
     COOKIE_SAMESITE: str = "lax"  # "lax" for same-domain/proxy, "none" for cross-origin credentials
+
 
     # CORS
     BACKEND_CORS_ORIGINS: Union[List[str], str] = [
@@ -119,15 +131,20 @@ class Settings(BaseSettings):
     @property
     def ASYNC_DATABASE_URL(self) -> str:
         url = self.DATABASE_URL
+        # Normalize postgres:// shorthand first
         if url.startswith("postgres://"):
             url = url.replace("postgres://", "postgresql://", 1)
+        # M-7 FIX: Guard against double-replacement when the URL is already asyncpg.
+        if url.startswith("postgresql+asyncpg://"):
+            return url  # already correct — don't replace again
+        if url.startswith("postgresql+psycopg2://"):
+            return url.replace("postgresql+psycopg2://", "postgresql+asyncpg://", 1)
         if url.startswith("postgresql://"):
             return url.replace("postgresql://", "postgresql+asyncpg://", 1)
-        elif url.startswith("postgresql+psycopg2://"):
-            return url.replace("postgresql+psycopg2://", "postgresql+asyncpg://", 1)
-        elif url.startswith("sqlite://"):
+        if url.startswith("sqlite://"):
             return url.replace("sqlite://", "sqlite+aiosqlite://", 1)
         return url
+
 
     # Redis
     REDIS_HOST: str = "localhost"

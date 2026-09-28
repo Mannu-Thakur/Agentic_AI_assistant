@@ -6,16 +6,23 @@ from typing import Dict, Any, List, Optional
 from app.tools.local_tools import tavily_search, python_sandbox
 from app.tools.mcp_client import McpStdioClient, McpHttpClient
 
+import threading
+
 logger = logging.getLogger(__name__)
+
+_singleton_cls_lock = threading.Lock()
 
 
 class ToolRegistry:
     _instance = None
 
     def __new__(cls, *args, **kwargs):
+        # L-1 FIX: Thread-safe singleton creation with double-checked locking
         if not cls._instance:
-            cls._instance = super(ToolRegistry, cls).__new__(cls, *args, **kwargs)
-            cls._instance._init_registry()
+            with _singleton_cls_lock:
+                if not cls._instance:
+                    cls._instance = super(ToolRegistry, cls).__new__(cls, *args, **kwargs)
+                    cls._instance._init_registry()
         return cls._instance
 
     def _init_registry(self):
@@ -57,10 +64,16 @@ class ToolRegistry:
         self._local_initialized = False
         self._sync_lock: Optional[asyncio.Lock] = None
 
-    def _get_lock(self) -> asyncio.Lock:
+    def _get_lock(self) -> Optional[asyncio.Lock]:
+        # T-H2 FIX: Create asyncio.Lock lazily only when an event loop is running
         if self._sync_lock is None:
-            self._sync_lock = asyncio.Lock()
+            try:
+                asyncio.get_running_loop()
+                self._sync_lock = asyncio.Lock()
+            except RuntimeError:
+                pass
         return self._sync_lock
+
 
     async def register_remote_server(self, name: str, url: str, auth_header: Optional[str] = None, transport_type: str = "http_jsonrpc") -> List[Dict[str, Any]]:
         """
@@ -173,7 +186,10 @@ class ToolRegistry:
         Safely connects new/enabled servers, drops disabled/deleted ones, and
         never blocks forever if a server is offline.
         """
-        async with self._get_lock():
+        # Always create the lock in async context (event loop is guaranteed running here)
+        if self._sync_lock is None:
+            self._sync_lock = asyncio.Lock()
+        async with self._sync_lock:
             await self._init_local_mcp_servers()
 
             try:
@@ -345,8 +361,16 @@ class ToolRegistry:
         Routes the tool invocation to the correct local handler or MCP server.
         Records execution status in Prometheus metrics and audit logs.
         """
+        # M-1 FIX: Double-checked locking on lazy initialization
         if not self.is_initialized:
-            await self.initialize()
+            lock = self._get_lock()
+            if lock is not None:
+                async with lock:
+                    if not self.is_initialized:
+                        await self.initialize()
+            else:
+                await self.initialize()
+
 
         from app.core.metrics import metrics_collector
         from app.core.database import AsyncSessionLocal

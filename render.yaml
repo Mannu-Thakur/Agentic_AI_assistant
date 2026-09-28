@@ -1,4 +1,4 @@
-﻿# ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 #  Render Deployment Blueprint (render.yaml)
 #  Automated deployment infrastructure for Render Cloud Platform
 # ─────────────────────────────────────────────────────────────────────────────
@@ -12,7 +12,7 @@ services:
     plan: starter
     healthCheckPath: /api/v1/health
     # Run Alembic migrations before each deploy
-    preDeployCommand: "alembic upgrade head"
+    preDeployCommand: "cd backend && alembic upgrade head"
     envVars:
       - key: ENVIRONMENT
         value: production
@@ -31,7 +31,8 @@ services:
           name: ai-assistant-redis
           property: port
       - key: SECRET_KEY
-        generateValue: true
+        sync: false
+        # Run: openssl rand -hex 32  and set this once in the Render dashboard
       - key: FRONTEND_URL
         value: https://ai-assistant-frontend.onrender.com
       - key: BACKEND_CORS_ORIGINS

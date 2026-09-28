@@ -14,6 +14,7 @@ interface AuthState {
   tokenExpiry: number | null; // Unix ms timestamp when the access token expires
   user: User | null;
   isAuthenticated: boolean;
+  rememberMe: boolean; // tracks which storage was used at login, for updateToken
   login: (token: string, user: User, rememberMe?: boolean, expiresIn?: number) => void;
   logout: () => void;
   updateUser: (user: User) => void;
@@ -25,11 +26,21 @@ const getStorageItem = (key: string): string | null => {
   return localStorage.getItem(key) || sessionStorage.getItem(key);
 };
 
+const _expiryRaw = getStorageItem('token_expiry');
+
 export const useAuthStore = create<AuthState>((set, get) => ({
   token: getStorageItem('access_token'),
-  tokenExpiry: getStorageItem('token_expiry') ? parseInt(getStorageItem('token_expiry')!, 10) : null,
-  user: getStorageItem('user_info') ? JSON.parse(getStorageItem('user_info')!) : null,
+  tokenExpiry: _expiryRaw ? (Number(_expiryRaw) || null) : null,
+  user: (() => {
+    try {
+      const raw = getStorageItem('user_info');
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  })(),
   isAuthenticated: !!getStorageItem('access_token'),
+  rememberMe: !!localStorage.getItem('access_token'), // true if token was stored in localStorage
 
   login: (token, user, rememberMe = true, expiresIn) => {
     const storage = rememberMe ? localStorage : sessionStorage;
@@ -50,7 +61,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     otherStorage.removeItem('user_info');
     otherStorage.removeItem('token_expiry');
 
-    set({ token, tokenExpiry: expiry, user, isAuthenticated: true });
+    set({ token, tokenExpiry: expiry, user, isAuthenticated: true, rememberMe });
   },
 
   logout: () => {
@@ -75,7 +86,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   /** Silently update the stored token (e.g. after a background refresh) */
   updateToken: (token, expiresIn) => {
     const expiry = expiresIn ? Date.now() + expiresIn * 1000 : get().tokenExpiry;
-    const storage = localStorage.getItem('access_token') ? localStorage : sessionStorage;
+    const { rememberMe } = get();
+    const storage = rememberMe ? localStorage : sessionStorage;
     storage.setItem('access_token', token);
     if (expiry !== null && expiry !== undefined) {
       storage.setItem('token_expiry', String(expiry));

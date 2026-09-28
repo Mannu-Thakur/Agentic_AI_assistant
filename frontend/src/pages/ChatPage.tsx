@@ -785,7 +785,8 @@ export default function ChatPage() {
   const greeting   = getTimeGreeting(firstName);
   const userInitial = user?.full_name
     ? user.full_name.charAt(0).toUpperCase()
-    : user?.email.charAt(0).toUpperCase() ?? 'U';
+    : user?.email?.charAt(0)?.toUpperCase() ?? 'U';
+
 
   const validateChatRequest = useCallback((modelId: string, providerId: string): string | null => {
     ProviderKeyManager.refresh();
@@ -921,6 +922,8 @@ export default function ChatPage() {
   const messagesEndRef    = useRef<HTMLDivElement>(null);
   const chatScrollRef     = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  // F-H6 FIX: Track syncFromDb timer IDs so they can be cleared on unmount
+  const syncTimerIdsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   const navigate = useNavigate();
 
@@ -973,19 +976,28 @@ export default function ChatPage() {
     return () => window.removeEventListener('omni:open-search', handleOpenSearchEvent);
   }, []);
 
-  // ── Pre-fetch API Keys on mount so model picker is instantly ready ──
+  // F-C4 + F-H6 FIX: Abort streaming and clear all pending DB-sync timers on unmount
   useEffect(() => {
-    async function loadProviders() {
-      try {
-        const res = await apiRequest('/api-keys');
-        const data = await res.json();
-        setProviders(data);
-      } catch { /* silent */ }
-      finally { setKeysLoading(false); }
-    }
-    loadProviders();
+    return () => {
+      abortControllerRef.current?.abort();
+      syncTimerIdsRef.current.forEach(id => clearTimeout(id));
+      syncTimerIdsRef.current = [];
+    };
+  }, []);
+
+
+  useEffect(() => {
+    let _active = true;
+    // F-C1 FIX: apiRequest already returns parsed JSON — do NOT call .json() on it
+    // M-3 FIX: Ignore stale results if component unmounts before fetch completes
+    apiRequest<any[]>('/api-keys')
+      .then(data => { if (_active) setProviders(data || []); })
+      .catch(() => {})
+      .finally(() => { if (_active) setKeysLoading(false); });
+    return () => { _active = false; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
 
   // ── Auto-select first available model when no valid model is active ──
   // Also guards against stale localStorage models that are no longer in the curated list.
@@ -1094,13 +1106,15 @@ export default function ChatPage() {
   }, [token]);
 
   // Route URL synchronization for browser navigation and URL params
+  // M-4 FIX: Read activeChatId at call-time so it doesn't create an infinite loop
   useEffect(() => {
-    const targetChatId = urlChatId || null;
-    if (targetChatId !== activeChatId) {
-      if (useChatStore.getState().isStreaming && targetChatId === null) return;
-      setActiveChatId(targetChatId);
+    const targetId = urlChatId || null;
+    if (useChatStore.getState().activeChatId !== targetId) {
+      if (useChatStore.getState().isStreaming && targetId === null) return;
+      setActiveChatId(targetId);
     }
-  }, [urlChatId, activeChatId, setActiveChatId]);
+  }, [urlChatId, setActiveChatId]);
+
 
   // Fetch messages for active chat — uses messageCache for 0ms instant display.
   // NOTE: isStreaming is intentionally NOT in deps — we must not re-fetch when
@@ -1423,26 +1437,20 @@ export default function ChatPage() {
     if (attachedFiles.length > 0 && chatId) {
       try {
         const uploads: Promise<any>[] = [];
-
         for (const docFile of attachedFiles) {
           const fd = new FormData();
           fd.append('file', docFile);
           fd.append('chat_id', chatId);
-          uploads.push(
-            fetch(`${BASE_URL}/documents/upload`, {
-              method: 'POST',
-              headers: { Authorization: `Bearer ${token}` },
-              body: fd,
-            })
-          );
+          // F-C2 FIX: Use apiRequest instead of raw fetch — auth token and base URL handled centrally
+          uploads.push(apiRequest('/documents/upload', { method: 'POST', body: fd }));
         }
-
         await Promise.all(uploads);
         if (chatId) fetchChatDocuments(chatId);
       } catch (err) {
         console.error('Document upload error:', err);
       }
     }
+
 
     const resolvedProv = currentModel?.apiProvider || resolveProvider(activeModel);
     const validationError = validateChatRequest(activeModel, resolvedProv);
@@ -1617,7 +1625,10 @@ export default function ChatPage() {
       // We schedule a delayed re-fetch so the cache has the canonical DB IDs
       // and the answer survives navigation away and back to this chat.
       if (chatId) {
-        const syncFromDb = (delay: number) => setTimeout(() => {
+        // F-H6 FIX: track timer IDs so they can be cleared on unmount
+        const syncFromDb = (delay: number) => {
+          const tid = setTimeout(() => {
+
           const s = useChatStore.getState();
           if (s.activeChatId === chatId && !s.isStreaming) {
             apiRequest(`/chats/${chatId}`)
@@ -1653,11 +1664,14 @@ export default function ChatPage() {
               })
               .catch(() => {/* silent — local streamed messages remain intact */});
           }
-        }, delay);
+          }, delay);
+          syncTimerIdsRef.current.push(tid);
+        };
 
         syncFromDb(1500); // Primary sync: 1.5s gives backend time to commit
         syncFromDb(3500); // Safety net: retry at 3.5s in case DB commit was delayed
       }
+
     }
   }, [activeChatId, isStreaming, messages, activeModel, language, token, addChat, addMessage, updateMessage, setActiveChatId, setIsStreaming, navigate, currentModel, validateChatRequest]);
 

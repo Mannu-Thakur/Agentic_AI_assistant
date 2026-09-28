@@ -1,6 +1,7 @@
 import bcrypt
 import uuid
 import json
+import hashlib
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import Any, Union, Optional
@@ -75,7 +76,6 @@ def is_safe_redirect_url(url: str) -> bool:
     """
     if not url:
         return True
-    import re
     from urllib.parse import urlparse
     parsed = urlparse(url)
     
@@ -89,15 +89,14 @@ def is_safe_redirect_url(url: str) -> bool:
         
     origin = f"{parsed.scheme}://{parsed.netloc}".lower().rstrip("/")
     
-    # Allow any official Vercel app domain
-    if re.match(r"^https://[a-z0-9\-_.]+\.vercel\.app$", origin):
-        return True
-        
-    # Check against settings CORS origins, ALLOWED_REDIRECT_URIS, or FRONTEND_URL
-    raw_allowed = list(settings.BACKEND_CORS_ORIGINS) + list(settings.ALLOWED_REDIRECT_URIS)
-    if settings.FRONTEND_URL:
-        raw_allowed.append(settings.FRONTEND_URL)
-        
+    # A-H4 / B-H3 FIX: Removed wildcard *.vercel.app match — it allowed any attacker-
+    # controlled vercel.app subdomain as a redirect target. Now only explicitly
+    # configured origins in settings are allowed.
+    from app.core.config import settings as _cfg
+    raw_allowed = list(_cfg.BACKEND_CORS_ORIGINS) + list(_cfg.ALLOWED_REDIRECT_URIS)
+    if _cfg.FRONTEND_URL:
+        raw_allowed.append(_cfg.FRONTEND_URL)
+
     allowed_domains = set()
     for allowed in raw_allowed:
         p_all = urlparse(allowed)
@@ -140,17 +139,18 @@ async def blacklist_token(token: str, expires_in_seconds: int) -> None:
     for k in expired_keys:
         _in_memory_blacklist.pop(k, None)
 
+    # B-C1 FIX: Always write to in-memory store first so fallback is always populated,
+    # even when Redis is available. This prevents tokens from being unblacklisted if
+    # Redis goes down after a logout.
+    _in_memory_blacklist[token] = datetime.now(timezone.utc) + timedelta(seconds=expires_in_seconds)
+
     try:
         from app.core.redis_client import get_redis
         r = await get_redis()
         if r:
             await r.set(f"blacklist:{token}", "1", ex=expires_in_seconds)
-            return
     except Exception:
         pass
-    
-    # Fallback to in-memory blacklist
-    _in_memory_blacklist[token] = datetime.now(timezone.utc) + timedelta(seconds=expires_in_seconds)
 
 
 async def is_token_blacklisted(token: str) -> bool:
@@ -304,6 +304,10 @@ def sanitize_input(text: str) -> str:
     cleaned = re.sub(r"<script\b[^<]*(?:(?!<\/script\s*>)<[^<]*)*<\/script\s*>", "", text, flags=re.IGNORECASE | re.DOTALL)
     # Remove javascript: protocol/schemes to block script execution
     cleaned = re.sub(r"javascript\s*:", "", cleaned, flags=re.IGNORECASE)
+    # M-2 FIX: Additional XSS vectors — vbscript, data URIs, and on* event handlers
+    cleaned = re.sub(r'(?i)\bvbscript\s*:', '', cleaned)
+    cleaned = re.sub(r'(?i)data\s*:\s*text/html', '', cleaned)
+    cleaned = re.sub(r'(?i)\bon\w+\s*=', 'on_=', cleaned)  # neutralize on* handlers
     return cleaned
 
 
@@ -336,17 +340,23 @@ def _save_persistent_tokens(tokens: dict) -> None:
 
 
 async def store_reset_token(token: str, user_id: str, ttl_seconds: int) -> None:
-    """Stores a password-reset token mapped to the user_id (Redis + memory + file-backed persistent fallback)."""
+    """Stores a password-reset token mapped to the user_id (Redis + memory + file-backed persistent fallback).
+    A-C3 FIX: The raw token is hashed with SHA-256 before being used as a key so that
+    a Redis/disk breach cannot be used to redeem active reset tokens directly.
+    """
+    # A-C3 FIX: hash the raw token; only the hash is persisted
+    hashed = hashlib.sha256(token.encode()).hexdigest()
+
     now = datetime.now(timezone.utc)
     expiry_dt = now + timedelta(seconds=ttl_seconds)
-    _reset_token_store[token] = (user_id, expiry_dt)
+    _reset_token_store[hashed] = (user_id, expiry_dt)
 
     # Persist to disk so server reloads / worker restarts don't lose active tokens when Redis is absent
     data = _load_persistent_tokens()
     now_iso = now.isoformat()
     # Purge expired entries
     data = {k: v for k, v in data.items() if isinstance(v, dict) and v.get("expires_at", "") > now_iso}
-    data[token] = {
+    data[hashed] = {
         "user_id": user_id,
         "expires_at": expiry_dt.isoformat()
     }
@@ -356,7 +366,7 @@ async def store_reset_token(token: str, user_id: str, ttl_seconds: int) -> None:
         from app.core.redis_client import get_redis
         r = await get_redis()
         if r:
-            await r.set(f"pwd_reset:{token}", user_id, ex=ttl_seconds)
+            await r.set(f"pwd_reset:{hashed}", user_id, ex=ttl_seconds)
     except Exception:
         pass  # memory + persistent store is the fallback
 
@@ -368,6 +378,8 @@ async def verify_reset_token(token: str) -> bool:
     """
     if not token or not isinstance(token, str):
         return False
+    # A-C3 FIX: hash the raw token before lookup (only hashes are stored)
+    hashed = hashlib.sha256(token.encode()).hexdigest()
     now = datetime.now(timezone.utc)
 
     # Try Redis first
@@ -375,14 +387,14 @@ async def verify_reset_token(token: str) -> bool:
         from app.core.redis_client import get_redis
         r = await get_redis()
         if r:
-            user_id_bytes = await r.get(f"pwd_reset:{token}")
+            user_id_bytes = await r.get(f"pwd_reset:{hashed}")
             if user_id_bytes:
                 return True
     except Exception:
         pass
 
     # Fallback 1: check in-memory store
-    entry = _reset_token_store.get(token)
+    entry = _reset_token_store.get(hashed)
     if entry:
         _, expiry = entry
         if expiry > now:
@@ -390,7 +402,7 @@ async def verify_reset_token(token: str) -> bool:
 
     # Fallback 2: check persistent disk cache
     data = _load_persistent_tokens()
-    tok_data = data.get(token)
+    tok_data = data.get(hashed)
     if tok_data and isinstance(tok_data, dict):
         exp_str = tok_data.get("expires_at")
         if exp_str:
@@ -412,6 +424,8 @@ async def verify_and_consume_reset_token(token: str) -> Optional[str]:
     if not token or not isinstance(token, str):
         return None
 
+    # A-C3 FIX: hash the raw token before lookup (only hashes are stored)
+    hashed = hashlib.sha256(token.encode()).hexdigest()
     now = datetime.now(timezone.utc)
 
     # Purge expired in-memory entries
@@ -424,13 +438,23 @@ async def verify_and_consume_reset_token(token: str) -> Optional[str]:
         from app.core.redis_client import get_redis
         r = await get_redis()
         if r:
-            user_id_bytes = await r.get(f"pwd_reset:{token}")
+            # B-C2 FIX: Use atomic GETDEL (Redis 6.2+) to eliminate the TOCTOU
+            # race between GET and DELETE where two concurrent requests could both
+            # read the same token before either deletes it.
+            try:
+                user_id_bytes = await r.getdel(f"pwd_reset:{hashed}")
+            except Exception:
+                # Fallback for Redis < 6.2: Lua script for atomic get+delete
+                _lua = """
+local v = redis.call('GET', KEYS[1])
+if v then redis.call('DEL', KEYS[1]) end
+return v
+"""
+                user_id_bytes = await r.eval(_lua, 1, f"pwd_reset:{hashed}")
             if user_id_bytes:
-                # Consume immediately (single-use)
-                await r.delete(f"pwd_reset:{token}")
-                _reset_token_store.pop(token, None)
+                _reset_token_store.pop(hashed, None)
                 data = _load_persistent_tokens()
-                data.pop(token, None)
+                data.pop(hashed, None)
                 _save_persistent_tokens(data)
                 if isinstance(user_id_bytes, bytes):
                     return user_id_bytes.decode()
@@ -439,19 +463,19 @@ async def verify_and_consume_reset_token(token: str) -> Optional[str]:
         pass
 
     # Fallback 1: check in-memory store
-    entry = _reset_token_store.get(token)
+    entry = _reset_token_store.get(hashed)
     if entry:
         user_id, expiry = entry
         if expiry > now:
-            del _reset_token_store[token]
+            del _reset_token_store[hashed]
             data = _load_persistent_tokens()
-            data.pop(token, None)
+            data.pop(hashed, None)
             _save_persistent_tokens(data)
             return user_id
 
     # Fallback 2: check persistent disk cache
     data = _load_persistent_tokens()
-    tok_data = data.get(token)
+    tok_data = data.get(hashed)
     if tok_data and isinstance(tok_data, dict):
         exp_str = tok_data.get("expires_at")
         user_id = tok_data.get("user_id")
@@ -459,9 +483,9 @@ async def verify_and_consume_reset_token(token: str) -> Optional[str]:
             try:
                 exp_dt = datetime.fromisoformat(exp_str)
                 if exp_dt > now:
-                    data.pop(token, None)
+                    data.pop(hashed, None)
                     _save_persistent_tokens(data)
-                    _reset_token_store.pop(token, None)
+                    _reset_token_store.pop(hashed, None)
                     return user_id
             except Exception:
                 pass
@@ -476,27 +500,29 @@ async def check_reset_rate_limit(email: str, max_requests: int = 3, window_secon
     Returns False if the rate limit has been exceeded.
     Uses Redis with in-memory fallback; max_requests per window_seconds (default 3 / 15 min, relaxed in dev).
     """
+    # B-H8 FIX: Normalize email so 'User@Example.COM' and 'user@example.com' share the same bucket
+    email = email.strip().lower()
+
     from app.core.config import settings
     if settings.ENVIRONMENT == "development":
         max_requests = max(max_requests, 20)
 
-    key = f"pwd_reset_rl:{email.lower()}"
+    key = f"pwd_reset_rl:{email}"
     now = datetime.now(timezone.utc)
 
     try:
         from app.core.redis_client import get_redis
         r = await get_redis()
         if r:
-            count_bytes = await r.get(key)
-            count = int(count_bytes) if count_bytes else 0
-            if count >= max_requests:
+            # M-7 FIX: Use INCR-first pattern to eliminate the TOCTOU race.
+            # The old GET → check → INCR pipeline allowed two concurrent requests to
+            # both see count=0, both pass the guard, and both INCR to 1 — effectively
+            # granting double the allowed requests at the boundary.
+            count = await r.incr(key)
+            if count == 1:
+                await r.expire(key, window_seconds)
+            if count > max_requests:
                 return False
-            # Increment; set TTL only on first request
-            pipe = r.pipeline()
-            pipe.incr(key)
-            if count == 0:
-                pipe.expire(key, window_seconds)
-            await pipe.execute()
             return True
     except Exception:
         pass
@@ -504,6 +530,10 @@ async def check_reset_rate_limit(email: str, max_requests: int = 3, window_secon
     # In-memory fallback: store list of request timestamps
     timestamps = _reset_rate_limit_store.get(email, [])
     cutoff = now - timedelta(seconds=window_seconds)
+    timestamps = [t for t in timestamps if t > cutoff]
+    if len(timestamps) >= max_requests:
+        _reset_rate_limit_store[email] = timestamps
+        return False
     timestamps = [t for t in timestamps if t > cutoff]
     if len(timestamps) >= max_requests:
         _reset_rate_limit_store[email] = timestamps

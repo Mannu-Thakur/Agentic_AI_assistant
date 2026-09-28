@@ -93,6 +93,11 @@ class McpStdioClient:
                 break
 
         self.is_connected = False
+        # Resolve all pending futures with an error so callers don't hang
+        for _fut in list(self.pending_requests.values()):
+            if not _fut.done():
+                _fut.set_exception(ConnectionError('MCP server connection lost unexpectedly.'))
+        self.pending_requests.clear()
 
     async def send_request(self, method: str, params: Optional[Dict[str, Any]] = None) -> Any:
         """
@@ -211,6 +216,7 @@ class McpStdioClient:
                     raise e
                 await asyncio.sleep(backoff)
                 backoff *= 2.0
+        raise RuntimeError(f"MCP tool '{name}' failed after {max_retries} attempts.")
 
     async def close(self):
         """
@@ -354,9 +360,9 @@ class McpHttpClient:
                     "capabilities": {},
                     "clientInfo": {"name": "AntigravityRemoteMcpClient", "version": "1.0.0"},
                 }
+                self._handshake_done = True  # set BEFORE recursive call to prevent infinite recursion
                 await self.send_request("initialize", init_params)
                 await self.send_notification("notifications/initialized")
-                self._handshake_done = True
             except Exception as hs_err:
                 logger.warning(f"[McpHttpClient] Re-handshake warning: {hs_err}")
                 self._handshake_done = True  # proceed anyway; server may not require it
@@ -380,12 +386,12 @@ class McpHttpClient:
 
         try:
             res = await self._client.post(self.url, json=payload, headers=headers)
+            res.raise_for_status()
+
             new_session_id = self._extract_session_id(res)
             if new_session_id:
                 self.session_id = new_session_id
                 logger.info(f"[Remote MCP Session] Received mcp-session-id: {self.session_id}")
-
-            res.raise_for_status()
 
             data = self._parse_response(res.text)
             logger.info(

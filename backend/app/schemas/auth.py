@@ -1,11 +1,20 @@
-from typing import Optional
-from pydantic import BaseModel, EmailStr, ConfigDict
+from typing import Optional, Literal
+from pydantic import BaseModel, EmailStr, ConfigDict, field_validator
 from datetime import datetime
 
 class UserRegister(BaseModel):
     email: EmailStr
     password: str
     full_name: Optional[str] = None
+
+    @field_validator('password')
+    @classmethod
+    def strong_password(cls, v: str) -> str:
+        if len(v) < 8:
+            raise ValueError('Password must be at least 8 characters')
+        if len(v) > 128:
+            raise ValueError('Password is too long')
+        return v
 
 class UserLogin(BaseModel):
     email: EmailStr
@@ -17,7 +26,7 @@ class UserOut(BaseModel):
     full_name: Optional[str] = None
     avatar_url: Optional[str] = None
     is_active: bool
-    role: str = "user"
+    role: Literal['user', 'moderator', 'admin'] = 'user'
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
@@ -45,10 +54,11 @@ class ResetPasswordRequest(BaseModel):
     token: str
     new_password: str
 
+    @field_validator('new_password')
     @classmethod
-    def __get_validators__(cls):
-        yield cls.validate
-
-    def validate_password(self) -> None:
-        if len(self.new_password) < 8:
-            raise ValueError("Password must be at least 8 characters long")
+    def password_strength(cls, v: str) -> str:
+        if len(v) < 8:
+            raise ValueError('Password must be at least 8 characters')
+        if len(v) > 128:
+            raise ValueError('Password is too long')
+        return v

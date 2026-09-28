@@ -255,6 +255,11 @@ export const ChatInput = React.memo(function ChatInput({
 
       // Synchronously clear input and attachments
       setText('');
+      attachments.forEach(att => {
+        if (att.previewUrl) {
+          URL.revokeObjectURL(att.previewUrl);
+        }
+      });
       setAttachments([]);
 
       // Submit prompt and files to parent
@@ -379,14 +384,16 @@ export const ChatInput = React.memo(function ChatInput({
         }
         setText(interimTextRef.current + (interim ? ' ' + interim : ''));
       };
-      recognition.onerror = (err: any) => {
-        console.warn('[SpeechRecognition] Error event:', err);
+      recognition.onerror = (_err: any) => {
+        console.warn('[SpeechRecognition] Error event:', _err);
         setIsListening(false);
         try { recognition.abort(); } catch (_) {}
+        recognitionRef.current = null;
       };
       recognition.onend = () => {
         setIsListening(false);
         setText(interimTextRef.current.trim());
+        recognitionRef.current = null;
       };
       recognitionRef.current = recognition;
       recognition.start();

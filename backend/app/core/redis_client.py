@@ -40,6 +40,9 @@ logger = logging.getLogger("core.redis_client")
 _MEM_STORE: Dict[str, Tuple[str, Optional[float]]] = {}
 _MEM_LOCK: Optional[asyncio.Lock] = None
 
+# B-H6 FIX: Cap the in-memory store to prevent OOM in Redis-less deployments.
+MAX_MEM_STORE_SIZE = 10_000
+
 
 def _get_mem_lock() -> asyncio.Lock:
     global _MEM_LOCK
@@ -66,6 +69,17 @@ async def _mem_get(key: str) -> Optional[Any]:
 async def _mem_set(key: str, value: Any, ttl_seconds: int = 300) -> None:
     expire_at = time.monotonic() + ttl_seconds if ttl_seconds > 0 else None
     async with _get_mem_lock():
+        # B-H6 FIX: Evict expired entries first; if still over cap, evict the oldest.
+        if len(_MEM_STORE) >= MAX_MEM_STORE_SIZE:
+            _now = time.monotonic()
+            _expired = [k for k, (v, e) in list(_MEM_STORE.items()) if e is not None and e < _now]
+            for k in _expired:
+                _MEM_STORE.pop(k, None)
+            if len(_MEM_STORE) >= MAX_MEM_STORE_SIZE:
+                try:
+                    _MEM_STORE.pop(next(iter(_MEM_STORE)))  # evict oldest (FIFO)
+                except StopIteration:
+                    pass
         _MEM_STORE[key] = (json.dumps(value, default=str), expire_at)
 
 
@@ -116,6 +130,15 @@ _redis_client = None
 _last_failed_time = 0.0
 _FAIL_COOLDOWN_SECONDS = 15.0
 _redis_available: Optional[bool] = None  # None = untested, True/False = known state
+# B-H5 FIX: Lock prevents concurrent startup requests from creating multiple pools.
+_redis_init_lock: Optional[asyncio.Lock] = None
+
+
+def _get_redis_init_lock() -> asyncio.Lock:
+    global _redis_init_lock
+    if _redis_init_lock is None:
+        _redis_init_lock = asyncio.Lock()
+    return _redis_init_lock
 
 
 async def get_redis():
@@ -130,6 +153,7 @@ async def get_redis():
     """
     global _redis_client, _last_failed_time
 
+    # Fast path — already connected
     if _redis_client is not None:
         return _redis_client
 
@@ -137,37 +161,53 @@ async def get_redis():
     if now - _last_failed_time < _FAIL_COOLDOWN_SECONDS:
         return None
 
-    _client = None
-    try:
-        import redis.asyncio as aioredis
-        from app.core.config import settings
+    # B-H5 FIX: Serialize connection attempts with a lock so only one coroutine
+    # attempts the TCP connect; others wait and then use the cached result.
+    async with _get_redis_init_lock():
+        # Double-check after acquiring lock
+        if _redis_client is not None:
+            return _redis_client
 
-        _client = aioredis.from_url(
-            settings.REDIS_URL,
-            encoding="utf-8",
-            decode_responses=True,
-            socket_connect_timeout=1,
-            socket_timeout=1,
-            protocol=2,  # RESP2 — compatible with Redis 5+
-        )
-        # Verify the connection is live before caching
-        await _client.ping()
-        _redis_client = _client
-        logger.info(f"[Redis] Connected: {settings.REDIS_URL}")
-    except Exception as e:
-        logger.warning(
-            f"[Redis] Unavailable ({e.__class__.__name__}: {e}) — "
-            "falling back to in-memory TTL cache."
-        )
-        _redis_client = None
-        _last_failed_time = time.monotonic()
-        if _client is not None:
+        _client = None
+        try:
+            import redis.asyncio as aioredis
+            from app.core.config import settings
+
+            _client = aioredis.from_url(
+                settings.REDIS_URL,
+                encoding="utf-8",
+                decode_responses=True,
+                socket_connect_timeout=1,
+                socket_timeout=1,
+                protocol=2,  # RESP2 — compatible with Redis 5+
+            )
+            # Verify the connection is live before caching
+            await _client.ping()
+            _redis_client = _client
+
+            # L-1 FIX: Mask password in log to avoid credentials leaking to log aggregators.
             try:
-                await _client.aclose()
+                from urllib.parse import urlparse, urlunparse
+                _parsed = urlparse(settings.REDIS_URL)
+                _safe_url = urlunparse(_parsed._replace(password="***")) if _parsed.password else settings.REDIS_URL
             except Exception:
-                pass
+                _safe_url = "<redis>"
+            logger.info(f"[Redis] Connected: {_safe_url}")
+        except Exception as e:
+            logger.warning(
+                f"[Redis] Unavailable ({e.__class__.__name__}: {e}) — "
+                "falling back to in-memory TTL cache."
+            )
+            _redis_client = None
+            _last_failed_time = time.monotonic()
+            if _client is not None:
+                try:
+                    await _client.aclose()
+                except Exception:
+                    pass
 
     return _redis_client
+
 
 
 # ── Public cache helpers ───────────────────────────────────────────────────────

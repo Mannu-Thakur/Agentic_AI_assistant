@@ -159,10 +159,14 @@ async def lifespan(app: FastAPI):
     except Exception as _pv_err:
         logger.warning(f"Provider startup validation encountered an issue (non-fatal): {_pv_err}")
 
-    # Initialize ToolRegistry and load configured MCP servers
+    # I-H1 FIX: Instantiate ToolRegistry once and reuse the same singleton across
+    # startup and shutdown. Previously ToolRegistry() was called twice, creating two
+    # separate instances — shutdown() was a no-op because it ran on the wrong object.
+    _tool_registry = None
     try:
         from app.tools.registry import ToolRegistry
-        await ToolRegistry().initialize()
+        _tool_registry = ToolRegistry()
+        await _tool_registry.initialize()
         logger.info("ToolRegistry and MCP servers initialized on startup.")
     except Exception as _tr_err:
         logger.warning(f"ToolRegistry startup initialization warning (non-fatal): {_tr_err}")
@@ -175,10 +179,16 @@ async def lifespan(app: FastAPI):
     _get_mem_lock()   # creates and caches the asyncio.Lock while event loop is active
 
     # Start background provider health check task
-    from app.workers.health_check import provider_health_check_loop
-    bg_task = asyncio.create_task(provider_health_check_loop())
-    _bg_tasks.add(bg_task)          # HIGH-2 FIX: strong reference prevents GC
-    bg_task.add_done_callback(_bg_tasks.discard)  # auto-clean on completion
+    # I-H2 FIX: Initialize bg_task to None before the try block so shutdown cannot
+    # hit an UnboundLocalError if startup raises before the task is created.
+    bg_task = None
+    try:
+        from app.workers.health_check import provider_health_check_loop
+        bg_task = asyncio.create_task(provider_health_check_loop())
+        _bg_tasks.add(bg_task)          # HIGH-2 FIX: strong reference prevents GC
+        bg_task.add_done_callback(_bg_tasks.discard)  # auto-clean on completion
+    except Exception as _bg_err:
+        logger.warning(f"Background health-check task failed to start (non-fatal): {_bg_err}")
 
 
     yield  # Application runs here
@@ -191,30 +201,36 @@ async def lifespan(app: FastAPI):
         pass
 
     # ── Shutdown ToolRegistry MCP clients ─────────────────────────────────────
-    try:
-        from app.tools.registry import ToolRegistry
-        await ToolRegistry().shutdown()
-    except Exception as _tr_err:
-        logger.warning(f"Error shutting down ToolRegistry: {_tr_err}")
+    # I-H1 FIX: Use the same _tool_registry instance from startup, not a new ToolRegistry()
+    if _tool_registry is not None:
+        try:
+            await _tool_registry.shutdown()
+        except Exception as _tr_err:
+            logger.warning(f"Error shutting down ToolRegistry: {_tr_err}")
 
     # Shutdown: cancel task
-    bg_task.cancel()
-    try:
-        await bg_task
-    except asyncio.CancelledError:
-        pass
+    if bg_task is not None:
+        bg_task.cancel()
+        try:
+            await bg_task
+        except asyncio.CancelledError:
+            pass
     logger.info("Application shutting down.")
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  FastAPI app
 # ─────────────────────────────────────────────────────────────────────────────
 
+# M-1 FIX: Hide OpenAPI documentation in production to avoid exposing API surface.
+# Docs are only available when DEBUG=True (local development).
+_is_debug = getattr(settings, "DEBUG", False)
 app = FastAPI(
     title=settings.PROJECT_NAME,
-    openapi_url=f"{settings.API_V1_STR}/openapi.json",
-    docs_url="/docs",
-    redoc_url="/redoc",
+    openapi_url=f"{settings.API_V1_STR}/openapi.json" if _is_debug else None,
+    docs_url="/docs" if _is_debug else None,
+    redoc_url="/redoc" if _is_debug else None,
     lifespan=lifespan,
 )
 
@@ -398,16 +414,22 @@ async def request_lifecycle_middleware(request: Request, call_next):
 # CORSMiddleware MUST be added LAST so it becomes the outermost middleware,
 # ensuring Access-Control-Allow-Origin headers are attached to all responses,
 # preflight OPTIONS requests, and unhandled exception responses.
+# I-C4 FIX: Tighten CORS — removed wildcard allow_methods/allow_headers and the
+# *.vercel.app allow_origin_regex (any Vercel app could make credentialed requests).
+# Explicit allowed methods/headers only. Frontend origin is controlled via settings.
 if settings.BACKEND_CORS_ORIGINS:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.BACKEND_CORS_ORIGINS,
-        allow_origin_regex=r"https://.*\.vercel\.app",
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=[
+            "Authorization", "Content-Type", "X-Request-ID",
+            "X-API-Key", "x-api-keys", "Accept", "Origin",
+        ],
         expose_headers=["X-Request-ID", "X-Process-Time", "X-Trace-ID"],
     )
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────

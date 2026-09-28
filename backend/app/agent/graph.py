@@ -136,7 +136,7 @@ def route_after_classify(state: AgentState) -> str:
 
 def route_retrieval(state: AgentState) -> str:
     """Self-RAG router: skip or execute retrieval."""
-    if state.get("needs_retrieval", True):
+    if state.get("needs_retrieval", False):
         return "retrieve_context"
     return "generate_response"
 
@@ -151,7 +151,7 @@ def route_after_grading(state: AgentState) -> str:
     max_retries  = state.get("max_retrieval_retries", 2)
     needs_retrieval = state.get("needs_retrieval", True)
 
-    if needs_retrieval and confidence < 0.5 and retry_count <= max_retries:
+    if needs_retrieval and confidence < 0.5 and retry_count < max_retries:
         return "retrieve_context"
     return "generate_response"
 
@@ -160,9 +160,11 @@ def route_after_generation(state: AgentState) -> str:
     """After generate_response: run tools, check evidence, or reflect."""
     tool_calls = state.get("tool_calls", [])
     steps = state.get("steps", [])
-    if tool_calls and "execute_web_search" not in steps:
-        return "execute_tools"
-    return "evidence_checker"
+    MAX_TOOL_CYCLES = 4
+    iteration = state.get('iteration_count', 0)
+    if tool_calls and 'execute_web_search' not in steps and iteration < MAX_TOOL_CYCLES:
+        return 'execute_tools'
+    return 'evidence_checker'
 
 
 def route_after_evidence_checker(state: AgentState) -> str:
@@ -173,7 +175,7 @@ def route_after_evidence_checker(state: AgentState) -> str:
 def route_after_reflection(state: AgentState) -> str:
     """After reflection: regenerate if quality is insufficient, else finish."""
     intent = state.get("intent", INTENT_NORMAL_CHAT)
-    if intent in (INTENT_VISION, INTENT_MEMORY_WRITE, INTENT_NORMAL_CHAT):
+    if intent in (INTENT_VISION, INTENT_MEMORY_WRITE, INTENT_NORMAL_CHAT, INTENT_DOCUMENT_QA):
         return END
     passed    = state.get("reflection_passed", True)
     iteration = state.get("iteration_count", 0)

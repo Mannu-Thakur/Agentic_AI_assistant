@@ -68,7 +68,7 @@ services:
       - neo4j_data:/data
       - neo4j_logs:/logs
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 && nc -z localhost 7687 || exit 1"]
       interval: 30s
       timeout: 10s
       start_period: 60s
@@ -82,7 +82,7 @@ services:
     container_name: ai_assistant_backend
     restart: unless-stopped
     ports:
-      - "${BACKEND_PORT:-8000}:8000"
+      - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
     env_file:
       - .env
     environment:
@@ -95,7 +95,7 @@ services:
       VECTOR_DB_DIR:  /app/vector_db
       UPLOAD_DIR:     /app/uploads
       # Clear Windows Tesseract path — Linux binary is auto-detected at /usr/bin/tesseract
-      TESSERACT_CMD:  ""
+      TESSERACT_CMD:  /usr/bin/tesseract
     depends_on:
       postgres:
         condition: service_healthy

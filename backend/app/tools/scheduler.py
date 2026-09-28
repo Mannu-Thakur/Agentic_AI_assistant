@@ -111,7 +111,21 @@ class ToolScheduler:
 
             # Execute all ready tasks concurrently
             coros = [self._execute_task(task_map[tid], results) for tid in ready]
-            batch_results = await asyncio.gather(*coros, return_exceptions=False)
+            batch_results_raw = await asyncio.gather(*coros, return_exceptions=True)
+
+            batch_results = []
+            for _i, _res in enumerate(batch_results_raw):
+                if isinstance(_res, BaseException):
+                    logger.error(f'[Scheduler] Task raised unexpectedly: {_res}')
+                    # Create error result — map back to the ready task id
+                    _tid = ready[_i]
+                    batch_results.append(ToolResult(
+                        id=_tid, tool=task_map[_tid].tool,
+                        status='error', output=str(_res),
+                        latency_ms=0.0,
+                    ))
+                else:
+                    batch_results.append(_res)
 
             for res in batch_results:
                 results[res.id] = res

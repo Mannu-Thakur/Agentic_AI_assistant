@@ -108,7 +108,7 @@ function applyCompactMode(enabled: boolean) {
 }
 
 // ── OS theme change listener ─────────────────────────────────────────────
-let _osThemeCleanup: (() => void) | null = null;
+let _osThemeCleanup: (() => void) | null | undefined = null;
 
 function attachOsThemeListener() {
   if (_osThemeCleanup) _osThemeCleanup();
@@ -154,10 +154,18 @@ export const useUIStore = create<UIState>((set) => ({
   activeView: 'chat',
 
   toggleTheme: () => set((state) => {
-    const next: ThemeType = state.theme === 'dark' ? 'light' : 'dark';
-    localStorage.setItem('theme', next);
-    applyTheme(next);
-    return { theme: next };
+    const _order: ThemeType[] = ['light', 'dark', 'system'];
+    const _idx = _order.indexOf(state.theme);
+    const _next = _order[(_idx + 1) % _order.length];
+    localStorage.setItem('theme', _next);
+    applyTheme(_next);
+    if (_next === 'system') {
+      attachOsThemeListener();
+    } else if (typeof _osThemeCleanup === 'function') {
+      _osThemeCleanup();
+      _osThemeCleanup = undefined;
+    }
+    return { theme: _next };
   }),
 
   setTheme: (theme) => {
@@ -165,6 +173,9 @@ export const useUIStore = create<UIState>((set) => ({
     applyTheme(theme);
     if (theme === 'system') {
       attachOsThemeListener();
+    } else if (typeof _osThemeCleanup === 'function') {
+      _osThemeCleanup();
+      _osThemeCleanup = undefined;
     }
     set({ theme });
   },

@@ -123,12 +123,13 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:
         try:
             yield session
-            await session.commit()
+            # M-1 FIX: Removed auto-commit. Route handlers must manage commits explicitly.
         except Exception:
             await session.rollback()
             raise
         finally:
             await session.close()
+
 
 
 # ── Phase 3: safe schema migrations ───────────────────────────────────────────
@@ -145,9 +146,21 @@ def run_schema_migrations() -> None:
     Uses database-agnostic SQLAlchemy inspection.
     Only called explicitly from the application lifespan — NOT on module import.
     """
+    import re as _re_ddl
     from sqlalchemy import inspect
+
     import app.models  # Ensure model registries are imported
     from app.models.evaluation import EvalResult
+
+    _SAFE_DDL_TYPE_RE = _re_ddl.compile(r'^[A-Z0-9_\s\(\)\.\,]+$', _re_ddl.IGNORECASE)
+    _SAFE_DDL_NAME_RE = _re_ddl.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
+
+    def _safe_add_column(conn, table_name: str, col_name: str, col_type: str):
+        # B-C5 FIX: Validate table, column name and column type to prevent DDL injection
+        if not (_SAFE_DDL_NAME_RE.match(table_name) and _SAFE_DDL_NAME_RE.match(col_name) and _SAFE_DDL_TYPE_RE.match(col_type)):
+            raise ValueError(f"Unsafe DDL parameters rejected: table={table_name!r}, col={col_name!r}, type={col_type!r}")
+        conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {col_name} {col_type}"))
+        logger.info(f"[schema] Added column {table_name}.{col_name}")
 
     try:
         Base.metadata.create_all(bind=engine)
@@ -165,9 +178,8 @@ def run_schema_migrations() -> None:
             with engine.begin() as conn:
                 for col_name, col_type in new_memories_cols:
                     if col_name not in existing_memories_cols:
-                        ddl = f"ALTER TABLE memories ADD COLUMN {col_name} {col_type}"
-                        conn.execute(text(ddl))
-                        logger.info(f"[schema] Added column memories.{col_name}")
+                        _safe_add_column(conn, "memories", col_name, col_type)
+
 
         # 1.1 Update chats table (add is_live_share)
         if inspector.has_table("chats"):
@@ -298,8 +310,7 @@ def run_schema_migrations() -> None:
                 with engine.begin() as conn:
                     for col_name, col_type in new_cols:
                         if col_name not in existing_api_key_cols:
-                            conn.execute(text(f"ALTER TABLE api_keys ADD COLUMN {col_name} {col_type}"))
-                            logger.info(f"[schema] Added column api_keys.{col_name}")
+                            _safe_add_column(conn, "api_keys", col_name, col_type)
 
                 # Backfill statuses based on is_verified if status was not already present
                 if "status" not in existing_api_key_cols:
@@ -336,20 +347,19 @@ def run_schema_migrations() -> None:
             with engine.begin() as conn:
                 for col_name, col_type in pref_cols:
                     if col_name not in existing_pref_cols:
-                        conn.execute(text(f"ALTER TABLE user_preferences ADD COLUMN {col_name} {col_type}"))
-                        logger.info(f"[schema] Added column user_preferences.{col_name}")
+                        _safe_add_column(conn, "user_preferences", col_name, col_type)
 
     except Exception as exc:
         # MED-5 FIX: distinguish non-fatal "column already exists" warnings from
-        # fatal errors (DB unreachable, permission denied).  Swallowing ALL
+        # fatal errors (DB unreachable, permission denied). Swallowing ALL
         # exceptions here lets the server start with missing tables, causing a
         # cascade of confusing 500s that are very hard to diagnose.
+        # OperationalError is NOT swallowed — if DB is down, startup must fail.
         _msg = str(exc).lower()
         _non_fatal_hints = (
             "duplicate column",      # SQLite: column already exists
             "already exists",        # PostgreSQL
             "no such table",         # inspection on empty db (first run)
-            "operational error",     # transient; create_all will retry
         )
         if any(hint in _msg for hint in _non_fatal_hints):
             logger.warning(f"[schema] Non-fatal migration note: {exc}")
@@ -357,4 +367,5 @@ def run_schema_migrations() -> None:
             # Fatal: DB connection refused, permission denied, etc.
             logger.error(f"[schema] Fatal migration error — server may not function correctly: {exc}")
             raise
+
 

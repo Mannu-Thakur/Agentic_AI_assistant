@@ -97,6 +97,8 @@ function _loadCachedProviders(): Provider[] {
   return [];
 }
 
+const _cachedProviders = _loadCachedProviders();
+
 export const useChatStore = create<ChatState>((set, get) => ({
   chats: [],
   activeChatId: localStorage.getItem('omni_active_chat_id') || null,
@@ -105,43 +107,42 @@ export const useChatStore = create<ChatState>((set, get) => ({
   activeModel: localStorage.getItem('active_model') || '',
   isStreaming: false,
   // Hydrate from localStorage cache — keysLoading is only true when there's no cache yet
-  providers: _loadCachedProviders(),
-  verifiedProviders: _loadCachedProviders()
+  providers: _cachedProviders,
+  verifiedProviders: _cachedProviders
     .filter(p => p.verified || p.status === 'VERIFIED')
     .map(p => p.id),
-  keysLoading: _loadCachedProviders().length === 0,
+  keysLoading: _cachedProviders.length === 0,
 
   setChats: (chats) => set({
     chats: [...chats].sort((a, b) => getChatTimestamp(b) - getChatTimestamp(a))
   }),
 
-  setActiveChatId: (id) => {
+  setActiveChatId: (id) => set((state) => {
     if (id) {
       localStorage.setItem('omni_active_chat_id', id);
-      const state = get();
       const cachedMsgs = state.messageCache[id];
       const isSameOrNewSession = state.activeChatId === id || state.activeChatId === null || state.activeChatId?.startsWith('temp-');
       const msgsToKeep = (cachedMsgs && cachedMsgs.length > 0)
         ? cachedMsgs
         : (isSameOrNewSession && state.messages.length > 0 ? state.messages : []);
       const keepStreaming = isSameOrNewSession ? state.isStreaming : false;
-      set({
+      return {
         activeChatId: id,
         messages: msgsToKeep,
         isStreaming: keepStreaming,
         messageCache: (cachedMsgs && cachedMsgs.length > 0)
           ? state.messageCache
           : (msgsToKeep.length > 0 ? { ...state.messageCache, [id]: msgsToKeep } : state.messageCache),
-      });
+      };
     } else {
       localStorage.removeItem('omni_active_chat_id');
-      set({
+      return {
         activeChatId: null,
         messages: [],
         isStreaming: false,
-      });
+      };
     }
-  },
+  }),
 
   setMessages: (messages) => {
     const activeId = get().activeChatId;
@@ -261,7 +262,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     return {
       messages: nextMsgs,
       messageCache: activeId
-        ? { ...state.messageCache, [activeId]: nextMsgs }
+        ? evictMessageCache({ ...state.messageCache, [activeId]: nextMsgs }, activeId)
         : state.messageCache,
     };
   }),

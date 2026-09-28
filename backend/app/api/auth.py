@@ -6,9 +6,25 @@ from fastapi import APIRouter, Depends, HTTPException, status, Response, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.config import settings
-from app.core.security import create_access_token, create_refresh_token, verify_token
+from app.core.security import (
+    create_access_token,
+    create_refresh_token,
+    verify_token,
+    is_token_blacklisted,
+    blacklist_token,
+    unblacklist_token,
+    generate_state_token,
+    store_oauth_state,
+    verify_oauth_state,
+    is_safe_redirect_url,
+    check_reset_rate_limit,
+    store_reset_token,
+    verify_reset_token,
+    verify_and_consume_reset_token,
+)
 from app.schemas.auth import UserRegister, UserLogin, Token, UserOut, ForgotPasswordRequest, ResetPasswordRequest
 from app.services.auth_service import AuthService
+from app.services.audit_service import AuditService
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from app.models.user import User, UserPreference
 import logging
@@ -24,8 +40,6 @@ async def get_current_user(
     db: AsyncSession = Depends(get_db)
 ) -> UserOut:
     token = credentials.credentials
-    from app.core.security import is_token_blacklisted
-    from app.services.audit_service import AuditService
     client_ip = request.client.host if request.client else "unknown"
 
     if await is_token_blacklisted(token):
@@ -76,8 +90,11 @@ async def get_current_user_optional(
         return None
     try:
         return await get_current_user(request, credentials, db)
-    except HTTPException:
-        return None
+    except HTTPException as _he:
+        if _he.status_code in (401, 403):
+            return None
+        raise
+
 
 
 class RoleChecker:
@@ -124,13 +141,8 @@ async def login(
         )
     
     # Audit log the login
-    from app.services.audit_service import AuditService
     client_ip = request.client.host if request.client else "unknown"
     await AuditService.log_event(db, user.id, "login", {"method": "password"}, client_ip)
-
-    # Clear any global user revocation marker upon successful primary authentication
-    from app.core.security import unblacklist_token, blacklist_token
-    await unblacklist_token(f"user_revoked:{user.id}")
 
     # Token rotation: blacklist old refresh token if exists
     old_refresh = request.cookies.get("refresh_token")
@@ -158,6 +170,7 @@ async def login(
         expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
     )
 
+
 @router.post("/refresh", response_model=Token)
 async def refresh_token(request: Request, response: Response, db: AsyncSession = Depends(get_db)):
     refresh_token = request.cookies.get("refresh_token")
@@ -168,7 +181,6 @@ async def refresh_token(request: Request, response: Response, db: AsyncSession =
             detail="Missing refresh token"
         )
     
-    from app.core.security import is_token_blacklisted, blacklist_token
     if await is_token_blacklisted(refresh_token):
         # Compromise detection: try to identify the user to invalidate all their active sessions
         try:

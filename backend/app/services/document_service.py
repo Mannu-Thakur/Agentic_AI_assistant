@@ -24,9 +24,12 @@ class DocumentService:
         result = await db.execute(query)
         docs = list(result.scalars().all())
 
-        # Auto-heal: If any document has been in 'processing' for > 90 seconds,
+        # Auto-heal: If any document has been in 'processing' for longer than
+        # PROCESSING_TIMEOUT_SECONDS (default 600s, configurable via settings),
         # it was interrupted by server crash/reload/worker timeout. Mark it as 'failed'
         # so the client receives a non-spinning state and shows the Retry button.
+        from app.core.config import settings as _settings
+        PROCESSING_TIMEOUT_SECONDS = int(getattr(_settings, 'DOCUMENT_PROCESSING_TIMEOUT', 600))
         now = datetime.now(timezone.utc)
         has_auto_healed = False
         for doc in docs:
@@ -34,7 +37,7 @@ class DocumentService:
                 up_time = doc.uploaded_at
                 if up_time.tzinfo is None:
                     up_time = up_time.replace(tzinfo=timezone.utc)
-                if (now - up_time).total_seconds() > 90:
+                if (now - up_time).total_seconds() > PROCESSING_TIMEOUT_SECONDS:
                     doc.status = "failed"
                     doc.error_message = "Indexing timed out on server. Click Retry to re-index."
                     has_auto_healed = True
@@ -97,18 +100,18 @@ class DocumentService:
 
         storage_path = doc.storage_path
 
-        # 1. Clean up vectorized chunks in ChromaDB and invalidate user BM25 index
-        try:
-            vector_store = VectorStore()
-            await vector_store.delete_document_chunks(doc.id, user_id=user_id)
-        except Exception as e:
-            logger.error(f"Failed to delete ChromaDB chunks for document {doc.id}: {str(e)}")
-
-        # 2. Remove relational database entry first
+        # 1. Remove relational database entry first — DB is clean even if vector/file cleanup fails
         await db.delete(doc)
         await db.commit()
 
-        # 3. Clean up physical file on disk only after DB commit succeeds
+        # 2. Clean up vectorized chunks in ChromaDB and invalidate user BM25 index
+        try:
+            vector_store = VectorStore()
+            await vector_store.delete_document_chunks(doc_id, user_id=user_id)
+        except Exception as e:
+            logger.error(f"Failed to delete ChromaDB chunks for document {doc_id}: {str(e)}")
+
+        # 3. Clean up physical file on disk last
         if storage_path and os.path.exists(storage_path):
             try:
                 os.remove(storage_path)

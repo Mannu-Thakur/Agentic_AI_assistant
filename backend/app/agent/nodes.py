@@ -856,10 +856,10 @@ def validate_citations(text: str, valid_sources: List[Dict[str, Any]]) -> str:
             try:
                 i_val = int(idx)
                 valid_indices.add(i_val)
-                # Support both 0-based and 1-based index matching
+                # Support 0-based to 1-based index matching
                 valid_indices.add(i_val + 1)
-                valid_indices.add(i_val - 1)
             except (ValueError, TypeError):
+
                 pass
         for field in ("title", "source", "name", "id", "url"):
             val = str(s.get(field) or "").strip().lower()
@@ -915,18 +915,25 @@ _PROVIDER_RL_COOLDOWN: float = 15.0  # seconds to skip a rate-limited provider
 _provider_rate_limited_at: dict = {}  # key_name → time.monotonic()
 
 
-def _normalize_provider_key(key_name: str) -> str:
+def _normalize_provider_key(key_name: str, api_key: Optional[str] = None) -> str:
     if not key_name:
         return "unknown"
     k = str(key_name).strip().lower()
     for canonical in ("groq", "gemini", "openai", "openrouter", "anthropic", "cohere", "tavily"):
         if canonical in k:
-            return canonical
+            k = canonical
+            break
+    # C-H1 FIX: Scope rate-limiting per API key prefix so one user's quota exhaustion
+    # does not throttle other users with valid API keys.
+    if api_key:
+        import hashlib as _hl
+        prefix = _hl.md5(api_key.encode()).hexdigest()[:8]
+        return f"{k}:{prefix}"
     return k
 
 
-def _is_provider_rate_limited(key_name: str) -> bool:
-    c_key = _normalize_provider_key(key_name)
+def _is_provider_rate_limited(key_name: str, api_key: Optional[str] = None) -> bool:
+    c_key = _normalize_provider_key(key_name, api_key)
     last_rl = _provider_rate_limited_at.get(c_key)
     if last_rl is None:
         return False
@@ -937,13 +944,14 @@ def _is_provider_rate_limited(key_name: str) -> bool:
     return False
 
 
-def _mark_provider_rate_limited(key_name: str) -> None:
-    c_key = _normalize_provider_key(key_name)
+def _mark_provider_rate_limited(key_name: str, api_key: Optional[str] = None) -> None:
+    c_key = _normalize_provider_key(key_name, api_key)
     _provider_rate_limited_at[c_key] = time.monotonic()
     logger.warning(
         f"[RateLimit] Provider '{c_key}' marked rate-limited for "
         f"{_PROVIDER_RL_COOLDOWN}s — will be skipped in fallback calls."
     )
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -978,7 +986,7 @@ async def _call_llm_judge(prompt: str, config: dict) -> Optional[dict]:
         if not api_key:
             continue
         # Skip temporarily rate-limited providers
-        if _is_provider_rate_limited(key_name):
+        if _is_provider_rate_limited(key_name, api_key=api_key):
             logger.debug(f"[Judge] Skipping rate-limited provider '{key_name}'")
             continue
         try:
@@ -1009,9 +1017,10 @@ async def _call_llm_judge(prompt: str, config: dict) -> Optional[dict]:
         except Exception as e:
             err_str = str(e)
             if is_quota_exhaustion(err_str):
-                _mark_provider_rate_limited(key_name)
+                _mark_provider_rate_limited(key_name, api_key=api_key)
             logger.warning(f"Judge call failed on {key_name}/{model}: {e}")
             continue
+
 
     return None
 
@@ -1045,7 +1054,7 @@ async def _call_llm_text(prompt: str, config: dict, max_tokens: int = 256) -> Op
         if not api_key:
             continue
         # Skip temporarily rate-limited providers
-        if _is_provider_rate_limited(key_name):
+        if _is_provider_rate_limited(key_name, api_key=api_key):
             logger.debug(f"[TextCall] Skipping rate-limited provider '{key_name}'")
             continue
         try:
@@ -1065,9 +1074,10 @@ async def _call_llm_text(prompt: str, config: dict, max_tokens: int = 256) -> Op
         except Exception as e:
             err_str = str(e)
             if is_quota_exhaustion(err_str):
-                _mark_provider_rate_limited(key_name)
+                _mark_provider_rate_limited(key_name, api_key=api_key)
             logger.warning(f"Text call failed on {key_name}/{model}: {e}")
             continue
+
 
     return None
 
@@ -1668,18 +1678,22 @@ async def memory_write_node(
                 api_key = keys.get(key_name)
                 if not api_key:
                     continue
-                result = await provider.generate(
-                    messages=messages_for_ack,
-                    model=model,
-                    temperature=0.7,
-                    max_tokens=80,
-                    tools=None,
-                    api_key=api_key,
+                result = await asyncio.wait_for(
+                    provider.generate(
+                        messages=messages_for_ack,
+                        model=model,
+                        temperature=0.7,
+                        max_tokens=80,
+                        tools=None,
+                        api_key=api_key,
+                    ),
+                    timeout=5.0,
                 )
                 candidate = result.get("text", "").strip()
                 if candidate:
                     ack_text = candidate
                 break
+
         except Exception as e:
             logger.warning(f"memory_write_node: ACK generation failed, using template: {e}")
 
@@ -2104,7 +2118,8 @@ async def check_retrieval_node(
 
     if intent in (
         INTENT_WEB_SEARCH, INTENT_MCP_TOOL, INTENT_MEMORY_WRITE, INTENT_VISION,
-        INTENT_CODE_EXECUTION, INTENT_MATH, INTENT_PROGRAMMING, INTENT_TRANSLATION
+        INTENT_CODE_EXECUTION, INTENT_MATH, INTENT_PROGRAMMING, INTENT_TRANSLATION,
+        INTENT_FINANCE
     ) and not is_private_doc:
         needs_retrieval = False
         reason = f"Intent {intent} does not require vector retrieval"
@@ -2131,7 +2146,8 @@ async def check_retrieval_node(
     if not needs_retrieval and not has_user_docs:
         needs_retrieval = False
         reason = "No user documents active/uploaded — vector retrieval skipped"
-    elif not needs_retrieval and intent not in (INTENT_WEB_SEARCH, INTENT_MCP_TOOL, INTENT_MEMORY_WRITE, INTENT_VISION):
+    elif not needs_retrieval and intent not in (INTENT_WEB_SEARCH, INTENT_MCP_TOOL, INTENT_MEMORY_WRITE, INTENT_VISION, INTENT_FINANCE):
+
         last_query = state.get("resolved_query")
         if not last_query:
             for msg in reversed(messages):
@@ -2335,13 +2351,11 @@ async def retrieve_context_node(
         try:
             from app.services.document_service import DocumentService
             async with AsyncSessionLocal() as db:
-                _docs_res = DocumentService.get_user_documents(db, user_id)
-                if inspect.isawaitable(_docs_res):
-                    user_docs = await _docs_res
-                else:
-                    user_docs = _docs_res or []
+                user_docs = await DocumentService.get_user_documents(db, user_id)
+                user_docs = user_docs or []
                 num_docs = len(user_docs)
                 total_size_bytes = sum(getattr(d, "size_bytes", 0) or 0 for d in user_docs)
+
         except Exception as e:
             logger.error(f"Failed to fetch user documents for dynamic k: {e}")
 
@@ -2898,13 +2912,14 @@ async def grade_documents_node(
         steps.append("grade_documents")
         return {
             "document_relevance":  "irrelevant",
-            "no_doc_answer":       has_doc_chunks,  # If candidate doc chunks existed but failed grade, enforce no-doc guard
+            "no_doc_answer":       False,  # C-H6 FIX: Public queries falling back to model knowledge should answer from parametric knowledge
             "retrieved_documents": memory_items,   # only memories, no chunks
             "source_documents":    [],              # ← authoritative: no sources
             "retrieval_confidence": confidence_score,
             "generation_mode":     "model_knowledge",
             "steps":               steps,
         }
+
 
     # ── Build final validated source_documents (only used=True chunks) ────────
     # Mark each chunk that passed CRAG as used=True for frontend attribution.
@@ -2965,45 +2980,49 @@ class StreamingSanitizer:
     Maintains a sliding window buffer of streaming tokens to detect and redact
     internal tool names and CoT phrases in real-time, handling words split
     across chunk boundaries.
+    MED-4 FIX: Pre-compiled regex patterns to avoid recompiling on every token chunk.
     """
+    _PHRASES_TO_REDACT = [
+        re.compile(r"function\s*=>\s*\{[^{}]*\"query\"[^{}]*\}\s*(?:</function>)?", re.IGNORECASE | re.DOTALL),
+        re.compile(r"function\s*=>\s*\{.*?\}(?:</function>)?", re.IGNORECASE | re.DOTALL),
+        re.compile(r"function\s*=>\s*.*?(?:</function>|\n|$)", re.IGNORECASE | re.DOTALL),
+        re.compile(r"</?function\b[^>]*>", re.IGNORECASE | re.DOTALL),
+        re.compile(r"<(?:>|/[^>]*>)?\s*\{[^{}]*\"query\"[^{}]*\}\s*</?>?", re.IGNORECASE | re.DOTALL),
+        re.compile(r"\{[^{}]*\"query\"\s*:\s*\"[^\"]*\"[^{}]*\}", re.IGNORECASE | re.DOTALL),
+        re.compile(r"<tool_call>.*?</tool_call>", re.IGNORECASE | re.DOTALL),
+        re.compile(r"<search>.*?</search>", re.IGNORECASE | re.DOTALL),
+        re.compile(r"<search_query>.*?</search_query>", re.IGNORECASE | re.DOTALL),
+        re.compile(r"\[tool output:\s*\w+\]\s*", re.IGNORECASE | re.DOTALL),
+        re.compile(r"calling tools?:\s*[\w,\s]+\.{3}", re.IGNORECASE | re.DOTALL),
+        re.compile(r"i (?:used|called|invoked|ran|executed) (?:the )?(?:tool|sandbox|search)\b[^.]*\.", re.IGNORECASE | re.DOTALL),
+        re.compile(r"\[System Context:[^\]]*\]\s*", re.IGNORECASE | re.DOTALL),
+        re.compile(r"\[System Context\]\s*", re.IGNORECASE | re.DOTALL),
+    ]
+
     def __init__(self, internal_names: List[str]):
-        self.internal_names = internal_names
+        self.internal_names = internal_names or []
         self.buffer = ""
         self.block_prefixes = [
             "calling tools:", "calling tool:", "i used the", "i called the",
             "i executed the", "i ran the", "tool output:", "tool result:",
             "[tool output:"
         ]
-        
+        self._compiled_name_patterns = [
+            re.compile(rf"\b{re.escape(name)}\b", re.IGNORECASE)
+            for name in self.internal_names
+        ]
+
     def feed(self, chunk: str) -> str:
         self.buffer += chunk
-        
+
         # 1. Clean completed forbidden patterns or raw tool-call JSON
-        import re
-        phrases_to_redact = [
-            r"function\s*=>\s*\{[^{}]*\"query\"[^{}]*\}\s*(?:</function>)?",
-            r"function\s*=>\s*\{.*?\}(?:</function>)?",
-            r"function\s*=>\s*.*?(?:</function>|\n|$)",
-            r"</?function\b[^>]*>",
-            r"<(?:>|/[^>]*>)?\s*\{[^{}]*\"query\"[^{}]*\}\s*</?>?",
-            r"\{[^{}]*\"query\"\s*:\s*\"[^\"]*\"[^{}]*\}",
-            r"<tool_call>.*?</tool_call>",
-            r"<search>.*?</search>",
-            r"<search_query>.*?</search_query>",
-            r"\[tool output:\s*\w+\]\s*",
-            r"calling tools?:\s*[\w,\s]+\.{3}",
-            r"i (?:used|called|invoked|ran|executed) (?:the )?(?:tool|sandbox|search)\b[^.]*\.",
-            r"\[System Context:[^\]]*\]\s*",
-            r"\[System Context\]\s*",
-        ]
-        for phrase in phrases_to_redact:
-            self.buffer = re.sub(phrase, "", self.buffer, flags=re.IGNORECASE | re.DOTALL)
-            
-        # Redact exact internal names
-        for name in self.internal_names:
-            pattern = re.compile(rf"\b{re.escape(name)}\b", re.IGNORECASE)
+        for pattern in self._PHRASES_TO_REDACT:
             self.buffer = pattern.sub("", self.buffer)
-            
+
+        # Redact exact internal names
+        for pattern in self._compiled_name_patterns:
+            self.buffer = pattern.sub("", self.buffer)
+
         # 2. Check if the end of the buffer might be an incomplete match of a forbidden term
         lower_buf = self.buffer.lower()
         hold_len = 0
@@ -3013,7 +3032,7 @@ class StreamingSanitizer:
                 suffix = lower_buf[-l:]
                 if target.startswith(suffix):
                     hold_len = max(hold_len, l)
-                    
+
         if hold_len > 0:
             to_yield = self.buffer[:-hold_len]
             self.buffer = self.buffer[-hold_len:]
@@ -3024,30 +3043,14 @@ class StreamingSanitizer:
             return to_yield
 
     def flush(self) -> str:
-        import re
         final_text = self.buffer
         self.buffer = ""
-        phrases_to_redact = [
-            r"function\s*=>\s*\{[^{}]*\"query\"[^{}]*\}\s*(?:</function>)?",
-            r"function\s*=>\s*\{.*?\}(?:</function>)?",
-            r"function\s*=>\s*.*?(?:</function>|\n|$)",
-            r"</?function\b[^>]*>",
-            r"<(?:>|/[^>]*>)?\s*\{[^{}]*\"query\"[^{}]*\}\s*</?>?",
-            r"\{[^{}]*\"query\"\s*:\s*\"[^\"]*\"[^{}]*\}",
-            r"<tool_call>.*?</tool_call>",
-            r"<search>.*?</search>",
-            r"<search_query>.*?</search_query>",
-            r"\[tool output:\s*\w+\]\s*",
-            r"calling tools?:\s*[\w,\s]+\.{3}",
-            r"\[System Context:[^\]]*\]\s*",
-            r"\[System Context\]\s*",
-        ]
-        for phrase in phrases_to_redact:
-            final_text = re.sub(phrase, "", final_text, flags=re.IGNORECASE | re.DOTALL)
-        for name in self.internal_names:
-            pattern = re.compile(rf"\b{re.escape(name)}\b", re.IGNORECASE)
+        for pattern in self._PHRASES_TO_REDACT:
+            final_text = pattern.sub("", final_text)
+        for pattern in self._compiled_name_patterns:
             final_text = pattern.sub("", final_text)
         return final_text
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -4072,6 +4075,12 @@ async def execute_tools_node(
     the registry and retries once before giving up.
     """
     config     = config or {}
+    # C-C1 FIX: Guard against missing state keys before executing tools
+    state.setdefault("execution_trace", [])
+    state.setdefault("steps", [])
+    state.setdefault("tool_results", [])
+    ensure_state_status_dicts(state)
+
     tool_calls = state.get("tool_calls", []) or []
     messages   = list(state.get("messages", []))
     req_api_keys: Dict[str, Any] = config.get("configurable", {}).get("api_keys", {})
@@ -4128,8 +4137,9 @@ async def execute_tools_node(
         "messages":        messages + new_messages,
         "tool_calls":      [],
         "steps":           steps,
-        "execution_trace": state["execution_trace"],
+        "execution_trace": state.get("execution_trace", []),
     }
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -4307,7 +4317,9 @@ async def parallel_tool_execution_node(
         from app.tools.scheduler import ToolScheduler, ToolTask
 
         registry  = ToolRegistry()
-        await registry.initialize()
+        if not registry.is_initialized:
+            await registry.initialize()
+
 
         # Build task list from the DAG — all registered tools are eligible for execution.
         # The semantic router in generate_response_node and tool_planner_node already

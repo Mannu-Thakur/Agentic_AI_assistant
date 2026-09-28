@@ -3,6 +3,7 @@ import json
 import math
 import os
 import ast
+import datetime
 
 if sys.platform == "win32" and sys.version_info >= (3, 7):
     try:
@@ -275,7 +276,7 @@ def create_reminder(time: str, text: str, user_id: str = "default") -> str:
     reminder = {
         "time": time,
         "text": text,
-        "created_at": str(os.getenv("CURRENT_TIME", ""))
+        "created_at": datetime.datetime.utcnow().isoformat() + 'Z'
     }
     store["reminders"].append(reminder)
     save_store(store, user_id=user_id)
@@ -295,7 +296,7 @@ def send_email(to: str, subject: str, body: str, user_id: str = "default") -> st
         "to": to,
         "subject": subject,
         "body": body,
-        "timestamp": str(os.getenv("CURRENT_TIME", ""))
+        "timestamp": datetime.datetime.utcnow().isoformat() + 'Z'
     }
     store["emails"].append(email_entry)
     save_store(store, user_id=user_id)
@@ -355,6 +356,7 @@ def main():
     sys.stderr.flush()
     
     while True:
+        req_id = None
         try:
             line = sys.stdin.readline()
             if not line:
@@ -580,6 +582,10 @@ def main():
                         "message": f"Tool '{tool_name}' not found."
                     }
                     send_response(req_id, error=error)
+            elif method == 'ping':
+                send_response(req_id, result={})
+                continue
+
             else:
                 error = {
                     "code": -32601,

@@ -64,7 +64,10 @@ class AuthService:
             return False
         user.hashed_password = get_password_hash(new_password)
         await db.commit()
-        await db.refresh(user)
+        try:
+            await db.refresh(user)
+        except Exception:
+            pass
 
         # NEW-HIGH-2 FIX: Invalidate all active tokens upon password change.
         # If this fails, old tokens remain valid — log at ERROR so ops can react.

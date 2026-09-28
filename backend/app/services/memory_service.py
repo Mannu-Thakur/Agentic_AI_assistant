@@ -56,6 +56,9 @@ class MemoryService:
             restored: List[Memory] = []
             for item in cached:
                 if isinstance(item, dict):
+                    if not item.get('id') or not item.get('user_id'):
+                        logger.warning('[MemoryService] Corrupt cache entry skipped')
+                        continue
                     m = Memory(
                         id=item.get("id"),
                         user_id=item.get("user_id"),
@@ -102,9 +105,9 @@ class MemoryService:
                 "importance_score": m.importance_score,
                 "project_id":       m.project_id,
                 "session_id":       m.session_id,
-                "expires_at":       str(m.expires_at) if m.expires_at else None,
+                "expires_at":       m.expires_at.isoformat() if m.expires_at else None,
                 "confidence":       m.confidence,
-                "created_at":       str(m.created_at),
+                "created_at":       m.created_at.isoformat() if m.created_at else None,
             }
             for m in memories
         ]
@@ -336,8 +339,13 @@ class MemoryService:
 
         async with AsyncSessionLocal() as db:
             # Fetch existing memories for deduplication / conflict resolution
+            from sqlalchemy import or_
+            _now_utc = datetime.now(timezone.utc)
             existing_res = await db.execute(
-                select(Memory).where(Memory.user_id == user_id)
+                select(Memory).where(
+                    Memory.user_id == user_id,
+                    or_(Memory.expires_at.is_(None), Memory.expires_at > _now_utc),
+                )
             )
             existing_memories: List[Memory] = list(existing_res.scalars().all())
             existing_norm_set = {
@@ -408,9 +416,14 @@ class MemoryService:
                     expires_at=expires_at_val,
                     confidence=confidence,
                 )
-                db.add(mem)
-                await db.flush()
-                existing_norm_set.add(norm)
+                try:
+                    db.add(mem)
+                    async with db.begin_nested():  # creates a SAVEPOINT
+                        await db.flush()
+                    existing_norm_set.add(norm)
+                except Exception as _flush_exc:
+                    logger.warning(f'[MemoryService] Skipping memory due to flush error: {_flush_exc}')
+                    continue
 
                 # Sync to vector store
                 try:
@@ -445,7 +458,8 @@ def _rule_based_extraction(user_content: str) -> List[dict]:
     text = user_content.strip()
 
     # Filter out questions, commands, or generic conversational filler
-    if any(text.startswith(w) for w in ("what", "how", "why", "when", "where", "can you", "please", "help")):
+    _text_lower = text.lower()
+    if any(_text_lower.startswith(w) for w in ('what', 'how', 'why', 'when', 'where', 'who', 'which', 'is', 'are', 'can', 'do', 'does', 'can you', 'please', 'help')):
         return []
 
     # Exclude common transient states and negative clauses

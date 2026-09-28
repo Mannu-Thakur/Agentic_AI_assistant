@@ -25,6 +25,13 @@ COPY backend/ .
 
 EXPOSE 8000
 
+RUN groupadd -r appuser && useradd -r -g appuser appuser
+RUN chown -R appuser:appuser /app
+USER appuser
+
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:${PORT:-8000}/api/v1/health || exit 1
+
 # Render free tier provides 512MB RAM. Use 1 worker to prevent OOM.
 # Bind dynamically to $PORT provided by Render (default to 8000).
 CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1"]

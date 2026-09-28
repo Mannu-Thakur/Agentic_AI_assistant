@@ -577,6 +577,7 @@ async def stream_agent_message(
       # wasting LLM tokens and compute.
       loop = asyncio.get_running_loop()
       graph_deadline = loop.time() + GRAPH_TIMEOUT_SECONDS
+      timed_out = False
       while not task.done() or not queue.empty():
         try:
           # ── Hard-deadline check ───────────────────────────────────────────
@@ -588,7 +589,8 @@ async def stream_agent_message(
             )
             task.cancel()
             yield f"data: {json.dumps({'event': 'error', 'detail': 'Request timed out. The model took too long to respond. Please try again.'})}\n\n"
-            return
+            timed_out = True
+            break
 
           # Check if client disconnected mid-stream
           if await request.is_disconnected():
@@ -653,190 +655,196 @@ async def stream_agent_message(
           yield f"data: {json.dumps({'event': 'error', 'detail': str(err)})}\n\n"
           break
 
+      # ── Extract graph result after the streaming loop finishes ───────────────
+      # final_state and response_content must be defined before telemetry / DB save blocks.
+      final_state = None
+      response_content = ""
+      if not timed_out:
+          try:
+              final_state = task.result()
+          except Exception as _task_result_err:
+              logger.error(f"Error retrieving graph task result: {_task_result_err}")
+              final_state = {}
+      if isinstance(final_state, dict):
+          response_content = (
+              final_state.get("response_text")
+              or final_state.get("answer")
+              or final_state.get("output")
+              or ""
+          )
+
       logger.info("GRAPH TASK COMPLETED, SAVING ASSISTANT MESSAGE...")
       try:
-        final_state = await task
-        logger.info(f"FINAL STATE KEYS: {list(final_state.keys()) if isinstance(final_state, dict) else final_state}")
-        response_content = final_state.get("response_text", "").strip() if isinstance(final_state, dict) else ""
-        if not response_content:
-          logger.warning(f"No response content generated for chat_id={chat_id} — omitting DB persistence.")
-          yield f"data: {json.dumps({'event': 'error', 'detail': 'Generation failed — no output produced.'})}\n\n"
-          yield "data: [DONE]\n\n"
-          return
+          from app.core.cache_service import get_all_cache_stats
+          _telemetry.attach_cache_stats(get_all_cache_stats())
+          _tel_payload = _telemetry.finalize()
+          logger.debug(f"Telemetry finalized: total_latency_ms={_tel_payload.get('total_latency_ms')}ms")
+      except Exception as _tel_fin_err:
+          logger.warning(f"Telemetry finalize failed (non-fatal): {_tel_fin_err}")
 
-        # BUG-5d FIX: Finalize telemetry — attaches cache hit/miss stats
-        # and emits the structured JSON "agent_request" log line.
-        if _telemetry is not None:
+
+      # ── Persist telemetry record to DB for analytics dashboard ────────────
+      # Every completed request writes one TelemetryRecord so the analytics
+      # endpoints can query real historical data.
+      if _telemetry is not None and isinstance(final_state, dict):
+        try:
+          import time as _time_mod
+          from app.models.telemetry import TelemetryRecord
+          from app.core.database import AsyncSessionLocal
+          _fs = final_state  # alias for readability
+          _hal_risk = "low"
+          if _fs.get("has_hallucination_risk"):
+              _hal_risk = "high"
+          elif _fs.get("answer_confidence", 1.0) < 0.6:
+              _hal_risk = "medium"
+          _ev_verdict = None
+          if _fs.get("verified_response"):
+              _ev_verdict = "PASS"
+          elif _fs.get("has_hallucination_risk"):
+              _ev_verdict = "WARN"
+
+          # Get routing info from cost tracker
+          _routing_tier = _fs.get("model_tier") or "unknown"
+          _complexity = None
           try:
-            from app.core.cache_service import get_all_cache_stats
-            _telemetry.attach_cache_stats(get_all_cache_stats())
-            _tel_payload = _telemetry.finalize()
-            logger.debug(f"Telemetry finalized: total_latency_ms={_tel_payload.get('total_latency_ms')}ms")
-          except Exception as _tel_fin_err:
-            logger.warning(f"Telemetry finalize failed (non-fatal): {_tel_fin_err}")
+              from app.routing.complexity_analyzer import analyze_complexity
+              _last_q = _fs.get("resolved_query") or ""
+              if _last_q:
+                  _cx = analyze_complexity(_last_q)
+                  _complexity = _cx.complexity_score
+          except Exception:
+              pass
 
-        # ── Persist telemetry record to DB for analytics dashboard ────────────
-        # Every completed request writes one TelemetryRecord so the analytics
-        # endpoints can query real historical data.
-        if _telemetry is not None and isinstance(final_state, dict):
+          # Estimate cost
+          _tok = getattr(_telemetry, "token_estimate", 0) or 0
+          _cost = 0.0
           try:
-            import time as _time_mod
-            from app.models.telemetry import TelemetryRecord
-            from app.core.database import AsyncSessionLocal
-            _fs = final_state  # alias for readability
-            _hal_risk = "low"
-            if _fs.get("has_hallucination_risk"):
-                _hal_risk = "high"
-            elif _fs.get("answer_confidence", 1.0) < 0.6:
-                _hal_risk = "medium"
-            _ev_verdict = None
-            if _fs.get("verified_response"):
-                _ev_verdict = "PASS"
-            elif _fs.get("has_hallucination_risk"):
-                _ev_verdict = "WARN"
+              from app.routing.model_profiles import get_profile_for_model
+              _m = _fs.get("model_used") or _fs.get("active_model") or schema.model
+              _prf = get_profile_for_model(_m)
+              if _prf and _tok > 0:
+                  _cost = round(_tok * (_prf.cost_per_1k_tokens / 1000.0), 8)
+          except Exception:
+              pass
 
-            # Get routing info from cost tracker
-            _routing_tier = _fs.get("model_tier") or "unknown"
-            _complexity = None
-            try:
-                from app.routing.complexity_analyzer import analyze_complexity
-                _last_q = _fs.get("resolved_query") or ""
-                if _last_q:
-                    _cx = analyze_complexity(_last_q)
-                    _complexity = _cx.complexity_score
-            except Exception:
-                pass
+          _rec = TelemetryRecord(
+              request_id=getattr(_telemetry, "request_id", str(chat_id) + "_" + str(int(_time_mod.time()))),
+              user_id=str(current_user.id),  # BUG-1 FIX: user_id was undefined; use current_user.id
+              chat_id=str(chat_id),
+              intent=_fs.get("intent"),
+              model_used=_fs.get("model_used") or _fs.get("active_model") or schema.model,
+              provider=_fs.get("provider_used") or resolved_prov,
+              model_tier=_routing_tier,
+              routing_version="1.0.0",
+              user_override=True,  # model came from user selection in this version
+              complexity_score=_complexity,
+              needs_retrieval=_fs.get("needs_retrieval"),
+              chunks_retrieved=len([x for x in (_fs.get("retrieved_documents") or []) if x.get("type") == "chunk"]),
+              graph_evidence_count=_fs.get("graph_evidence_count") or 0,
+              retrieval_confidence=_fs.get("retrieval_confidence"),
+              retrieval_retries=_fs.get("retrieval_retry_count") or 0,
+              llm_latency_ms=getattr(_telemetry, "llm_latency_ms", None),
+              total_latency_ms=getattr(_telemetry, "total_latency_ms", None),
+              token_estimate=_tok,
+              estimated_cost_usd=_cost,
+              answer_confidence=_fs.get("answer_confidence"),
+              hallucination_risk=_hal_risk,
+              evidence_verdict=_ev_verdict,
+              reflection_passed=_fs.get("reflection_passed"),
+              generation_mode=_fs.get("generation_mode"),
+              is_fallback=False,  # BUG-2 FIX: `attempt_idx` is never defined; `dir()` checks module scope not locals
+              prompt_version="3.1.0",
+              embedding_version="1.0.0",
+              created_at=_time_mod.time(),
+          )
 
-            # Estimate cost
-            _tok = getattr(_telemetry, "token_estimate", 0) or 0
-            _cost = 0.0
-            try:
-                from app.routing.model_profiles import get_profile_for_model
-                _m = _fs.get("model_used") or _fs.get("active_model") or schema.model
-                _prf = get_profile_for_model(_m)
-                if _prf and _tok > 0:
-                    _cost = round(_tok * (_prf.cost_per_1k_tokens / 1000.0), 8)
-            except Exception:
-                pass
+          async with AsyncSessionLocal() as _tel_db:
+              _tel_db.add(_rec)
+              await _tel_db.commit()
+        except Exception as _persist_tel_err:
+          logger.debug(f"[Telemetry] DB persist failed (non-fatal): {_persist_tel_err}")
 
-            _rec = TelemetryRecord(
-                request_id=getattr(_telemetry, "request_id", str(chat_id) + "_" + str(int(_time_mod.time()))),
-                user_id=str(current_user.id),  # BUG-1 FIX: user_id was undefined; use current_user.id
-                chat_id=str(chat_id),
-                intent=_fs.get("intent"),
-                model_used=_fs.get("model_used") or _fs.get("active_model") or schema.model,
-                provider=_fs.get("provider_used") or resolved_prov,
-                model_tier=_routing_tier,
-                routing_version="1.0.0",
-                user_override=True,  # model came from user selection in this version
-                complexity_score=_complexity,
-                needs_retrieval=_fs.get("needs_retrieval"),
-                chunks_retrieved=len([x for x in (_fs.get("retrieved_documents") or []) if x.get("type") == "chunk"]),
-                graph_evidence_count=_fs.get("graph_evidence_count") or 0,
-                retrieval_confidence=_fs.get("retrieval_confidence"),
-                retrieval_retries=_fs.get("retrieval_retry_count") or 0,
-                llm_latency_ms=getattr(_telemetry, "llm_latency_ms", None),
-                total_latency_ms=getattr(_telemetry, "total_latency_ms", None),
-                token_estimate=_tok,
-                estimated_cost_usd=_cost,
-                answer_confidence=_fs.get("answer_confidence"),
-                hallucination_risk=_hal_risk,
-                evidence_verdict=_ev_verdict,
-                reflection_passed=_fs.get("reflection_passed"),
-                generation_mode=_fs.get("generation_mode"),
-                is_fallback=False,  # BUG-2 FIX: `attempt_idx` is never defined; `dir()` checks module scope not locals
-                prompt_version="3.1.0",
-                embedding_version="1.0.0",
-                created_at=_time_mod.time(),
+
+      # Compile full runtime execution trace & Dev HUD metrics
+      if isinstance(final_state, dict):
+
+        metrics_store.update({
+            "model_used": final_state.get("model_used") or final_state.get("active_model") or schema.model,
+            "provider_used": final_state.get("provider_used") or resolved_prov,
+            "latency_ms": getattr(_telemetry, "total_latency_ms", 0) if _telemetry else 0,
+            "cost_estimate": 0.0,
+            "tokens_input": getattr(_telemetry, "token_estimate", 0) if _telemetry else 0,
+            "tokens_output": len(response_content) // 4,
+            "execution_trace": final_state.get("execution_trace", []),
+            "semantic_status": final_state.get("semantic_status", {}),
+            "memory_status": final_state.get("memory_status", {}),
+            "web_status": final_state.get("web_status", {}),
+            "inconsistencies": final_state.get("inconsistencies", []),
+            "source_documents": final_state.get("source_documents", []),
+            "retrieved_context": final_state.get("retrieved_documents", []),
+            "steps": final_state.get("steps", []),
+            "generation_mode": final_state.get("generation_mode"),
+        })
+
+      # Yield runtime telemetry metrics payload to frontend right before DB save
+      yield f"data: {json.dumps({'event': 'metrics', 'metrics': metrics_store})}\n\n"
+
+      try:
+        from app.core.database import AsyncSessionLocal, get_db
+        get_db_override = request.app.dependency_overrides.get(get_db)
+        tc_payload = final_state.get("tool_calls") if isinstance(final_state, dict) else None
+        if tc_payload:
+          metrics_store["tool_calls"] = tc_payload
+
+        if get_db_override:
+          async for test_db in get_db_override():
+            await ChatService.save_message(
+                db=test_db,
+                chat_id=chat_id,
+                role="assistant",
+                content=response_content,
+                parent_id=user_msg.id,
+                tool_calls=tc_payload or None,
+                developer_metrics=metrics_store or None
+            )
+            if is_first_message:
+              auto_title = ChatService.generate_short_descriptive_title(schema.content)
+              await ChatService.update_chat_title(test_db, chat_id, current_user.id, auto_title)
+              # BUG-8 FIX: was logger.error() — not an error
+              logger.info(f"YIELDING TITLE EVENT: {auto_title}")
+              yield f"data: {json.dumps({'event': 'title', 'title': auto_title})}\n\n"
+            break
+        else:
+          async with AsyncSessionLocal() as save_db:
+            await ChatService.save_message(
+                db=save_db,
+                chat_id=chat_id,
+                role="assistant",
+                content=response_content,
+                parent_id=user_msg.id,
+                tool_calls=tc_payload or None,
+                developer_metrics=metrics_store or None
             )
 
-            async with AsyncSessionLocal() as _tel_db:
-                _tel_db.add(_rec)
-                await _tel_db.commit()
-          except Exception as _persist_tel_err:
-            logger.debug(f"[Telemetry] DB persist failed (non-fatal): {_persist_tel_err}")
+            if is_first_message:
+              auto_title = ChatService.generate_short_descriptive_title(schema.content)
+              await ChatService.update_chat_title(save_db, chat_id, current_user.id, auto_title)
+              # BUG-8 FIX: was logger.error() — not an error
+              logger.info(f"YIELDING TITLE EVENT: {auto_title}")
+              yield f"data: {json.dumps({'event': 'title', 'title': auto_title})}\n\n"
 
+        from app.services.memory_service import MemoryService
+        background_tasks.add_task(
+            MemoryService.extract_and_save_memories,
+            user_id=current_user.id,
+            chat_id=chat_id,
+            user_content=schema.content,
+            assistant_content=response_content
+        )
+      except Exception as save_err:
+        logger.error(f"Failed to persist assistant message or process final state: {traceback.format_exc()}")
+        yield f"data: {json.dumps({'event': 'error', 'detail': str(save_err)})}\n\n"
 
-        # Compile full runtime execution trace & Dev HUD metrics
-        if isinstance(final_state, dict):
-            metrics_store.update({
-                "model_used": final_state.get("model_used") or final_state.get("active_model") or schema.model,
-                "provider_used": final_state.get("provider_used") or resolved_prov,
-                "latency_ms": getattr(_telemetry, "total_latency_ms", 0) if _telemetry else 0,
-                "cost_estimate": 0.0,
-                "tokens_input": getattr(_telemetry, "token_estimate", 0) if _telemetry else 0,
-                "tokens_output": len(response_content) // 4,
-                "execution_trace": final_state.get("execution_trace", []),
-                "semantic_status": final_state.get("semantic_status", {}),
-                "memory_status": final_state.get("memory_status", {}),
-                "web_status": final_state.get("web_status", {}),
-                "inconsistencies": final_state.get("inconsistencies", []),
-                "source_documents": final_state.get("source_documents", []),
-                "retrieved_context": final_state.get("retrieved_documents", []),
-                "steps": final_state.get("steps", []),
-                "generation_mode": final_state.get("generation_mode"),
-            })
-
-        # Yield runtime telemetry metrics payload to frontend right before DB save
-        yield f"data: {json.dumps({'event': 'metrics', 'metrics': metrics_store})}\n\n"
-
-        try:
-          from app.core.database import AsyncSessionLocal, get_db
-          get_db_override = request.app.dependency_overrides.get(get_db)
-          tc_payload = final_state.get("tool_calls") if isinstance(final_state, dict) else None
-          if tc_payload:
-            metrics_store["tool_calls"] = tc_payload
-
-          if get_db_override:
-            async for test_db in get_db_override():
-              await ChatService.save_message(
-                  db=test_db,
-                  chat_id=chat_id,
-                  role="assistant",
-                  content=response_content,
-                  parent_id=user_msg.id,
-                  tool_calls=tc_payload or None,
-                  developer_metrics=metrics_store or None
-              )
-              if is_first_message:
-                auto_title = ChatService.generate_short_descriptive_title(schema.content)
-                await ChatService.update_chat_title(test_db, chat_id, current_user.id, auto_title)
-                # BUG-8 FIX: was logger.error() — not an error
-                logger.info(f"YIELDING TITLE EVENT: {auto_title}")
-                yield f"data: {json.dumps({'event': 'title', 'title': auto_title})}\n\n"
-              break
-          else:
-            async with AsyncSessionLocal() as save_db:
-              await ChatService.save_message(
-                  db=save_db,
-                  chat_id=chat_id,
-                  role="assistant",
-                  content=response_content,
-                  parent_id=user_msg.id,
-                  tool_calls=tc_payload or None,
-                  developer_metrics=metrics_store or None
-              )
-
-              if is_first_message:
-                auto_title = ChatService.generate_short_descriptive_title(schema.content)
-                await ChatService.update_chat_title(save_db, chat_id, current_user.id, auto_title)
-                # BUG-8 FIX: was logger.error() — not an error
-                logger.info(f"YIELDING TITLE EVENT: {auto_title}")
-                yield f"data: {json.dumps({'event': 'title', 'title': auto_title})}\n\n"
-
-          from app.services.memory_service import MemoryService
-          background_tasks.add_task(
-              MemoryService.extract_and_save_memories,
-              user_id=current_user.id,
-              chat_id=chat_id,
-              user_content=schema.content,
-              assistant_content=response_content
-          )
-        except Exception as save_err:
-          logger.error(f"Failed to persist assistant message: {save_err}")
-      except Exception as err:
-        logger.error(f"ERROR IN FINAL STATE PROCESSING: {traceback.format_exc()}")
-        yield f"data: {json.dumps({'event': 'error', 'detail': str(err)})}\n\n"
 
       # BUG-8 FIX: was logger.error() — not an error
       logger.info("YIELDING DONE")

@@ -47,9 +47,9 @@ ALLOWED_MIME_TYPES = {
     ".pptx": ["application/vnd.openxmlformats-officedocument.presentationml.presentation"],
     ".ppt":  ["application/vnd.ms-powerpoint"],
     ".txt":  ["text/plain"],
-    ".md":   ["text/markdown", "text/plain"],
-    ".json": ["application/json", "text/plain"],
-    ".csv":  ["text/csv", "application/csv", "text/plain"],
+    ".md":   ["text/markdown"],
+    ".json": ["application/json"],
+    ".csv":  ["text/csv", "application/csv"],
     ".png":  ["image/png"],
     ".jpg":  ["image/jpeg"],
     ".jpeg": ["image/jpeg"],
@@ -286,6 +286,19 @@ async def upload_document(
             detail=f"Executable content rejected ({exec_type}).",
         )
 
+    # ── 4b. python-magic content-based MIME validation ───────────────────────
+    try:
+        import magic as _magic_lib
+        _detected_mime = _magic_lib.from_buffer(contents[:4096], mime=True)
+        _allowed_for_ext = ALLOWED_MIME_TYPES.get(ext, [])
+        if _detected_mime not in _allowed_for_ext:
+            raise HTTPException(
+                status_code=400,
+                detail=f'File content ({_detected_mime}) does not match the allowed types for {ext} files'
+            )
+    except ImportError:
+        pass  # python-magic not installed, fall back to header-based check
+
     # ── 5. ZIP bomb guard ────────────────────────────────────────────────────
     if ext in _ZIP_BASED_EXTS:
         zip_err = _check_zip_bomb(contents)
@@ -323,8 +336,11 @@ async def upload_document(
 
 
     # ── 9. Filename sanitisation ─────────────────────────────────────────────
-    temp_name = filename.replace("..", "").replace("/", "").replace("\\", "")
-    sanitized_filename = re.sub(r"[^a-zA-Z0-9_.-]", "_", temp_name)
+    import unicodedata as _unicodedata
+    import pathlib as _pathlib
+    _safe_fn = _unicodedata.normalize('NFKD', filename).encode('ascii', 'ignore').decode('ascii')
+    _safe_fn = _pathlib.Path(_safe_fn).name  # strips directory components
+    sanitized_filename = re.sub(r'[^a-zA-Z0-9_.\-]', '_', _safe_fn) or 'upload'
 
     # ── 10. Persist & schedule ingestion ─────────────────────────────────────
     os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
@@ -334,6 +350,7 @@ async def upload_document(
     try:
         with open(storage_path, "wb") as fh:
             fh.write(contents)
+        del contents  # release large buffer
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -411,7 +428,7 @@ async def upload_document(
             db,
             current_user.id,
             "document_upload",
-            {"document_id": doc.id, "filename": sanitized_filename, "size_bytes": size_bytes},
+            {"document_id": str(doc.id), "filename": sanitized_filename, "size_bytes": size_bytes},
         )
 
         return doc

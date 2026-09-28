@@ -148,141 +148,174 @@ class ParserService:
             return ParserService.extract_text_pdf(file_path)
 
         try:
-            doc = fitz.open(file_path)
+            with fitz.open(file_path) as doc:
+                # Pass 1: Base Font Size Calculation
+                font_sizes: List[float] = []
+                for page in doc:
+                    page_dict = page.get_text("dict")
+                    for block in page_dict.get("blocks", []):
+                        if block.get("type") == 0:  # Text block
+                            for line in block.get("lines", []):
+                                for span in line.get("spans", []):
+                                    t = span.get("text", "").strip()
+                                    if t:
+                                        font_sizes.append(round(span.get("size", 10.0), 1))
+
+                if not font_sizes:
+                    return ParserService.extract_text_pdf(file_path)
+
+                from collections import Counter
+                base_font_size = Counter(font_sizes).most_common(1)[0][0]
+                logger.info(f"[PyMuPDFParser] Base body font size calculated: {base_font_size}pt across {len(doc)} pages.")
+
+                markdown_pages: List[str] = []
+                page_meta: List[Dict[str, Any]] = []
+                char_offset = 0
+
+                # Pass 2: Layout-to-Markdown Transformation
+                for page_num, page in enumerate(doc, start=1):
+                    page_dict = page.get_text("dict")
+                    blocks = page_dict.get("blocks", [])
+
+                    # Sort blocks top-to-bottom, left-to-right (handles multi-column layouts)
+                    text_blocks = [b for b in blocks if b.get("type") == 0]
+                    text_blocks.sort(key=lambda b: (round(b.get("bbox", [0, 0, 0, 0])[1], 1), round(b.get("bbox", [0, 0, 0, 0])[0], 1)))
+
+                    page_blocks_md: List[str] = []
+
+                    for block in text_blocks:
+                        lines = block.get("lines", [])
+                        block_lines_md: List[str] = []
+
+                        for line in lines:
+                            spans = line.get("spans", [])
+                            line_parts: List[str] = []
+                            max_span_size = 0.0
+                            is_line_all_bold = True
+
+                            for span in spans:
+                                t = span.get("text", "").strip()
+                                if not t:
+                                    continue
+
+                                sz = span.get("size", 10.0)
+                                font_name = span.get("font", "").lower()
+                                flags = span.get("flags", 0)
+
+                                max_span_size = max(max_span_size, sz)
+                                is_span_bold = bool(flags & 2 or "bold" in font_name or "black" in font_name or "heavy" in font_name or "semi" in font_name)
+
+                                if not is_span_bold:
+                                    is_line_all_bold = False
+
+                                if is_span_bold and len(t) > 1 and not (t.startswith("**") and t.endswith("**")):
+                                    line_parts.append(f"**{t}**")
+                                else:
+                                    line_parts.append(t)
+
+                            full_line = " ".join(line_parts).strip()
+                            if not full_line:
+                                continue
+
+                            # Header detection
+                            clean_line = full_line.replace("**", "").strip()
+                            if max_span_size >= base_font_size * 1.3:
+                                full_line = f"# {clean_line}"
+                            elif max_span_size >= base_font_size * 1.15 or (is_line_all_bold and len(clean_line) < 60 and not clean_line.startswith(("•", "-", "*", "–"))):
+                                full_line = f"## {clean_line}"
+
+                            block_lines_md.append(full_line)
+
+                        # Merge multi-line bullet points / paragraphs in block
+                        if block_lines_md:
+                            coherent_items: List[str] = []
+                            current_item: List[str] = []
+
+                            for l in block_lines_md:
+                                is_header = l.startswith("#")
+                                is_bullet = l.startswith(("•", "-", "*", "–"))
+
+                                if is_header:
+                                    if current_item:
+                                        coherent_items.append(" ".join(current_item))
+                                        current_item = []
+                                    coherent_items.append(l)
+                                elif is_bullet:
+                                    if current_item:
+                                        coherent_items.append(" ".join(current_item))
+                                        current_item = []
+                                    current_item.append(l)
+                                else:
+                                    current_item.append(l)
+
+                            if current_item:
+                                coherent_items.append(" ".join(current_item))
+
+                            block_md = "\n".join(coherent_items)
+                            page_blocks_md.append(block_md)
+
+                    page_text = "\n\n".join(page_blocks_md)
+                    marker = f"\n[Page {page_num}]\n"
+                    page_meta.append({"page_number": page_num, "char_offset": char_offset + len(marker)})
+
+                    markdown_pages.append(marker + page_text)
+                    char_offset += len(marker) + len(page_text)
+
+                full_result = "\n".join(markdown_pages)
+                return full_result if full_result.strip() else ParserService.extract_text_pdf(file_path)
         except Exception as exc:
-            logger.warning(f"[PyMuPDFParser] PyMuPDF open failed: {exc}; falling back to pypdf.")
+            logger.warning(f"[PyMuPDFParser] PyMuPDF failed: {exc}; falling back to pypdf.")
             return ParserService.extract_text_pdf(file_path)
 
-        # Pass 1: Base Font Size Calculation
-        font_sizes: List[float] = []
-        for page in doc:
-            page_dict = page.get_text("dict")
-            for block in page_dict.get("blocks", []):
-                if block.get("type") == 0:  # Text block
-                    for line in block.get("lines", []):
-                        for span in line.get("spans", []):
-                            t = span.get("text", "").strip()
-                            if t:
-                                font_sizes.append(round(span.get("size", 10.0), 1))
 
-        if not font_sizes:
-            doc.close()
-            return ParserService.extract_text_pdf(file_path)
-
-        from collections import Counter
-        base_font_size = Counter(font_sizes).most_common(1)[0][0]
-        logger.info(f"[PyMuPDFParser] Base body font size calculated: {base_font_size}pt across {len(doc)} pages.")
-
-        markdown_pages: List[str] = []
-        page_meta: List[Dict[str, Any]] = []
-        char_offset = 0
-
-        # Pass 2: Layout-to-Markdown Transformation
-        for page_num, page in enumerate(doc, start=1):
-            page_dict = page.get_text("dict")
-            blocks = page_dict.get("blocks", [])
-
-            # Sort blocks top-to-bottom, left-to-right (handles multi-column layouts)
-            text_blocks = [b for b in blocks if b.get("type") == 0]
-            text_blocks.sort(key=lambda b: (round(b.get("bbox", [0, 0, 0, 0])[1], 1), round(b.get("bbox", [0, 0, 0, 0])[0], 1)))
-
-            page_blocks_md: List[str] = []
-
-            for block in text_blocks:
-                lines = block.get("lines", [])
-                block_lines_md: List[str] = []
-
-                for line in lines:
-                    spans = line.get("spans", [])
-                    line_parts: List[str] = []
-                    max_span_size = 0.0
-                    is_line_all_bold = True
-
-                    for span in spans:
-                        t = span.get("text", "").strip()
-                        if not t:
-                            continue
-
-                        sz = span.get("size", 10.0)
-                        font_name = span.get("font", "").lower()
-                        flags = span.get("flags", 0)
-
-                        max_span_size = max(max_span_size, sz)
-                        is_span_bold = bool(flags & 2 or "bold" in font_name or "black" in font_name or "heavy" in font_name or "semi" in font_name)
-
-                        if not is_span_bold:
-                            is_line_all_bold = False
-
-                        if is_span_bold and len(t) > 1 and not (t.startswith("**") and t.endswith("**")):
-                            line_parts.append(f"**{t}**")
-                        else:
-                            line_parts.append(t)
-
-                    full_line = " ".join(line_parts).strip()
-                    if not full_line:
-                        continue
-
-                    # Header detection
-                    clean_line = full_line.replace("**", "").strip()
-                    if max_span_size >= base_font_size * 1.3:
-                        full_line = f"# {clean_line}"
-                    elif max_span_size >= base_font_size * 1.15 or (is_line_all_bold and len(clean_line) < 60 and not clean_line.startswith(("•", "-", "*", "–"))):
-                        full_line = f"## {clean_line}"
-
-                    block_lines_md.append(full_line)
-
-                # Merge multi-line bullet points / paragraphs in block
-                if block_lines_md:
-                    coherent_items: List[str] = []
-                    current_item: List[str] = []
-
-                    for l in block_lines_md:
-                        is_header = l.startswith("#")
-                        is_bullet = l.startswith(("•", "-", "*", "–"))
-
-                        if is_header:
-                            if current_item:
-                                coherent_items.append(" ".join(current_item))
-                                current_item = []
-                            coherent_items.append(l)
-                        elif is_bullet:
-                            if current_item:
-                                coherent_items.append(" ".join(current_item))
-                                current_item = []
-                            current_item.append(l)
-                        else:
-                            current_item.append(l)
-
-                    if current_item:
-                        coherent_items.append(" ".join(current_item))
-
-                    block_md = "\n".join(coherent_items)
-                    page_blocks_md.append(block_md)
-
-            page_text = "\n\n".join(page_blocks_md)
-            marker = f"\n[Page {page_num}]\n"
-            page_meta.append({"page_number": page_num, "char_offset": char_offset + len(marker)})
-
-            markdown_pages.append(marker + page_text)
-            char_offset += len(marker) + len(page_text)
-
-        doc.close()
-        full_result = "\n".join(markdown_pages)
-        return full_result if full_result.strip() else ParserService.extract_text_pdf(file_path)
 
 
     # ── DOCX ─────────────────────────────────────────────────────────────────
 
     @staticmethod
     def extract_text_docx(file_path: str) -> str:
-        """Extract text from a Word document using python-docx."""
+        """
+        D-H3 FIX: Extract text from a Word document including paragraphs,
+        embedded tables, headers, and footers.
+        """
         try:
             import docx
             doc = docx.Document(file_path)
-            return "\n".join(p.text for p in doc.paragraphs)
+            parts: List[str] = []
+
+            # 1. Paragraphs
+            for p in doc.paragraphs:
+                txt = p.text.strip()
+                if txt:
+                    parts.append(txt)
+
+            # 2. Tables
+            for table in doc.tables:
+                for row in table.rows:
+                    row_cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                    if row_cells:
+                        parts.append(" | ".join(row_cells))
+
+            # 3. Section headers and footers
+            for section in doc.sections:
+                if section.header:
+                    for hp in section.header.paragraphs:
+                        htxt = hp.text.strip()
+                        if htxt:
+                            parts.append(htxt)
+                if section.footer:
+                    for fp in section.footer.paragraphs:
+                        ftxt = fp.text.strip()
+                        if ftxt:
+                            parts.append(ftxt)
+
+            # M-2 FIX: Normalize excessive newlines
+            joined = "\n\n".join(parts)
+            return re.sub(r"\n{3,}", "\n\n", joined).strip()
         except Exception as e:
             logger.error(f"[Parser] Failed to extract docx text from {file_path}: {e}")
             raise ValueError(f"Could not read DOCX document: {e}")
+
 
     # ── XLSX ─────────────────────────────────────────────────────────────────
 
@@ -482,8 +515,10 @@ class ParserService:
                         img = cls._preprocess_image_for_ocr(raw_img.copy())
 
                         # ── Text extraction ─────────────────────────────────────
-                        page_text = pytesseract.image_to_string(img, config="--oem 3 --psm 11")
+                        # M-7 FIX: Use PSM 6 (single uniform block) instead of PSM 11 (sparse text) for general documents
+                        page_text = pytesseract.image_to_string(img, config="--oem 3 --psm 6")
                         pages.append(page_text)
+
 
                         # ── Confidence scoring ──────────────────────────────────
                         try:
@@ -814,8 +849,15 @@ class ParserService:
         ext = os.path.splitext(file_path)[1].lower()
 
         if ext == ".pdf":
+            try:
+                text, _ = cls.extract_layout_markdown_pymupdf(file_path)
+                if text and text.strip():
+                    return text
+            except Exception as _e:
+                logger.debug(f"[Parser] PyMuPDF failed in extract_text, fallback to pypdf: {_e}")
             text, _ = cls.extract_text_pdf(file_path)
             return text
+
         elif ext in (".docx", ".doc"):
             return cls.extract_text_docx(file_path)
         elif ext in (".xlsx", ".xls"):
@@ -955,7 +997,18 @@ class ParserService:
             # ── Extract text ──────────────────────────────────────────────────
             page_meta: Optional[List[Dict[str, Any]]] = None
             if ext == ".pdf":
-                raw_text, page_meta = cls.extract_text_pdf(file_path)
+                # D-C3 FIX: Use layout-aware PyMuPDF engine first, falling back to pypdf
+                # D-H5 FIX: All extraction calls are CPU-intensive blocking I/O —
+                # run in a thread to avoid blocking the async event loop.
+                try:
+                    raw_text, page_meta = await asyncio.to_thread(
+                        cls.extract_layout_markdown_pymupdf, file_path
+                    )
+                except Exception as _mupdf_err:
+                    logger.debug(f"[Parser] PyMuPDF extraction failed: {_mupdf_err}; falling back to pypdf")
+                    raw_text, page_meta = await asyncio.to_thread(
+                        cls.extract_text_pdf, file_path
+                    )
 
                 # ── FIX-9: OCR fallback for scanned PDFs ──────────────────────
                 # Strip page markers to check actual content
@@ -964,8 +1017,8 @@ class ParserService:
                     logger.info(
                         f"[Parser] PDF '{filename}' has no native text — attempting OCR fallback"
                     )
-                    # Use pdf2image-based OCR (PIL cannot open PDF files directly)
-                    ocr_result = cls.extract_text_pdf_ocr(file_path)
+                    # D-H5 FIX: OCR is extremely CPU-intensive — run in thread pool
+                    ocr_result = await asyncio.to_thread(cls.extract_text_pdf_ocr, file_path)
                     if ocr_result.text and not ocr_result.text.startswith("[OCR") and not ocr_result.text.startswith("[Scanned") and not ocr_result.text.startswith("[Tesseract"):
                         raw_text = ocr_result.text
                         logger.info(
@@ -979,7 +1032,9 @@ class ParserService:
                         raise ValueError(f"Text content is not extractable from '{filename}'. Please ensure OCR dependencies (Tesseract/Poppler) are installed.")
                 text = raw_text
             else:
-                text = cls.extract_text(file_path, file_type)
+                # D-H5 FIX: extract_text can call EasyOCR/Tesseract — run in thread
+                text = await asyncio.to_thread(cls.extract_text, file_path, file_type)
+
 
             # ── Chunk with page metadata ──────────────────────────────────────
             if not text or not text.strip():

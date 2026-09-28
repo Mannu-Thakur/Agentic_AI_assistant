@@ -33,9 +33,10 @@ logger = logging.getLogger(__name__)
 _SANDBOX_TIMEOUT   = 10.0        # seconds
 _MAX_OUTPUT_BYTES  = 65_536      # 64 KB output cap
 _DANGEROUS_MODULES = frozenset([
-    "subprocess", "os.system", "socket", "shutil", "ctypes",
+    "subprocess", "socket", "shutil", "ctypes",
     "importlib", "__import__", "eval", "exec", "compile",
 ])
+
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
@@ -155,8 +156,11 @@ async def python_sandbox(code: str) -> str:
     warning = _check_dangerous(code)
 
     fd, temp_path = tempfile.mkstemp(suffix=".py", text=True)
+    # M-2 FIX: Initialize proc before try block so finally block never encounters UnboundLocalError
+    proc = None
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
+
             # Inject output-size guard + matplotlib plot capture header
             header = (
                 "import sys as _sys\n"
@@ -244,8 +248,9 @@ async def python_sandbox(code: str) -> str:
         logger.error(f"Python sandbox exception: {e}")
         return f"Sandbox execution failed: {e}"
     finally:
-        if 'proc' in locals() and proc is not None:
+        if proc is not None:
             try:
+
                 if proc.stdin and not proc.stdin.is_closing():
                     try:
                         proc.stdin.close()

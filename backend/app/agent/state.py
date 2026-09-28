@@ -189,4 +189,8 @@ class AgentState(TypedDict):
     # ── Intelligent Routing ───────────────────────────────────────────────────
     # Tier selected by the model router: "slm" | "llm-medium" | "llm-strong" | "unknown"
     model_tier: Optional[str]
+    # The exact model identifier used for this request (e.g. "gemini-2.0-flash")
+    model_used: Optional[str]
+    # The provider that served the request (e.g. "google", "groq", "openai")
+    provider_used: Optional[str]
 
