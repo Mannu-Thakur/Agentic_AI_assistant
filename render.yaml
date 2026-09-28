@@ -37,15 +37,15 @@ services:
         sync: false
         # Run: openssl rand -hex 32  and set this once in the Render dashboard
       - key: FRONTEND_URL
-        value: https://ai-assistant-frontend.onrender.com
+        value: https://agentic-ai-assistant-eight.vercel.app
       - key: BACKEND_CORS_ORIGINS
-        value: '["https://ai-assistant-frontend.onrender.com"]'
+        value: '["https://agentic-ai-assistant-eight.vercel.app","https://ai-assistant-frontend.onrender.com","http://localhost:5173","http://localhost:3000"]'
       - key: GOOGLE_REDIRECT_URI
-        value: https://ai-assistant-frontend.onrender.com/auth/google/callback
+        value: https://agentic-ai-assistant-eight.vercel.app/auth/google/callback
       - key: GITHUB_REDIRECT_URI
-        value: https://ai-assistant-frontend.onrender.com/auth/github/callback
+        value: https://agentic-ai-assistant-eight.vercel.app/auth/github/callback
       - key: ALLOWED_REDIRECT_URIS
-        value: '["https://ai-assistant-frontend.onrender.com/auth/google/callback","https://ai-assistant-frontend.onrender.com/auth/github/callback"]'
+        value: '["https://agentic-ai-assistant-eight.vercel.app/auth/google/callback","https://agentic-ai-assistant-eight.vercel.app/auth/github/callback"]'
       - key: GROQ_API_KEY
         sync: false
       - key: GEMINI_API_KEY
