@@ -46,6 +46,7 @@ def _build_sync_engine():
         pool_pre_ping=True,
         pool_size=10,
         max_overflow=20,
+        connect_args={"connect_timeout": 10},
     )
 
 
@@ -83,37 +84,76 @@ def _build_async_engine():
     )
 
 
-# ── Synchronous Engine & Session Maker (Alembic / sync utilities) ─────────────
-engine = _build_sync_engine()
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+# ── Lazy engine initialisation ────────────────────────────────────────────────
+# Engines are created on FIRST USE rather than at import time.
+# This prevents a 15-minute hang at startup when DATABASE_URL is unreachable
+# (PostgreSQL default TCP timeout) from blocking the entire application boot.
+_engine = None
+_async_engine = None
 
-# ── Asynchronous Engine & Session Maker (application route handlers) ──────────
-async_engine = _build_async_engine()
-AsyncSessionLocal = async_sessionmaker(
-    bind=async_engine,
-    class_=AsyncSession,
-    expire_on_commit=False,
-)
+def _get_engine():
+    global _engine
+    if _engine is None:
+        _engine = _build_sync_engine()
+        _db_type = "PostgreSQL" if not _is_sqlite(settings.DATABASE_URL) else "SQLite"
+        logger.info(f"[DB] Sync engine initialised: {_db_type}")
+    return _engine
 
-_db_type = "PostgreSQL" if not _is_sqlite(settings.DATABASE_URL) else "SQLite"
-logger.info(f"[DB] Engine initialised: {_db_type} | URL prefix: {settings.DATABASE_URL[:30]}...")
+def _get_async_engine():
+    global _async_engine
+    if _async_engine is None:
+        _async_engine = _build_async_engine()
+        _db_type = "PostgreSQL" if not _is_sqlite(settings.DATABASE_URL) else "SQLite"
+        logger.info(f"[DB] Async engine initialised: {_db_type}")
+    return _async_engine
 
-# ── SQLite PRAGMA configuration for WAL mode (for sync and async) ─────────────
-@event.listens_for(engine, "connect")
-def set_sqlite_pragma(dbapi_connection, connection_record):
-    if _is_sqlite(settings.DATABASE_URL):
-        cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute("PRAGMA synchronous=NORMAL")
-        cursor.close()
+# Convenience property-like accessors used throughout the codebase
+class _EngineProxy:
+    """Proxy that creates the engine on first attribute access."""
+    def __getattr__(self, name):
+        return getattr(_get_engine(), name)
+    def __call__(self, *a, **kw):
+        return _get_engine()(*a, **kw)
 
-@event.listens_for(async_engine.sync_engine, "connect")
-def set_async_sqlite_pragma(dbapi_connection, connection_record):
-    if _is_sqlite(settings.DATABASE_URL):
-        cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute("PRAGMA synchronous=NORMAL")
-        cursor.close()
+engine = _EngineProxy()
+
+def _make_session_local():
+    return sessionmaker(autocommit=False, autoflush=False, bind=_get_engine())
+
+class _SessionProxy:
+    """Proxy that creates SessionLocal on first use."""
+    def __call__(self, *a, **kw):
+        return _make_session_local()(*a, **kw)
+    def __getattr__(self, name):
+        return getattr(_make_session_local(), name)
+
+SessionLocal = _SessionProxy()
+
+# ── Asynchronous Session Maker (lazy) ─────────────────────────────────────────
+class _AsyncSessionProxy:
+    """Creates AsyncSessionLocal on first use so no engine is touched at import time."""
+    _factory = None
+
+    def _get_factory(self):
+        if self._factory is None:
+            self._factory = async_sessionmaker(
+                bind=_get_async_engine(),
+                class_=AsyncSession,
+                expire_on_commit=False,
+            )
+        return self._factory
+
+    def __call__(self, *a, **kw):
+        return self._get_factory()(*a, **kw)
+
+    def __getattr__(self, name):
+        return getattr(self._get_factory(), name)
+
+AsyncSessionLocal = _AsyncSessionProxy()
+
+# ── SQLite PRAGMA configuration (registered lazily inside _get_engine) ─────────
+# The @event.listens_for decorators are moved inside the engine builders so they
+# only fire after the engines are actually created (not at import time).
 
 Base = declarative_base()
 
