@@ -6,13 +6,16 @@ services:
   # ── FastAPI Backend Service ───────────────────────────────────────────────
   - type: web
     name: ai-assistant-backend
-    runtime: docker
-    dockerContext: ./backend
-    dockerfilePath: ./backend/Dockerfile
+    runtime: python
+    # IMPORTANT: This must match the Render dashboard service runtime.
+    # The service was created as native Python (not Docker), so we use python runtime here.
+    # Python 3.11 is used to ensure all packages have pre-built wheels (no Rust compiles).
+    pythonVersion: "3.11.9"
+    rootDir: backend
+    buildCommand: "pip install --upgrade pip && pip install -r requirements.txt"
+    startCommand: "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1"
     plan: starter
     healthCheckPath: /api/v1/health
-    # Run Alembic migrations before each deploy
-    preDeployCommand: "cd backend && alembic upgrade head"
     envVars:
       - key: ENVIRONMENT
         value: production

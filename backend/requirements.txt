@@ -37,13 +37,11 @@ langchain-core>=0.1.0,<0.4.0
 langchain-community>=0.1.0,<0.4.0
 langgraph>=0.1.0,<0.3.0
 
-# Pin chromadb to a known-good version with pre-built wheels for Python 3.11.
-# Avoids the pip backtracking storm (40+ version attempts) and tokenizers
-# source-build failure (maturin/Rust read-only filesystem on Render).
-chromadb>=0.5.0,<0.6.0
-
-# Pin tokenizers explicitly to a version with pre-built wheels (avoids Rust/maturin compile)
-tokenizers>=0.15.0,<0.21.0
+# Pin chromadb to 0.4.x — CRITICAL: chromadb 0.5+ pulls `tokenizers` which has
+# no pre-built wheel for Python 3.14 and requires Rust/maturin to build from source.
+# Render's /usr/local/cargo is READ-ONLY, so any Rust build will ALWAYS fail.
+# chromadb 0.4.x has NO tokenizers dependency and works with PersistentClient API.
+chromadb>=0.4.0,<0.5.0
 
 openai>=1.0.0
 requests>=2.31.0
