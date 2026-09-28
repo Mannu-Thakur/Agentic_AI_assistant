@@ -990,7 +990,7 @@ export default function ChatPage() {
     let _active = true;
     // F-C1 FIX: apiRequest already returns parsed JSON — do NOT call .json() on it
     // M-3 FIX: Ignore stale results if component unmounts before fetch completes
-    apiRequest<any[]>('/api-keys')
+    apiRequest<any[]>('/providers')
       .then(data => { if (_active) setProviders(data || []); })
       .catch(() => {})
       .finally(() => { if (_active) setKeysLoading(false); });
