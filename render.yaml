@@ -12,7 +12,7 @@ services:
     # Python 3.11 is used to ensure all packages have pre-built wheels (no Rust compiles).
     pythonVersion: "3.11.9"
     rootDir: backend
-    buildCommand: "pip install --upgrade pip && pip install -r requirements.txt"
+    buildCommand: "pip install --upgrade pip && pip install --no-cache-dir --prefer-binary -r requirements.txt"
     startCommand: "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1"
     plan: starter
     healthCheckPath: /api/v1/health

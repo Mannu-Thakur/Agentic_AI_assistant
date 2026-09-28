@@ -1,77 +1,79 @@
+# ── FULLY PINNED PRODUCTION REQUIREMENTS ──────────────────────────────────────
+# All packages pinned to EXACT versions. This eliminates pip's backtracking
+# resolver entirely — zero version scanning, deterministic fast installs.
+#
+# Python target: 3.11.x (Render native Python runtime)
+# Last verified: 2026-09-28
+# To update: test locally, then bump individual versions here.
+# ──────────────────────────────────────────────────────────────────────────────
+
 # ── Web Framework ─────────────────────────────────────────────────────────────
-fastapi>=0.100.0,<1.0.0
-uvicorn[standard]>=0.22.0,<1.0.0
-python-multipart>=0.0.6
+fastapi==0.115.9
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
 
 # ── Database ──────────────────────────────────────────────────────────────────
-sqlalchemy>=2.0.0,<3.0.0
-alembic>=1.11.0,<2.0.0
-asyncpg>=0.28.0
-aiosqlite>=0.19.0
-psycopg2-binary>=2.9.0
+sqlalchemy==2.0.41
+alembic==1.15.2
+asyncpg==0.30.0
+aiosqlite==0.20.0
+psycopg2-binary==2.9.10
 
 # ── Data Validation ───────────────────────────────────────────────────────────
-pydantic>=2.0.0,<3.0.0
-pydantic-settings>=2.0.0,<3.0.0
-email-validator>=2.0.0
+pydantic==2.10.6
+pydantic-settings==2.7.1
+email-validator==2.2.0
 
 # ── Security & Auth ───────────────────────────────────────────────────────────
-python-jose[cryptography]>=3.3.0
-passlib[bcrypt]>=1.7.4
-bcrypt>=3.2.0,<4.0.0
-cryptography>=41.0.0
-bleach>=6.0.0
-python-magic-bin>=0.4.14; sys_platform == "win32"
-python-magic>=0.4.27; sys_platform != "win32"
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+bcrypt==4.2.1
+cryptography==44.0.2
+bleach==6.2.0
+python-magic==0.4.27
 
 # ── Caching & Async ───────────────────────────────────────────────────────────
-redis>=4.6.0
-httpx>=0.24.0
-tenacity>=8.2.0
-aiosmtplib>=2.0.0
+redis==5.2.1
+httpx==0.28.1
+tenacity==9.1.2
+aiosmtplib==3.0.2
 
 # ── AI / LLM / Vector ─────────────────────────────────────────────────────────
-# Pin langchain ecosystem to a stable, mutually compatible set
-langchain>=0.1.0,<0.4.0
-langchain-core>=0.1.0,<0.4.0
-langchain-community>=0.1.0,<0.4.0
-langgraph>=0.1.0,<0.3.0
+# Pinned to latest stable 0.3.x — these versions are mutually compatible.
+langchain==0.3.25
+langchain-core==0.3.65
+langchain-community==0.3.24
+langgraph==0.2.76
 
-# Pin chromadb to 0.4.x — CRITICAL: chromadb 0.5+ pulls `tokenizers` which has
-# no pre-built wheel for Python 3.14 and requires Rust/maturin to build from source.
-# Render's /usr/local/cargo is READ-ONLY, so any Rust build will ALWAYS fail.
-# chromadb 0.4.x has NO tokenizers dependency and works with PersistentClient API.
-chromadb>=0.4.0,<0.5.0
+# chromadb 0.4.x: NO tokenizers dependency (avoids Rust/maturin build on Render)
+chromadb==0.4.24
 
-openai>=1.0.0
-requests>=2.31.0
+openai==1.86.0
+requests==2.32.3
 
 # ── Knowledge Graph ───────────────────────────────────────────────────────────
-neo4j>=5.14.0
+neo4j==5.28.1
 
 # ── Web Search Providers ──────────────────────────────────────────────────────
-tavily-python>=0.5.0
-google-search-results>=2.4.2
-exa-py>=1.0.0
-duckduckgo-search>=6.2.0
+tavily-python==0.5.1
+google-search-results==2.4.2
+exa-py==1.10.0
+duckduckgo-search==6.4.2
 
 # ── Document Parsing ──────────────────────────────────────────────────────────
-pypdf>=3.12.0
-python-docx>=0.8.11
-openpyxl>=3.1.2
-python-pptx>=0.6.21
-reportlab>=4.0.0
+pypdf==4.4.0
+python-docx==1.1.2
+openpyxl==3.1.5
+python-pptx==1.0.2
+reportlab==4.2.5
 
 # ── OCR & Image Processing ────────────────────────────────────────────────────
-# NOTE: easyocr, torch, and sentence-transformers are NOT listed here because:
-#   1. They are enormous (~2 GB combined) and exceed Render free-tier build limits.
-#   2. The code already has graceful fallbacks (hash-based embeddings, Tesseract OCR).
-#   3. They are lazily imported at runtime — missing them does NOT crash the server.
-# Install them manually or in a separate requirements-ml.txt for GPU/local dev.
-pillow>=10.0.0
-pytesseract>=0.3.10
-pdf2image>=1.17.0
-opencv-python-headless>=4.8.0
+# easyocr/torch NOT here — too large (2 GB) and the code gracefully falls back
+# to Tesseract (installed via apt in Dockerfile / Render system packages).
+pillow==11.1.0
+pytesseract==0.3.13
+pdf2image==1.17.0
+opencv-python-headless==4.10.0.84
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
-python-dotenv>=1.0.0
+python-dotenv==1.0.1
