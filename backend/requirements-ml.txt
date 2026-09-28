@@ -1,0 +1,19 @@
+# requirements-ml.txt — Optional heavy ML packages for local dev / GPU environments
+# These are NOT installed on Render free tier (build OOM / Rust compile failures).
+# They provide neural embeddings and neural OCR as enhancements.
+# The production server falls back gracefully without them.
+
+# ── Neural Reranker & Embeddings ──────────────────────────────────────────────
+# Local cross-encoder model — replaces 10 LLM API calls per query reranking.
+# Model: cross-encoder/ms-marco-MiniLM-L6-v2 (~22 MB, CPU-compatible)
+sentence-transformers>=2.6.0
+torch>=2.0.0
+
+# ── Neural OCR engine ─────────────────────────────────────────────────────────
+easyocr>=1.7.0
+
+# ── Evaluation (optional, dev-only) ──────────────────────────────────────────
+ragas>=0.1.0
+pytest>=7.4.0
+pytest-asyncio>=0.23.0
+anyio>=4.0.0
