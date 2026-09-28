@@ -16,9 +16,10 @@ RUN apt-get update -o Acquire::Retries=3 && apt-get install -y -o Acquire::Retri
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies first (layer cache)
+# NOTE: torch/sentence-transformers/easyocr are NOT installed here (requirements-ml.txt only).
+# The server falls back gracefully without them.
 COPY backend/requirements.txt .
-RUN pip install --no-cache-dir --default-timeout=100 --retries 5 torch torchvision --index-url https://download.pytorch.org/whl/cpu && \
-    pip install --no-cache-dir --default-timeout=100 --retries 5 -r requirements.txt
+RUN pip install --no-cache-dir --prefer-binary --default-timeout=120 --retries 5 -r requirements.txt
 
 # Copy backend application source
 COPY backend/ .
