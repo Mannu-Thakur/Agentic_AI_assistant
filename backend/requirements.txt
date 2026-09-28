@@ -45,12 +45,9 @@ langchain-core==0.3.65
 langchain-community==0.3.24
 langgraph==0.2.76
 
-# chromadb 0.4.x: NO tokenizers dependency (avoids Rust/maturin build on Render)
-chromadb==0.4.24
-
-# CRITICAL: chromadb 0.4.x uses np.float_ which was REMOVED in NumPy 2.0.
-# Pin to last NumPy 1.x release. langchain-community requires >=1.26.2 → satisfied.
-numpy==1.26.4
+# chromadb 0.5.23: NumPy 2.x compatible (no np.float_ usage).
+# tokenizers pulled by chromadb uses cp310-abi3 wheels → works on Python 3.14.
+chromadb==0.5.23
 
 openai==1.86.0
 requests==2.32.3
