@@ -106,7 +106,7 @@ def route_after_classify(state: AgentState) -> str:
       MEMORY_WRITE → memory_write (short-circuits the full pipeline)
       WEB_SEARCH | NEWS | CURRENT_EVENTS (not private doc) → execute_web_search (direct web search tool execution)
       NORMAL_CHAT | DOCUMENT_QA | VISION → check_retrieval (bypasses tool planning for fast single-turn path)
-      Everything else (COMPLEX, MCP_TOOL, CODE_EXECUTION, etc.) → plan
+      Everything else (COMPLEX, MCP_TOOL, CODE_EXECUTION, etc.) → planner
     """
     if state.get("is_ambiguous", False):
         return "clarification"
@@ -131,7 +131,7 @@ def route_after_classify(state: AgentState) -> str:
         INTENT_LONG_CONTEXT,
     ) or (images and intent in (INTENT_WEB_SEARCH, INTENT_NEWS, INTENT_CURRENT_EVENTS)):
         return "check_retrieval"
-    return "plan"
+    return "planner"
 
 
 def route_retrieval(state: AgentState) -> str:
@@ -194,7 +194,7 @@ workflow = StateGraph(AgentState)
 workflow.add_node("classify_intent",           classify_intent_node)
 workflow.add_node("memory_write",              memory_write_node)
 workflow.add_node("clarification",             clarification_node)
-workflow.add_node("plan",                      plan_node)
+workflow.add_node("planner",                    plan_node)
 workflow.add_node("tool_planner",              tool_planner_node)           # Phase 3
 workflow.add_node("parallel_tool_execution",   parallel_tool_execution_node)  # Phase 3
 workflow.add_node("query_rewriter",            query_rewriter_node)
@@ -219,7 +219,7 @@ workflow.add_conditional_edges(
         "clarification":      "clarification",
         "execute_web_search": "execute_web_search",
         "check_retrieval":    "check_retrieval",
-        "plan":               "plan",
+        "planner":            "planner",
     },
 )
 
@@ -230,8 +230,8 @@ workflow.add_edge("execute_web_search", "generate_response")
 workflow.add_edge("memory_write",  END)
 workflow.add_edge("clarification", END)
 
-# plan → tool_planner (Phase 3)
-workflow.add_edge("plan", "tool_planner")
+# planner → tool_planner (Phase 3)
+workflow.add_edge("planner", "tool_planner")
 
 # tool_planner → parallel_tool_execution (Phase 3)
 workflow.add_edge("tool_planner", "parallel_tool_execution")

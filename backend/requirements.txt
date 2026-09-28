@@ -20,8 +20,8 @@ aiosqlite==0.20.0
 psycopg2-binary==2.9.10
 
 # ── Data Validation ───────────────────────────────────────────────────────────
-pydantic==2.10.6
-pydantic-settings==2.7.1
+pydantic==2.13.5
+pydantic-settings==2.9.1
 email-validator==2.2.0
 
 # ── Security & Auth ───────────────────────────────────────────────────────────
