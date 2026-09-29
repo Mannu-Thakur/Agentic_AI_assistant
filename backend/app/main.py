@@ -426,6 +426,7 @@ if settings.BACKEND_CORS_ORIGINS:
         allow_headers=[
             "Authorization", "Content-Type", "X-Request-ID",
             "X-API-Key", "x-api-keys", "Accept", "Origin",
+            "x-telemetry-enabled", "x-client-time", "x-client-timezone", "x-client-location",
         ],
         expose_headers=["X-Request-ID", "X-Process-Time", "X-Trace-ID"],
     )
