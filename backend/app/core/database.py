@@ -51,7 +51,6 @@ def _build_sync_engine():
 
 
 def _build_async_engine():
-    from sqlalchemy.pool import NullPool
     url = settings.ASYNC_DATABASE_URL
     if _is_sqlite(url):
         # BUG-5 FIX: aiosqlite does NOT accept check_same_thread — it manages
@@ -74,14 +73,15 @@ def _build_async_engine():
         params = [p for p in query.split("&") if not p.startswith("sslmode=") and not p.startswith("channel_binding=") and not p.startswith("ssl=")]
         url = base_url + ("?" + "&".join(params) if params else "")
 
-    # Supabase Transaction Pooler (port 6543) uses PgBouncer in transaction mode.
-    # PgBouncer does NOT support asyncpg prepared statements — they conflict across
-    # connections. Fix: use NullPool (let PgBouncer handle pooling) and disable
-    # asyncpg's prepared statement cache entirely.
-    is_supabase = "supabase.com" in url
-    if is_supabase:
+    # Supabase Transaction Pooler (port 6543) uses PgBouncer in transaction mode
+    # which does NOT support asyncpg prepared statements (even internally).
+    # Fix: NullPool + statement_cache_size=0.
+    # Supabase Session Pooler (port 5432) supports prepared statements normally.
+    is_supabase_transaction_pooler = "supabase.com" in url and ":6543/" in url
+    if is_supabase_transaction_pooler:
+        from sqlalchemy.pool import NullPool
         connect_args["statement_cache_size"] = 0
-        logger.info("[DB] Supabase Transaction Pooler detected — using NullPool + statement_cache_size=0")
+        logger.info("[DB] Supabase Transaction Pooler (port 6543) — using NullPool + statement_cache_size=0")
         return create_async_engine(
             url,
             poolclass=NullPool,
