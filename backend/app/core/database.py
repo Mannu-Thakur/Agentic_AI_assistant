@@ -68,6 +68,10 @@ def _build_async_engine():
     connect_args = {}
     if "sslmode=require" in url or "ssl=require" in url or "neon.tech" in url:
         connect_args["ssl"] = "require"
+    # FIX: Supabase Transaction Pooler (port 6543) uses PgBouncer in transaction
+    # mode which does NOT support asyncpg prepared statements. Disable caching.
+    if "pooler.supabase.com" in url or "supabase.com" in url:
+        connect_args["statement_cache_size"] = 0
     if "?" in url:
         base_url, query = url.split("?", 1)
         params = [p for p in query.split("&") if not p.startswith("sslmode=") and not p.startswith("channel_binding=") and not p.startswith("ssl=")]
