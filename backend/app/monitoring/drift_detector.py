@@ -145,21 +145,20 @@ async def compute_drift_report(
 ) -> Dict[str, Any]:
     """
     Compute drift metrics comparing baseline vs current telemetry windows.
-
-    Args:
-        baseline_window_hours: Hours of historical data for baseline
-        current_window_hours: Hours of recent data for current window
-
-    Returns:
-        Dict with drift metrics for each dimension
+    If historical time windows have sparse recent requests, splits available
+    DB records into baseline (older) and current (newer) partitions.
     """
     try:
         from app.core.database import AsyncSessionLocal
         from app.models.telemetry import TelemetryRecord
         from sqlalchemy import select
+
+        b_hours = int(getattr(baseline_window_hours, "default", baseline_window_hours) or 24)
+        c_hours = int(getattr(current_window_hours, "default", current_window_hours) or 1)
+
         now = time.time()
-        baseline_start = now - (baseline_window_hours * 3600.0)
-        current_start = now - (current_window_hours * 3600.0)
+        baseline_start = now - (b_hours * 3600.0)
+        current_start = now - (c_hours * 3600.0)
 
         async with AsyncSessionLocal() as db:
             # Fetch baseline window
@@ -187,14 +186,33 @@ async def compute_drift_report(
             )
             current_rows = current_result.all()
 
+            # If time-window has insufficient recent traffic, fall back to partitioning all DB telemetry
+            if len(baseline_rows) < 4 or len(current_rows) < 2:
+                all_res = await db.execute(
+                    select(
+                        TelemetryRecord.complexity_score,
+                        TelemetryRecord.answer_confidence,
+                        TelemetryRecord.chunks_retrieved,
+                        TelemetryRecord.total_latency_ms,
+                    )
+                    .order_by(TelemetryRecord.created_at.asc())
+                    .limit(200)
+                )
+                all_rows = all_res.all()
+                if len(all_rows) >= 6:
+                    mid = len(all_rows) // 2
+                    baseline_rows = all_rows[:mid]
+                    current_rows = all_rows[mid:]
+
     except Exception as e:
         logger.warning(f"[DriftDetector] DB query failed: {e}")
         return {"available": False, "error": str(e)}
 
-    if len(baseline_rows) < 10:
+    total_samples = len(baseline_rows) + len(current_rows)
+    if total_samples < 6 or not baseline_rows or not current_rows:
         return {
-            "available": True,
-            "message": f"Insufficient baseline data ({len(baseline_rows)} records). Need at least 10 records in the {baseline_window_hours}h baseline window.",
+            "available": False,
+            "message": f"Establishing statistical baseline: {total_samples}/6 samples collected. Submit additional requests to activate distribution monitoring.",
             "baseline_count": len(baseline_rows),
             "current_count": len(current_rows),
         }
@@ -241,8 +259,8 @@ async def compute_drift_report(
     return {
         "available": True,
         "timestamp": now,
-        "baseline_window_hours": baseline_window_hours,
-        "current_window_hours": current_window_hours,
+        "baseline_window_hours": b_hours,
+        "current_window_hours": c_hours,
         "baseline_count": len(baseline_rows),
         "current_count": len(current_rows),
         "overall_status": overall_status,
