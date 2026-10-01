@@ -702,10 +702,28 @@ function getTimeGreeting(name: string) {
 }
 
 // ─────────────────────────────────────────────────────────────
-//  Error card — replaces raw italic error text
+//  Error card — sleek, minimal, professional error & notice presentation
 // ─────────────────────────────────────────────────────────────
 function parseErrorFromContent(content: string): { clean: string; error: string | null } {
-  // Match error lines appended by the streaming handler
+  if (!content) return { clean: '', error: null };
+  const trimmed = content.trim();
+
+  // If the entire message is an error/service notice from backend:
+  if (
+    trimmed.startsWith('⚠️') ||
+    trimmed.startsWith('> ⚠️') ||
+    trimmed.startsWith('*[Error:') ||
+    trimmed.startsWith('[Error:') ||
+    trimmed.includes('Service Temporarily Busy') ||
+    trimmed.includes('Provider Unavailable') ||
+    trimmed.includes('API Key Required') ||
+    (trimmed.includes('API Rate Limit') && trimmed.includes('reached their API capacity'))
+  ) {
+    const cleanError = trimmed.replace(/^>\s*/, '');
+    return { clean: '', error: cleanError };
+  }
+
+  // Match bracketed error lines appended by the streaming handler
   const lines = content.split('\n');
   const errLines: string[] = [];
   const cleanLines: string[] = [];
@@ -717,6 +735,75 @@ function parseErrorFromContent(content: string): { clean: string; error: string 
   const clean = cleanLines.join('\n').trim();
   const error = errLines.length ? errLines.join('\n') : null;
   return { clean, error };
+}
+
+function SleekErrorCard({
+  error,
+  onRetry,
+  onOpenSettings,
+}: {
+  error: string;
+  onRetry?: () => void;
+  onOpenSettings?: () => void;
+}) {
+  // Extract clean heading from markdown if present (e.g. ⚠️ **Service Temporarily Busy**)
+  const cleanTitleMatch = error.match(/^(?:⚠️\s*)?\*\*([^*]+)\*\*/m);
+  const title = cleanTitleMatch ? cleanTitleMatch[1].trim() : 'Service Notice';
+
+  let body = error;
+  if (cleanTitleMatch) {
+    body = body.replace(cleanTitleMatch[0], '').trim();
+  }
+  body = body.replace(/^\[Error:\s*/i, '').replace(/\]$/, '').trim();
+
+  return (
+    <div className="my-2.5 p-4 rounded-xl bg-surface-2/90 border border-border/80 text-foreground text-xs shadow-sm space-y-3 max-w-xl transition-all animate-fade-in">
+      <div className="flex items-center justify-between gap-3 border-b border-border/40 pb-2.5">
+        <div className="flex items-center gap-2 font-medium">
+          <AlertCircle className="w-4 h-4 text-amber-400 flex-shrink-0" />
+          <span className="text-xs font-semibold text-foreground tracking-tight">{title}</span>
+        </div>
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          {onRetry && (
+            <button
+              onClick={onRetry}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium bg-surface-3 hover:bg-surface-1 border border-border/80 text-foreground-2 hover:text-foreground transition-colors"
+            >
+              <RefreshCw className="w-3 h-3" />
+              <span>Retry</span>
+            </button>
+          )}
+          {onOpenSettings && (
+            <button
+              onClick={onOpenSettings}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium bg-surface-3 hover:bg-surface-1 border border-border/80 text-foreground-2 hover:text-foreground transition-colors"
+            >
+              <Settings className="w-3 h-3" />
+              <span>Settings</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="text-foreground-2 text-xs leading-relaxed space-y-2">
+        <ReactMarkdown
+          components={{
+            p: ({ children }) => <p className="leading-relaxed mb-1.5 last:mb-0">{children}</p>,
+            ul: ({ children }) => <ul className="space-y-1.5 my-1.5 pl-3 list-disc text-foreground-2">{children}</ul>,
+            li: ({ children }) => <li className="leading-snug">{children}</li>,
+            strong: ({ children }) => <strong className="font-semibold text-foreground">{children}</strong>,
+            code: ({ children }) => (
+              <code className="px-1.5 py-0.5 rounded bg-surface-3 text-[11px] font-mono text-foreground-2 border border-border/50">
+                {children}
+              </code>
+            ),
+          }}
+        >
+          {body}
+        </ReactMarkdown>
+      </div>
+    </div>
+  );
 }
 
 function resolveProvider(modelId: string): string {
@@ -1596,10 +1683,10 @@ export default function ChatPage() {
         const formattedErr = errorMsg.includes('401')
           ? 'Authentication failed - Invalid or missing API key (HTTP 401)'
           : errorMsg.toLowerCase().includes('failed to fetch')
-            ? 'Connection Error: Unable to reach backend server. Please verify the FastAPI server is running on http://127.0.0.1:8000.'
-            : errorMsg.startsWith('Error:') || errorMsg.startsWith('⚠️') || errorMsg.startsWith('Authentication')
-              ? errorMsg
-              : `Error: ${errorMsg || 'Response interrupted or connection lost'}`;
+            ? 'Connection Error: Unable to reach backend service. The server may be waking up or experiencing network disruption. Please retry in a moment.'
+          : errorMsg.startsWith('Error:') || errorMsg.startsWith('⚠️') || errorMsg.startsWith('Authentication')
+            ? errorMsg
+            : `Error: ${errorMsg || 'Response interrupted or connection lost'}`;
         asstText += `\n\n*[${formattedErr}]*`;
         updateMessage(asstMsgId, { content: asstText });
       }
@@ -3280,26 +3367,26 @@ export default function ChatPage() {
                                 </div>
                               )}
                               {isTimeQuery && <TimeWidget />}
-                              {displayContent ? (
+                              {displayContent && (
                                 <CitedContent
                                   content={displayContent}
                                   sources={sources}
                                   isStreaming={isStreaming && isLastAsst && m.content !== ''}
                                 />
-                              ) : error ? (
-                                <div className="p-3.5 rounded-xl bg-red-500/10 border border-red-500/20 text-red-300 text-xs flex flex-col gap-2 my-1">
-                                  <div className="flex items-center gap-2 font-semibold text-red-400">
-                                    <AlertCircle className="w-4 h-4" />
-                                    <span>Response Error</span>
-                                  </div>
-                                  <p className="leading-relaxed whitespace-pre-wrap">{error}</p>
-                                </div>
-                              ) : !isStreamingThis ? (
+                              )}
+                              {error && (
+                                <SleekErrorCard
+                                  error={error}
+                                  onRetry={() => handleRetry(idx)}
+                                  onOpenSettings={() => navigate('/settings')}
+                                />
+                              )}
+                              {!displayContent && !error && !isStreamingThis && (
                                 <div className="p-3.5 rounded-xl bg-surface-2 border border-border text-foreground-2 text-xs flex items-center gap-2 my-1">
                                   <AlertCircle className="w-4 h-4 text-warning flex-shrink-0" />
                                   <span>No response content produced. Please try re-sending or select a different model.</span>
                                 </div>
-                              ) : null}
+                              )}
                             </div>
                           );
                         })()}

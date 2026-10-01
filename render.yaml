@@ -89,7 +89,7 @@ services:
     healthCheckPath: /health
     envVars:
       - key: VITE_API_BASE_URL
-        value: https://ai-assistant-backend.onrender.com
+        value: https://ai-assistant-backend-6lnk.onrender.com
 
   # ── Redis Cache Service ───────────────────────────────────────────────────
   - type: redis

@@ -3904,68 +3904,65 @@ async def generate_response_node(
                 return prefix[:150]
             return raw[:150]
 
-        attempt_summaries = []
-        has_rate_limit   = False
-        has_auth_error   = False
-        has_model_404    = False
-
+        # Aggregate attempts by unique provider to keep the error message concise & professional
+        provider_attempts: Dict[str, List[dict]] = {}
         for att in attempt_history:
-            p_name   = att["provider"].upper()
-            m_name   = att["model"]
-            err_text = att["error"]
-            clean    = _clean_err_text(err_text)
+            p_key = (att.get("provider") or "provider").lower()
+            provider_attempts.setdefault(p_key, []).append(att)
 
-            if att.get("is_quota_exhausted"):
+        provider_labels = {
+            "google": "Google Gemini",
+            "gemini": "Google Gemini",
+            "groq": "Groq",
+            "openai": "OpenAI",
+            "openrouter": "OpenRouter",
+            "anthropic": "Anthropic",
+            "deepseek": "DeepSeek",
+        }
+
+        provider_summaries = []
+        has_rate_limit = False
+        has_auth_error = False
+
+        for p_key, atts in provider_attempts.items():
+            label = provider_labels.get(p_key, p_key.title())
+            if any(a.get("is_quota_exhausted") or a.get("is_rate_limit") for a in atts):
                 has_rate_limit = True
-                attempt_summaries.append(f"• **{p_name}** (`{m_name}`): Daily quota / credits exhausted")
-            elif att.get("is_rate_limit"):
-                has_rate_limit = True
-                attempt_summaries.append(f"• **{p_name}** (`{m_name}`): Rate limit reached — try again in 30s")
-            elif any(w in err_text.lower() for w in ["invalid api key", "missing api key", "api_key_invalid",
-                                                       "invalid_api_key", "invalid key", "missing key",
-                                                       "unauthorized", "authentication", "forbidden", "401", "403"]):
+                status_text = "Rate limit or quota reached"
+            elif any(any(w in a.get("error", "").lower() for w in ["invalid api key", "missing api key", "api_key_invalid", "unauthorized", "401", "403"]) for a in atts):
                 has_auth_error = True
-                attempt_summaries.append(f"• **{p_name}** (`{m_name}`): Invalid or missing API key")
-            elif ("404" in err_text or "not_found" in err_text.lower() or "not found" in err_text.lower()):
-                has_model_404 = True
-                attempt_summaries.append(f"• **{p_name}** (`{m_name}`): Model not available — check API key or select another model")
+                status_text = "API key missing or invalid"
+            elif any("404" in a.get("error", "") or "not found" in a.get("error", "").lower() for a in atts):
+                status_text = "Model unavailable or key restricted"
             else:
-                attempt_summaries.append(f"• **{p_name}** (`{m_name}`): {clean}")
+                sample = atts[0].get("error", "")
+                status_text = _clean_err_text(sample)
+                if len(status_text) > 60:
+                    status_text = status_text[:60].rstrip() + "…"
+            provider_summaries.append(f"• **{label}**: {status_text}")
 
-        summary_bullets = "\n".join(attempt_summaries) if attempt_summaries else f"• Model `{model}`: Call failed"
+        provider_lines = "\n".join(provider_summaries) if provider_summaries else "• Configured providers are currently unresponsive"
 
         if has_rate_limit:
             friendly_msg = (
-                "⚠️ **API Rate Limit Reached**\n\n"
-                f"{summary_bullets}\n\n"
-                "**How to resolve:**\n"
-                "1. Wait 30–60 seconds and try again.\n"
-                "2. Add a **Groq** or **Gemini** API key in **Settings → AI Models** (both have free tiers).\n"
-                "3. Select a different model from the dropdown."
+                "⚠️ **Service Temporarily Busy**\n\n"
+                "The active AI providers reached their request limits:\n"
+                f"{provider_lines}\n\n"
+                "**Quick fix:** Wait 30 seconds to retry, or switch to another model in the header."
             )
         elif has_auth_error:
             friendly_msg = (
-                "⚠️ **API Key Error**\n\n"
-                f"{summary_bullets}\n\n"
-                "Go to **Settings → AI Models** and verify your API keys are correct."
-            )
-        elif has_model_404:
-            friendly_msg = (
-                "⚠️ **Model Not Available**\n\n"
-                f"{summary_bullets}\n\n"
-                "**How to resolve:**\n"
-                "1. Add a valid **Groq API Key** at [console.groq.com](https://console.groq.com) (free).\n"
-                "2. Add a valid **Gemini API Key** at [aistudio.google.com](https://aistudio.google.com) (free).\n"
-                "3. Go to **Settings → AI Models** and paste your key.\n"
-                "4. Select another model from the dropdown."
+                "⚠️ **API Key Required**\n\n"
+                "Authentication failed for the selected model:\n"
+                f"{provider_lines}\n\n"
+                "**Quick fix:** Verify your API keys in **Settings → AI Models**."
             )
         else:
-            clean_primary = _clean_err_text(attempt_history[0]["error"]) if attempt_history else "Unknown error"
             friendly_msg = (
-                "⚠️ **Provider Error**\n\n"
-                f"{summary_bullets}\n\n"
-                f"Detail: {clean_primary}\n\n"
-                "Try selecting a different model or check your connection."
+                "⚠️ **Provider Unavailable**\n\n"
+                "Could not obtain a response from the available models:\n"
+                f"{provider_lines}\n\n"
+                "**Quick fix:** Switch to a different model in the top selector, or check your API keys."
             )
 
         # Build comprehensive telemetry metrics on error so Developer HUD renders accurately
