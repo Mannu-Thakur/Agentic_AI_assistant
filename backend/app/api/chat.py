@@ -440,6 +440,9 @@ async def stream_agent_message(
         "inconsistencies":       [],
         "client_time":           client_time_header,
         "client_location":       client_location_header,
+        # Entity search task: None initially; populated by classify_intent_node
+        # on first WEB_SEARCH turn and updated with constraints on follow-up turns.
+        "entity_search_task":    None,
     }
 
   except HTTPException:

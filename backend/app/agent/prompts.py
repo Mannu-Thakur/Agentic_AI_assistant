@@ -983,3 +983,76 @@ UX_STAGE_RUNNING_OCR    = "Running OCR..."
 UX_STAGE_CALLING_TOOLS  = "Calling tools..."
 UX_STAGE_VERIFYING      = "Verifying..."
 UX_STAGE_GENERATING     = "Generating answer..."
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Entity Search Follow-Up Detection Prompt
+#  Detects when a user message is refining a prior entity/person search task
+#  rather than starting an entirely new query. Extracts structured context so
+#  the system can merge constraints and rewrite the search query accordingly.
+#  ZERO hardcoded names/entities — works from live conversation context only.
+# ─────────────────────────────────────────────────────────────────────────────
+
+ENTITY_SEARCH_FOLLOWUP_PROMPT = """\
+You are an intent analysis module. Analyze the conversation below and determine:
+1. Is the CURRENT MESSAGE a follow-up refinement to an ongoing ENTITY/PERSON SEARCH task?
+2. If yes, extract the full structured search context from the conversation.
+
+CONVERSATION HISTORY (oldest → newest):
+{conversation_context}
+
+CURRENT USER MESSAGE: {current_message}
+
+A message IS a follow-up entity-search refinement if ANY of the following are true:
+- It adds constraints to narrow a prior search (e.g. "must be from X", "should have Y degree", "not this person")
+- It corrects a search result ("wrong person", "not the one", "that's incorrect")
+- It provides discriminating attributes that distinguish the real target (education, employer, location, field)
+- It explicitly references the prior search entity ("the person I mentioned", "same person")
+
+A message is NOT a follow-up if it:
+- Starts a completely new topic unrelated to any prior search
+- Is a general knowledge question with no prior entity search in context
+- Is a greeting or standalone question
+
+If this IS a follow-up refinement, extract:
+- entity: the entity/person name being searched (from conversation history)
+- platform: any platform context like "LinkedIn", "GitHub", "Twitter" (null if none)
+- constraints: ALL accumulated constraints from the ENTIRE conversation (not just current message)
+  — include education (college/university/degree), employer, location, field, year, etc.
+- rejected_description: brief description of any already-shown wrong results the user rejected
+
+Reply with ONLY valid JSON:
+{{
+  "is_followup_refinement": true | false,
+  "entity": "<name being searched, or null>",
+  "platform": "<platform or null>",
+  "constraints": ["<constraint1>", "<constraint2>", ...],
+  "rejected_description": "<brief description of wrong result shown, or null>"
+}}
+No extra text, no markdown.
+"""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Contextual Web Search Query Builder Prompt
+#  Given an entity + accumulated constraints, builds the optimal search query.
+#  ZERO hardcoded data — uses only the structured task context as input.
+# ─────────────────────────────────────────────────────────────────────────────
+
+ENTITY_SEARCH_QUERY_BUILDER_PROMPT = """\
+You are a search query optimization assistant. Build the best possible web search query to find a specific person or entity using the provided context.
+
+Entity to search: {entity}
+Platform/context: {platform}
+Discriminating constraints: {constraints}
+Already rejected (wrong results to avoid): {rejected_description}
+
+Rules:
+- Combine the entity name with its most discriminating constraints to produce a targeted query
+- If platform is specified (like LinkedIn), include it in the query
+- Prioritize the most specific/rare attributes (unique university, employer, etc.)
+- Keep the query concise (under 15 words) but information-rich
+- Do NOT add filler words like "profile of" or "information about"
+
+Reply with ONLY the search query string. No quotes, no JSON, no explanation.
+"""

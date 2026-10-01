@@ -93,6 +93,9 @@ from app.agent.prompts import (
     UX_STAGE_CALLING_TOOLS,
     UX_STAGE_VERIFYING,
     UX_STAGE_GENERATING,
+    # Entity search cross-turn state
+    ENTITY_SEARCH_FOLLOWUP_PROMPT,
+    ENTITY_SEARCH_QUERY_BUILDER_PROMPT,
 )
 from app.providers.gemini import GeminiProvider
 from app.providers.groq import GroqProvider
@@ -1339,6 +1342,63 @@ async def classify_intent_node(
 
     conversation_context = _build_conversation_context(messages, max_exchanges=3)
 
+    # ── Entity Search Follow-Up Detection ────────────────────────────────────
+    # Check if the current message is a constraint-refinement follow-up to an
+    # ongoing entity/person search. If so, accumulate constraints into the
+    # entity_search_task state and force intent to WEB_SEARCH so the pipeline
+    # doesn't silently drop refinements as conversational chat.
+    # This runs BEFORE the ambiguity check so it short-circuits immediately.
+    entity_search_task: Optional[Dict[str, Any]] = state.get("entity_search_task") or None
+    _entity_followup_detected = False
+
+    # Only run detection if there are at least 2 prior messages (prior exchange exists)
+    _prior_messages = [m for m in messages if hasattr(m, "type") and m.type in ("human", "user", "ai")]
+    if last_query_clean and len(_prior_messages) >= 2:
+        try:
+            _followup_prompt = ENTITY_SEARCH_FOLLOWUP_PROMPT.format(
+                conversation_context=conversation_context,
+                current_message=last_query_clean,
+            )
+            _followup_result = await _call_llm_judge(_followup_prompt, config)
+            if _followup_result and isinstance(_followup_result, dict):
+                if _followup_result.get("is_followup_refinement"):
+                    _entity = _followup_result.get("entity") or ""
+                    _platform = _followup_result.get("platform")
+                    _new_constraints = _followup_result.get("constraints") or []
+                    _rejected_desc = _followup_result.get("rejected_description")
+
+                    # Merge with existing entity_search_task if one exists
+                    if entity_search_task and entity_search_task.get("entity"):
+                        # Keep entity from prior state unless the LLM extracted a better one
+                        _entity = _entity or entity_search_task["entity"]
+                        _platform = _platform or entity_search_task.get("platform")
+                        # Merge constraints (deduplicate)
+                        _prior_constraints = entity_search_task.get("constraints") or []
+                        _all_constraints = list(dict.fromkeys(_prior_constraints + _new_constraints))
+                        # Accumulate rejected descriptions
+                        _prior_rejected = entity_search_task.get("rejected_description") or ""
+                        if _rejected_desc and _rejected_desc not in _prior_rejected:
+                            _rejected_desc = (_prior_rejected + "; " + _rejected_desc).strip("; ")
+                        else:
+                            _rejected_desc = _prior_rejected or _rejected_desc
+                    else:
+                        _all_constraints = list(dict.fromkeys(_new_constraints))
+
+                    entity_search_task = {
+                        "entity": _entity,
+                        "platform": _platform,
+                        "constraints": _all_constraints,
+                        "rejected_description": _rejected_desc,
+                        "last_query": None,  # will be set in execute_web_search_node
+                    }
+                    _entity_followup_detected = True
+                    logger.info(
+                        f"[EntitySearch] Follow-up detected: entity='{_entity}' "
+                        f"constraints={_all_constraints} platform='{_platform}'"
+                    )
+        except Exception as _ef_err:
+            logger.warning(f"[EntitySearch] Follow-up detection failed (non-fatal): {_ef_err}")
+
     if last_query:
         new_mode = _detect_language_mode(last_query)
         if new_mode:
@@ -1590,6 +1650,28 @@ async def classify_intent_node(
         duration_ms=dur
     )
 
+    # ── Entity Search Task: force WEB_SEARCH if follow-up detected ───────────
+    # Also initialise entity_search_task on a fresh WEB_SEARCH so subsequent
+    # follow-up turns can find it and merge constraints.
+    if _entity_followup_detected and entity_search_task:
+        # Force WEB_SEARCH so the pipeline runs real-time search, not chat
+        intent = INTENT_WEB_SEARCH
+        # Ensure tavily_search is in the allowed tools
+        from app.agent.prompts import INTENT_TOOL_WHITELIST as _IW
+        allowed_tools = list(set(allowed_tools) | set(_IW.get(INTENT_WEB_SEARCH, [])))
+        logger.info(f"[EntitySearch] Intent forced to WEB_SEARCH for entity follow-up")
+    elif intent == INTENT_WEB_SEARCH and not entity_search_task:
+        # First turn of a person/entity search — initialise the task state
+        # so subsequent turns can detect it as a follow-up.
+        # We store entity=None here; execute_web_search_node will fill it from query.
+        entity_search_task = {
+            "entity": None,
+            "platform": None,
+            "constraints": [],
+            "rejected_description": None,
+            "last_query": None,
+        }
+
     return {
         "intent":                intent,
         "allowed_tools":         allowed_tools,
@@ -1607,6 +1689,7 @@ async def classify_intent_node(
         "detected_language":     detected_language,
         "language_mode":         language_mode,
         "sub_questions":         sub_questions,
+        "entity_search_task":    entity_search_task,
         "execution_trace":       state["execution_trace"],
         "semantic_status":       state["semantic_status"],
         "memory_status":         state["memory_status"],
@@ -1982,10 +2065,61 @@ async def execute_web_search_node(
         flags=_re.DOTALL,
     ).strip() or last_query
 
+    # ── Entity Search Task: context-aware query rewriting ────────────────────
+    # When an entity/person search task is active with accumulated constraints,
+    # rewrite the search query to include all constraints for targeted retrieval.
+    # This prevents bare follow-up messages (e.g. "Education must be BTech from IIT X")
+    # from becoming low-quality search queries.
+    entity_search_task: Optional[Dict[str, Any]] = state.get("entity_search_task") or None
+    _used_entity_query = False
+
+    if entity_search_task and entity_search_task.get("entity"):
+        _est_entity = entity_search_task["entity"]
+        _est_platform = entity_search_task.get("platform")
+        _est_constraints = entity_search_task.get("constraints") or []
+        _est_rejected = entity_search_task.get("rejected_description")
+
+        if _est_constraints or _est_platform:
+            # Use the LLM query builder to produce an optimal search string
+            try:
+                _qb_prompt = ENTITY_SEARCH_QUERY_BUILDER_PROMPT.format(
+                    entity=_est_entity,
+                    platform=_est_platform or "none",
+                    constraints=", ".join(_est_constraints) if _est_constraints else "none",
+                    rejected_description=_est_rejected or "none",
+                )
+                _entity_query = await _call_llm_text(_qb_prompt, config, max_tokens=80)
+                if _entity_query and len(_entity_query.strip()) > 3:
+                    _entity_query_clean = _entity_query.strip().strip('"\'')
+                    logger.info(
+                        f"[EntitySearch] Rewritten query: '{clean_query[:60]}' "
+                        f"→ '{_entity_query_clean[:80]}'"
+                    )
+                    clean_query = _entity_query_clean
+                    _used_entity_query = True
+                    # Store last_query back into entity_search_task for future turns
+                    entity_search_task = dict(entity_search_task)
+                    entity_search_task["last_query"] = clean_query
+            except Exception as _eq_err:
+                logger.warning(f"[EntitySearch] Query builder failed (non-fatal): {_eq_err}")
+                # Fallback: manually assemble from entity + constraints
+                _parts = [_est_entity]
+                if _est_platform:
+                    _parts.append(_est_platform)
+                _parts.extend(_est_constraints[:3])
+                clean_query = " ".join(_parts)
+                _used_entity_query = True
+                entity_search_task = dict(entity_search_task)
+                entity_search_task["last_query"] = clean_query
+
     await _notify_step(config, f"Searching the web: '{clean_query[:50]}'")
 
     sub_questions: List[str] = state.get("sub_questions") or []
-    _search_targets = sub_questions if len(sub_questions) >= 2 else [clean_query]
+    # For entity-search follow-ups, use a single focused query (not sub-questions)
+    if _used_entity_query or len(sub_questions) < 2:
+        _search_targets = [clean_query]
+    else:
+        _search_targets = sub_questions
 
     all_web_src_docs: List[Dict[str, Any]] = []
     combined_web_text_parts: List[str] = []
@@ -2085,6 +2219,7 @@ async def execute_web_search_node(
         "steps":                   updated_steps,
         "web_status":              state["web_status"],
         "execution_trace":         state["execution_trace"],
+        "entity_search_task":      entity_search_task,  # persist updated task state
     }
 
 

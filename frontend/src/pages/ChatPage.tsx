@@ -499,6 +499,11 @@ function CitedContent({
           webBySubQ.get(key)!.push(src);
         });
 
+        // Only show "For: <sub-question>" labels for genuine compound queries
+        // that produced 2+ distinct sub-question groups. Single entity searches
+        // should not show any group label even if sub_question is non-empty.
+        const showSubQLabels = webBySubQ.size >= 2;
+
         return (
           <div className="mt-4 pt-3 border-t border-border space-y-3">
             <p className="text-[9px] font-bold uppercase tracking-widest text-foreground-3 flex items-center gap-1">
@@ -511,7 +516,7 @@ function CitedContent({
                 {/* Per sub-question group label (only shown for compound queries) */}
                 {Array.from(webBySubQ.entries()).map(([subQ, srcs], qIdx) => (
                   <div key={qIdx} className="space-y-1.5">
-                    {subQ && (
+                    {showSubQLabels && subQ && (
                       <p className="text-[9px] font-semibold text-foreground-3 uppercase tracking-widest pl-0.5">
                         For: <span className="text-foreground normal-case font-normal">{subQ}</span>
                       </p>

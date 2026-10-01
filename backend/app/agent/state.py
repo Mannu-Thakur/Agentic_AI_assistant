@@ -176,6 +176,24 @@ class AgentState(TypedDict):
     client_time: Optional[str]
     client_location: Optional[str]
 
+    # ── Entity Search Task (cross-turn stateful search) ──────────────────────
+    # Tracks an ongoing entity/person search task across multiple conversation
+    # turns. When the user refines a search (e.g. "must be from IIT X"), the
+    # node reads this to merge constraints and rewrite the search query instead
+    # of treating the follow-up as an independent new query.
+    #
+    # Schema:
+    #   entity         — the name/identifier being searched, e.g. "Mannu Kumar Thakur"
+    #   platform       — optional platform context, e.g. "LinkedIn", "GitHub"
+    #   constraints    — accumulated list of constraints, e.g. ["BTech IIT Bhubaneswar"]
+    #   last_query     — the actual search query used in the most recent search
+    #   rejected_names — names/descriptions of candidates already rejected by user
+    #
+    # This field is intentionally untyped (Optional[Dict]) so it serializes
+    # cleanly through LangGraph state without a schema change in every node.
+    # All reads use .get() with defaults for backwards compatibility.
+    entity_search_task: Optional[Dict[str, Any]]
+
     # ── Knowledge Graph / GraphRAG ────────────────────────────────────────────
     # Graph evidence retrieved from Neo4j for this query
     graph_evidence: Optional[List[Dict[str, Any]]]
