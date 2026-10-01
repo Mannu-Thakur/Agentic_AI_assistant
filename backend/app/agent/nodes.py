@@ -3875,53 +3875,97 @@ async def generate_response_node(
     _is_error_response = False
 
     if not success:
+        import re as _re
+
+        def _clean_err_text(raw: str) -> str:
+            """Extract a clean, human-readable message from a raw API error string.
+            Strips out JSON blobs, truncated brackets, and provider boilerplate."""
+            # Try to parse embedded JSON and pull out the message field
+            json_match = _re.search(r'\{.*\}', raw, _re.DOTALL)
+            if json_match:
+                try:
+                    import json as _json
+                    err_json = _json.loads(json_match.group())
+                    for path in [["error", "message"], ["message"], ["detail"], ["error"]]:
+                        val = err_json
+                        for key in path:
+                            if isinstance(val, dict) and key in val:
+                                val = val[key]
+                            else:
+                                val = None
+                                break
+                        if val and isinstance(val, str) and len(val) > 3:
+                            return val[:150]
+                except Exception:
+                    pass
+            # No JSON — grab the prefix before any '{' brace
+            prefix = raw.split('{')[0].strip().rstrip(':').strip()
+            if prefix:
+                return prefix[:150]
+            return raw[:150]
+
         attempt_summaries = []
-        has_rate_limit = False
-        has_auth_error = False
+        has_rate_limit   = False
+        has_auth_error   = False
+        has_model_404    = False
 
         for att in attempt_history:
-            p_name = att["provider"].upper()
-            m_name = att["model"]
+            p_name   = att["provider"].upper()
+            m_name   = att["model"]
             err_text = att["error"]
+            clean    = _clean_err_text(err_text)
+
             if att.get("is_quota_exhausted"):
                 has_rate_limit = True
-                attempt_summaries.append(f"• **{p_name}** (`{m_name}`): Account daily quota / credits exhausted")
+                attempt_summaries.append(f"• **{p_name}** (`{m_name}`): Daily quota / credits exhausted")
             elif att.get("is_rate_limit"):
                 has_rate_limit = True
-                attempt_summaries.append(f"• **{p_name}** (`{m_name}`): Rate limit (RPM/TPM) reached")
-            elif any(w in err_text.lower() for w in ["invalid api key", "missing api key", "api_key_invalid", "invalid_api_key", "invalid key", "missing key", "unauthorized", "authentication", "forbidden", "401", "403"]):
+                attempt_summaries.append(f"• **{p_name}** (`{m_name}`): Rate limit reached — try again in 30s")
+            elif any(w in err_text.lower() for w in ["invalid api key", "missing api key", "api_key_invalid",
+                                                       "invalid_api_key", "invalid key", "missing key",
+                                                       "unauthorized", "authentication", "forbidden", "401", "403"]):
                 has_auth_error = True
                 attempt_summaries.append(f"• **{p_name}** (`{m_name}`): Invalid or missing API key")
+            elif ("404" in err_text or "not_found" in err_text.lower() or "not found" in err_text.lower()):
+                has_model_404 = True
+                attempt_summaries.append(f"• **{p_name}** (`{m_name}`): Model not available — check API key or select another model")
             else:
-                attempt_summaries.append(f"• **{p_name}** (`{m_name}`): {err_text[:100]}")
+                attempt_summaries.append(f"• **{p_name}** (`{m_name}`): {clean}")
 
         summary_bullets = "\n".join(attempt_summaries) if attempt_summaries else f"• Model `{model}`: Call failed"
 
         if has_rate_limit:
             friendly_msg = (
-                "⚠️ **API Rate Limit / Quota Exceeded**\n\n"
-                "The active model and fallback providers reached their API capacity:\n\n"
+                "⚠️ **API Rate Limit Reached**\n\n"
                 f"{summary_bullets}\n\n"
                 "**How to resolve:**\n"
-                "1. Wait 30–60 seconds for transient per-minute limits to reset.\n"
-                "2. Add a **Groq API Key** (ultra-fast with generous free limits) or **Google Gemini Key** in **Settings → AI Models**.\n"
-                "3. Select another model from the top dropdown."
+                "1. Wait 30–60 seconds and try again.\n"
+                "2. Add a **Groq** or **Gemini** API key in **Settings → AI Models** (both have free tiers).\n"
+                "3. Select a different model from the dropdown."
             )
         elif has_auth_error:
             friendly_msg = (
-                "⚠️ **API Key Authentication Error**\n\n"
-                "Could not complete the request due to provider authentication errors:\n\n"
+                "⚠️ **API Key Error**\n\n"
                 f"{summary_bullets}\n\n"
-                "Please verify your API keys in **Settings → AI Models**."
+                "Go to **Settings → AI Models** and verify your API keys are correct."
+            )
+        elif has_model_404:
+            friendly_msg = (
+                "⚠️ **Model Not Available**\n\n"
+                f"{summary_bullets}\n\n"
+                "**How to resolve:**\n"
+                "1. Add a valid **Groq API Key** at [console.groq.com](https://console.groq.com) (free).\n"
+                "2. Add a valid **Gemini API Key** at [aistudio.google.com](https://aistudio.google.com) (free).\n"
+                "3. Go to **Settings → AI Models** and paste your key.\n"
+                "4. Select another model from the dropdown."
             )
         else:
-            primary_err_sample = attempt_history[0]["error"] if attempt_history else "Unknown error"
+            clean_primary = _clean_err_text(attempt_history[0]["error"]) if attempt_history else "Unknown error"
             friendly_msg = (
-                f"⚠️ **Model Provider Error**\n\n"
-                f"Unable to complete request with model '{model}':\n\n"
+                "⚠️ **Provider Error**\n\n"
                 f"{summary_bullets}\n\n"
-                f"Error detail: {primary_err_sample[:200]}\n\n"
-                "Please check your network connection or select a different model."
+                f"Detail: {clean_primary}\n\n"
+                "Try selecting a different model or check your connection."
             )
 
         # Build comprehensive telemetry metrics on error so Developer HUD renders accurately
