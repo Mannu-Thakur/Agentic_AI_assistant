@@ -933,14 +933,15 @@ export default function ChatPage() {
   // Only show reliably-working providers. Never use provider.availableModels
   // which floods the picker with 300+ OpenRouter entries.
   const CURATED_MODELS = [
-    // Google Gemini (Direct)
-    { id: 'gemini-2.0-flash',        name: 'Gemini 2.0 Flash',      provider: 'Google Gemini', apiProvider: 'google',   icon: Sparkles, badge: 'Recommended',  desc: 'Fast, intelligent & highly capable' },
-    { id: 'gemini-1.5-flash',        name: 'Gemini 1.5 Flash',      provider: 'Google Gemini', apiProvider: 'google',   icon: Cpu,      badge: 'Stable',       desc: 'Production-tested versatile Gemini model' },
-    { id: 'gemini-2.0-flash-lite',   name: 'Gemini 2.0 Flash Lite', provider: 'Google Gemini', apiProvider: 'google',   icon: Cpu,      badge: 'Fastest',      desc: 'Lightweight & ultra-low latency' },
-    // Groq (Free, Fast)
-    { id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B',          provider: 'Groq',          apiProvider: 'groq',     icon: Cpu,      badge: 'Fast & Free',  desc: 'High-intelligence 70B model on Groq LPU' },
-    { id: 'llama-3.1-8b-instant',    name: 'Llama 3.1 8B',           provider: 'Groq',          apiProvider: 'groq',     icon: Cpu,      badge: 'Fastest Free', desc: 'Ultra-fast low-latency model on Groq' },
-    { id: 'deepseek-r1-distill-llama-70b', name: 'DeepSeek R1 70B',  provider: 'Groq',          apiProvider: 'groq',     icon: Cpu,      badge: 'Reasoning',    desc: 'Deep reasoning model running on Groq' },
+    // Google Gemini — current models (Oct 2026)
+    { id: 'gemini-3.5-flash',      name: 'Gemini 3.5 Flash',      provider: 'Google Gemini', apiProvider: 'google', icon: Sparkles, badge: 'Recommended', desc: 'Fast, intelligent & highly capable' },
+    { id: 'gemini-3.5-flash-lite', name: 'Gemini 3.5 Flash Lite', provider: 'Google Gemini', apiProvider: 'google', icon: Cpu,      badge: 'Fastest',     desc: 'Lightweight & ultra-low latency' },
+    { id: 'gemini-3.7-flash',      name: 'Gemini 3.7 Flash',      provider: 'Google Gemini', apiProvider: 'google', icon: Sparkles, badge: 'Latest',       desc: 'Balanced performance & quality' },
+    { id: 'gemini-3.8-flash',      name: 'Gemini 3.8 Flash',      provider: 'Google Gemini', apiProvider: 'google', icon: Sparkles, badge: 'Preview',      desc: 'Cutting-edge Gemini preview model' },
+    // Groq (Free, Fast) — current models (Oct 2026)
+    { id: 'meta-llama/llama-4-scout-17b-16e-instruct', name: 'Llama 4 Scout 17B', provider: 'Groq', apiProvider: 'groq', icon: Cpu, badge: 'Fast & Free', desc: 'Multimodal Llama 4 Scout on Groq LPU' },
+    { id: 'llama-3.1-8b-instant',  name: 'Llama 3.1 8B',          provider: 'Groq',          apiProvider: 'groq',   icon: Cpu,      badge: 'Fastest Free', desc: 'Ultra-fast low-latency model on Groq' },
+    { id: 'openai/gpt-oss-120b',   name: 'GPT-OSS 120B (Groq)',   provider: 'Groq',          apiProvider: 'groq',   icon: Cpu,      badge: 'Powerful',     desc: 'Large open-source GPT model on Groq' },
   ];
 
   const verifiedProviderSet = new Set(
@@ -1010,7 +1011,7 @@ export default function ChatPage() {
       if (models.length > 0) {
         setActiveModel(models[0].id);
       } else {
-        setActiveModel('gemini-2.0-flash');
+        setActiveModel('gemini-3.5-flash');
       }
       return;
     }
