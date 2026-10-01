@@ -65,6 +65,8 @@ DEPRECATED_MODELS: Dict[str, str] = {
     "mixtral-8x7b-32768":                  "llama-3.3-70b-versatile",
     "llama-3.2-11b-vision-preview":        "llama-3.3-70b-versatile",
     "llama-3.2-90b-vision-preview":        "llama-3.3-70b-versatile",
+    # deepseek-r1-distill-llama-70b was removed from Groq API
+    "deepseek-r1-distill-llama-70b":       "llama-3.3-70b-versatile",
 }
 
 # ── Known-good model sets per provider ────────────────────────────────────────
@@ -80,7 +82,6 @@ KNOWN_MODELS: Dict[str, List[str]] = {
     "groq": [
         "llama-3.3-70b-versatile",
         "llama-3.1-8b-instant",
-        "deepseek-r1-distill-llama-70b",
     ],
     "openrouter": [],   # dynamic — accepts any valid model ID via routing
     "openai": [
