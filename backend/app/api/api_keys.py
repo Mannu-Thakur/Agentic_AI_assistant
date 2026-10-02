@@ -486,7 +486,9 @@ async def delete_api_key(
     )
     existing_key = result.scalars().first()
     if not existing_key:
-        raise HTTPException(status_code=404, detail="API key not found.")
+        await cache_delete(f"user:providers:{current_user.id}")
+        await cache_delete(f"user:keys:{current_user.id}")
+        return {"detail": f"API key for {provider_name} successfully deleted."}
 
     await db.delete(existing_key)
     await db.commit()

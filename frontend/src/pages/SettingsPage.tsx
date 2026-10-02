@@ -376,39 +376,71 @@ const ApiKeyField = memo(function ApiKeyField({
   onSaveSuccess: (updatedProvider: Provider) => void;
   onDeleteSuccess: () => void;
 }) {
-  const [val, setVal]           = useState(initialMaskedKey);
-  const [show, setShow]         = useState(false);
-  const [saveStep, setSaveStep] = useState<string>('');
-  const [loading, setLoading]   = useState(false);
-  const [errorMsg, setErrorMsg] = useState(lastError || '');
+  const [val, setVal]             = useState(initialMaskedKey);
+  const [show, setShow]           = useState(false);
+  const [saveStep, setSaveStep]   = useState<string>('');
+  const [loading, setLoading]     = useState(false);
+  const [errorMsg, setErrorMsg]   = useState(lastError || '');
+  const [isEditing, setIsEditing] = useState(false);
 
   useEffect(() => {
     const localHasKey = ProviderKeyManager.hasKey(provider);
-    setVal(initialMaskedKey || (localHasKey ? '••••••••••••••••' : ''));
+    if (!isEditing) {
+      setVal(initialMaskedKey || (localHasKey ? '••••••••••••••••' : ''));
+    }
     setErrorMsg(lastError || '');
     setSaveStep('');
     setLoading(false);
-  }, [initialMaskedKey, lastError, provider]);
+  }, [initialMaskedKey, lastError, provider, isEditing]);
 
   const handleInputChange = useCallback((newVal: string) => {
     setVal(newVal);
     setErrorMsg('');
   }, []);
 
+  const handleStartChange = useCallback(() => {
+    setIsEditing(true);
+    setVal('');
+    setErrorMsg('');
+    setShow(false);
+    setTimeout(() => {
+      document.getElementById(`key-input-${provider}`)?.focus();
+    }, 50);
+  }, [provider]);
+
+  const handleCancelEdit = useCallback(() => {
+    setIsEditing(false);
+    const localHasKey = ProviderKeyManager.hasKey(provider);
+    setVal(initialMaskedKey || (localHasKey ? '••••••••••••••••' : ''));
+    setErrorMsg('');
+  }, [initialMaskedKey, provider]);
+
   const handleSave = useCallback(async () => {
-    if (!val.trim() || loading) return;
+    const cleanKey = val.trim();
+    if (!cleanKey || cleanKey.startsWith('••••') || cleanKey === '****' || loading) return;
     setLoading(true);
     setErrorMsg('');
     try {
       setSaveStep('Encrypting & Verifying Key...');
-      await ProviderKeyManager.verifyKey(provider, val);
+      await ProviderKeyManager.verifyKey(provider, cleanKey);
       setSaveStep('Fetching Providers...');
-      const data = await apiRequest('/providers');
-      useChatStore.getState().setProviders(data);
-      const updated = data.find((p: Provider) => p.id === provider);
-      if (updated) {
-        onSaveSuccess(updated);
-        setVal(updated.saved ? '••••••••••••••••' : '');
+      let updatedProvider: Provider | undefined;
+      try {
+        const data = await apiRequest('/providers');
+        useChatStore.getState().setProviders(data);
+        updatedProvider = data.find((p: Provider) => p.id === provider);
+      } catch {
+        useChatStore.getState().updateProvider(provider, {
+          status: 'VERIFIED',
+          saved: true,
+          verified: true,
+          enabled: true,
+        });
+      }
+      setIsEditing(false);
+      setVal('••••••••••••••••');
+      if (updatedProvider) {
+        onSaveSuccess(updatedProvider);
       }
     } catch (err: unknown) {
       setSaveStep('');
@@ -420,24 +452,43 @@ const ApiKeyField = memo(function ApiKeyField({
   }, [val, loading, provider, onSaveSuccess]);
 
   const handleDelete = useCallback(async () => {
+    if (loading) return;
+    setLoading(true);
+    setErrorMsg('');
+    setSaveStep('Removing key...');
     try {
-      setLoading(true);
-      await apiRequest(`/api-keys/${provider}`, { method: 'DELETE' });
+      try {
+        await apiRequest(`/api-keys/${provider}`, { method: 'DELETE' });
+      } catch (err) {
+        console.warn(`[ApiKeyField] Server delete notice for ${provider}:`, err);
+      }
       ProviderKeyManager.removeKey(provider);
-      const data = await apiRequest('/providers');
-      useChatStore.getState().setProviders(data);
+      try {
+        const data = await apiRequest('/providers');
+        useChatStore.getState().setProviders(data);
+      } catch {
+        useChatStore.getState().updateProvider(provider, {
+          status: 'UNCONFIGURED',
+          saved: false,
+          verified: false,
+          enabled: false,
+        });
+      }
       setVal('');
-      setErrorMsg('');
-      setSaveStep('');
+      setIsEditing(false);
       onDeleteSuccess();
-    } catch (err) {
+    } catch (err: any) {
       console.error('Delete failed:', err);
+      setErrorMsg(err.message || 'Failed to remove API key.');
     } finally {
       setLoading(false);
+      setSaveStep('');
     }
-  }, [provider, onDeleteSuccess]);
+  }, [loading, provider, onDeleteSuccess]);
 
   const isVerified = status === 'VERIFIED';
+  const hasSavedKey = Boolean(initialMaskedKey || ProviderKeyManager.hasKey(provider));
+  const isInputReadOnly = (isVerified && !isEditing) || loading;
   const meta = PROVIDER_METADATA[provider] || { label: provider, placeholder: 'Enter key...' };
 
   return (
@@ -453,17 +504,22 @@ const ApiKeyField = memo(function ApiKeyField({
               <Loader2 className="w-2.5 h-2.5 animate-spin" /> {saveStep}
             </span>
           )}
-          {!loading && isVerified && (
+          {!loading && isEditing && (
+            <span className="text-[10px] text-amber-400 font-semibold flex items-center gap-1">
+              Editing Key
+            </span>
+          )}
+          {!loading && !isEditing && isVerified && (
             <span className="text-[10px] text-emerald-400 font-semibold flex items-center gap-1">
               <Check className="w-2.5 h-2.5" /> Verified
             </span>
           )}
-          {!loading && status === 'INVALID' && (
+          {!loading && !isEditing && status === 'INVALID' && (
             <span className="text-[10px] text-rose-400 font-medium flex items-center gap-1">
               <AlertCircle className="w-2.5 h-2.5" /> Invalid Key
             </span>
           )}
-          {!loading && status === 'ERROR' && (
+          {!loading && !isEditing && status === 'ERROR' && (
             <span className="text-[10px] text-rose-400 font-medium flex items-center gap-1">
               <AlertCircle className="w-2.5 h-2.5" /> Provider Error
             </span>
@@ -477,57 +533,117 @@ const ApiKeyField = memo(function ApiKeyField({
             id={`key-input-${provider}`}
             type={show ? 'text' : 'password'}
             value={val}
-            readOnly={isVerified || loading}
+            readOnly={isInputReadOnly}
             onChange={(e) => handleInputChange(e.target.value)}
-            placeholder={initialMaskedKey ? '••••••••••••••••' : `Enter ${meta.label}...`}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !isInputReadOnly && val.trim() && !loading) {
+                e.preventDefault();
+                handleSave();
+              }
+            }}
+            placeholder={isEditing ? `Enter new ${meta.label}...` : initialMaskedKey ? '••••••••••••••••' : `Enter ${meta.label}...`}
             className={`w-full bg-background border rounded-lg px-3 py-2 pr-9 text-xs font-mono text-foreground
               placeholder:text-foreground-3 focus:outline-none transition-all duration-150 shadow-inner
-              ${isVerified
+              ${isInputReadOnly
                 ? 'border-emerald-900/40 text-foreground-3 cursor-default select-none'
                 : 'border-border focus:border-blue-500 focus:ring-1 focus:ring-blue-500/50'}`}
           />
-          {!isVerified && !loading && (
+          {!isInputReadOnly && !loading && (
             <button
               type="button"
               onClick={() => setShow((v) => !v)}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-foreground-3 hover:text-foreground-2 transition-colors duration-150"
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-foreground-3 hover:text-foreground-2 transition-colors duration-150 cursor-pointer"
+              aria-label={show ? 'Hide key' : 'Show key'}
             >
               {show ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
             </button>
           )}
         </div>
 
-        {isVerified ? (
-          <button
-            onClick={handleDelete}
-            className="px-3.5 py-2 rounded-lg text-xs font-semibold border shadow-sm bg-surface-3 border-border text-foreground hover:bg-surface hover:text-foreground active:scale-[0.98] flex items-center gap-1.5 flex-shrink-0 transition-all duration-150"
-          >
-            Change
-          </button>
+        {/* Primary Action Button(s) */}
+        {isVerified && !isEditing ? (
+          <>
+            <button
+              type="button"
+              onClick={handleStartChange}
+              disabled={loading}
+              className="px-3.5 py-2 rounded-lg text-xs font-semibold border shadow-sm bg-surface-3 border-border text-foreground hover:bg-surface hover:text-foreground active:scale-[0.98] flex items-center gap-1.5 flex-shrink-0 transition-all duration-150 cursor-pointer"
+            >
+              Change
+            </button>
+            <button
+              type="button"
+              onClick={handleDelete}
+              disabled={loading}
+              className="px-2.5 rounded-lg border border-border bg-background hover:bg-surface text-foreground-3 hover:text-rose-400 flex items-center justify-center flex-shrink-0 transition-all duration-150 shadow-sm cursor-pointer"
+              aria-label="Remove key"
+              title="Delete API key"
+            >
+              {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+            </button>
+          </>
+        ) : isEditing ? (
+          <>
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={loading || !val.trim() || val.startsWith('••••')}
+              className={`px-3.5 py-2 rounded-lg text-xs font-semibold transition-all duration-150 flex items-center gap-1.5 flex-shrink-0 border shadow-sm cursor-pointer
+                ${loading || !val.trim() || val.startsWith('••••')
+                  ? 'bg-surface-3 border-border text-foreground-3 cursor-not-allowed'
+                  : 'bg-blue-600 border-blue-700 text-white hover:bg-blue-500 active:scale-[0.98]'}`}
+            >
+              {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+              {loading ? 'Verifying...' : 'Verify & Save'}
+            </button>
+            <button
+              type="button"
+              onClick={handleCancelEdit}
+              disabled={loading}
+              className="px-3 py-2 rounded-lg text-xs font-semibold border shadow-sm bg-surface-3 border-border text-foreground-2 hover:bg-surface hover:text-foreground active:scale-[0.98] flex items-center gap-1.5 flex-shrink-0 transition-all duration-150 cursor-pointer"
+            >
+              Cancel
+            </button>
+            {hasSavedKey && (
+              <button
+                type="button"
+                onClick={handleDelete}
+                disabled={loading}
+                className="px-2.5 rounded-lg border border-border bg-background hover:bg-surface text-foreground-3 hover:text-rose-400 flex items-center justify-center flex-shrink-0 transition-all duration-150 shadow-sm cursor-pointer"
+                aria-label="Remove key"
+                title="Delete API key"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </>
         ) : (
-          <button
-            onClick={handleSave}
-            disabled={loading || !val.trim()}
-            className={`px-3.5 py-2 rounded-lg text-xs font-semibold transition-all duration-150 flex items-center gap-1.5 flex-shrink-0 border shadow-sm
-              ${loading
-                ? 'bg-surface-3 border-border text-foreground-3 cursor-not-allowed'
-                : !val.trim()
-                ? 'bg-surface-3 border-border text-foreground-3 cursor-not-allowed'
-                : 'bg-blue-600 border-blue-700 text-white hover:bg-blue-500 active:scale-[0.98]'}`}
-          >
-            {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-            {loading ? 'Processing' : 'Verify & Save'}
-          </button>
-        )}
-
-        {initialMaskedKey && (
-          <button
-            onClick={handleDelete}
-            className="px-2.5 rounded-lg border border-border bg-background hover:bg-surface text-foreground-3 hover:text-rose-400 flex items-center justify-center flex-shrink-0 transition-all duration-150 shadow-sm"
-            aria-label="Remove key"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-          </button>
+          <>
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={loading || !val.trim() || val.startsWith('••••')}
+              className={`px-3.5 py-2 rounded-lg text-xs font-semibold transition-all duration-150 flex items-center gap-1.5 flex-shrink-0 border shadow-sm cursor-pointer
+                ${loading || !val.trim() || val.startsWith('••••')
+                  ? 'bg-surface-3 border-border text-foreground-3 cursor-not-allowed'
+                  : 'bg-blue-600 border-blue-700 text-white hover:bg-blue-500 active:scale-[0.98]'}`}
+            >
+              {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+              {loading ? 'Verifying...' : 'Verify & Save'}
+            </button>
+            {hasSavedKey && (
+              <button
+                type="button"
+                onClick={handleDelete}
+                disabled={loading}
+                className="px-2.5 rounded-lg border border-border bg-background hover:bg-surface text-foreground-3 hover:text-rose-400 flex items-center justify-center flex-shrink-0 transition-all duration-150 shadow-sm cursor-pointer"
+                aria-label="Remove key"
+                title="Delete API key"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </>
         )}
       </div>
 
@@ -680,6 +796,7 @@ export default function SettingsPage() {
   const [editModes, setEditModes]       = useState<Record<string, boolean>>({});
   const [refreshing, setRefreshing]     = useState(false);
   const providerCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const deleteConfirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Data Controls state ───────────────────────────────────────
   const [improveModel, setImproveModel] = useState<boolean>(
@@ -695,6 +812,7 @@ export default function SettingsPage() {
   const [showSharedLinksModal, setShowSharedLinksModal] = useState(false);
   const [showArchivedChatsModal, setShowArchivedChatsModal] = useState(false);
   const [archiveRefresh, setArchiveRefresh] = useState(0); // forces re-read of localStorage
+  const [sharedLinksRefresh, setSharedLinksRefresh] = useState(0);
 
   const toggleImproveModel = useCallback((v: boolean) => {
     localStorage.setItem('omni_improve_model', String(v));
@@ -757,6 +875,11 @@ export default function SettingsPage() {
     return chats.filter((c) => archivedChatIds.includes(c.id));
   }, [chats, archivedChatIds]);
 
+  const sharedChatsList = useMemo(() => {
+    return chats.filter(c => c.title?.includes('[Shared]') || localStorage.getItem(`shared_link_${c.id}`));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chats, sharedLinksRefresh]);
+
   const handleUnarchiveChat = useCallback((chatId: string) => {
     const updated = archivedChatIds.filter((id) => id !== chatId);
     localStorage.setItem('omni_archived_chats', JSON.stringify(updated));
@@ -770,6 +893,9 @@ export default function SettingsPage() {
     localStorage.setItem('omni_archived_chats', JSON.stringify(updated));
     setArchiveRefresh((n) => n + 1);
     addToast('Chat deleted.', 'success');
+    apiRequest(`/chats/${chatId}`, { method: 'DELETE' }).catch((err) => {
+      console.warn('Failed to delete archived chat from backend:', err);
+    });
   }, [archivedChatIds, addToast]);
 
   const handleArchiveAllChats = useCallback(() => {
@@ -1107,17 +1233,27 @@ export default function SettingsPage() {
   }, [temperature, maxTokens, streaming, addToast]);
 
   const handleDeleteConversations = useCallback(() => {
-    if (!deleteConfirm) { setDeleteConfirm(true); return; }
+    if (!deleteConfirm) {
+      setDeleteConfirm(true);
+      if (deleteConfirmTimerRef.current) clearTimeout(deleteConfirmTimerRef.current);
+      deleteConfirmTimerRef.current = setTimeout(() => {
+        setDeleteConfirm(false);
+      }, 4000);
+      return;
+    }
+    if (deleteConfirmTimerRef.current) clearTimeout(deleteConfirmTimerRef.current);
     // Immediate 0ms optimistic update
     setChats([]);
     setActiveChatId(null);
     setMessages([]);
     setDeleteConfirm(false);
+    addToast('All conversations deleted.', 'success');
     // Background network request
     apiRequest('/chats/all', { method: 'DELETE' }).catch((err) => {
       console.error('Failed to delete all conversations:', err);
+      addToast('Failed to delete conversations from server.', 'error');
     });
-  }, [deleteConfirm, setChats, setActiveChatId, setMessages]);
+  }, [deleteConfirm, setChats, setActiveChatId, setMessages, addToast]);
 
   const handleExportData = useCallback(() => {
     const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(chats, null, 2));
@@ -1139,12 +1275,14 @@ export default function SettingsPage() {
     try {
       const refreshed = await apiRequest('/providers/refresh', { method: 'POST' });
       setProviders(refreshed);
-    } catch (err) {
+      addToast('Provider statuses refreshed successfully.', 'success');
+    } catch (err: any) {
       console.error('Manual refresh failed:', err);
+      addToast(err.message || 'Failed to refresh provider statuses.', 'error');
     } finally {
       setRefreshing(false);
     }
-  }, [setProviders]);
+  }, [setProviders, addToast]);
 
   const handleToggleProvider = useCallback(async (provId: string, active: boolean) => {
     if (active) {
@@ -1155,12 +1293,16 @@ export default function SettingsPage() {
     } else {
       setEditModes((prev) => ({ ...prev, [provId]: false }));
       try {
-        await apiRequest(`/api-keys/${provId}`, { method: 'DELETE' });
+        try {
+          await apiRequest(`/api-keys/${provId}`, { method: 'DELETE' });
+        } catch (backendErr) {
+          console.warn(`[Toggle] Server key delete notice for ${provId}:`, backendErr);
+        }
         ProviderKeyManager.removeKey(provId);
         const data = await apiRequest('/providers');
-        setProviders(data);
+        useChatStore.getState().setProviders(data);
       } catch (err) {
-        console.error('Failed to delete key on toggle off:', err);
+        console.error('Failed to update provider on toggle off:', err);
       }
     }
   }, [setProviders]);
@@ -1319,8 +1461,9 @@ export default function SettingsPage() {
       await apiRequest(`/documents/${id}`, { method: 'DELETE' });
       setDocuments((prev) => prev.filter((doc) => doc.id !== id));
       addToast('Document removed from vector store.', 'success');
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to delete document:', err);
+      addToast(err?.message || 'Failed to delete document.', 'error');
     }
   }, [addToast]);
 
@@ -1703,14 +1846,24 @@ export default function SettingsPage() {
                                     provider={prov.id}
                                     status={prov.status}
                                     lastError={prov.lastError || null}
-                                    initialMaskedKey={prov.saved ? '••••••••••••••••' : ''}
+                                    initialMaskedKey={(prov.saved || ProviderKeyManager.hasKey(prov.id)) ? '••••••••••••••••' : ''}
                                     onSaveSuccess={(updated) => {
                                       setProviders(providers.map((p) => p.id === prov.id ? updated : p));
+                                      addToast(`${meta.name} API key verified & saved!`, 'success');
                                     }}
                                     onDeleteSuccess={async () => {
-                                      const refreshed = await apiRequest('/providers');
-                                      setProviders(refreshed);
-                                      setEditModes((prev) => ({ ...prev, [prov.id]: false }));
+                                      try {
+                                        const refreshed = await apiRequest('/providers');
+                                        setProviders(refreshed);
+                                      } catch {
+                                        useChatStore.getState().updateProvider(prov.id, {
+                                          status: 'UNCONFIGURED',
+                                          saved: false,
+                                          verified: false,
+                                          enabled: false,
+                                        });
+                                      }
+                                      addToast(`${meta.name} API key removed.`, 'success');
                                     }}
                                   />
                                 )}
@@ -1792,14 +1945,24 @@ export default function SettingsPage() {
                                       provider={prov.id}
                                       status={prov.status}
                                       lastError={prov.lastError || null}
-                                      initialMaskedKey={prov.saved ? '••••••••••••••••' : ''}
+                                      initialMaskedKey={(prov.saved || ProviderKeyManager.hasKey(prov.id)) ? '••••••••••••••••' : ''}
                                       onSaveSuccess={(updated) => {
                                         setProviders(providers.map((p) => p.id === prov.id ? updated : p));
+                                        addToast(`${sMeta.name} API key verified & saved!`, 'success');
                                       }}
                                       onDeleteSuccess={async () => {
-                                        const refreshed = await apiRequest('/providers');
-                                        setProviders(refreshed);
-                                        setEditModes((prev) => ({ ...prev, [prov.id]: false }));
+                                        try {
+                                          const refreshed = await apiRequest('/providers');
+                                          setProviders(refreshed);
+                                        } catch {
+                                          useChatStore.getState().updateProvider(prov.id, {
+                                            status: 'UNCONFIGURED',
+                                            saved: false,
+                                            verified: false,
+                                            enabled: false,
+                                          });
+                                        }
+                                        addToast(`${sMeta.name} API key removed.`, 'success');
                                       }}
                                     />
                                   )}
@@ -2531,15 +2694,13 @@ export default function SettingsPage() {
             </div>
             {/* Body */}
             <div className="p-5 space-y-2 max-h-72 overflow-y-auto">
-              {chats.filter(c => c.title?.includes('[Shared]') || localStorage.getItem(`shared_link_${c.id}`)).length === 0 ? (
+              {sharedChatsList.length === 0 ? (
                 <div className="flex flex-col items-center gap-2 py-8">
                   <Globe className="w-8 h-8 text-foreground-3/40" />
                   <p className="text-xs text-foreground-3 italic">No active shared public links found.</p>
                 </div>
               ) : (
-                chats
-                  .filter(c => c.title?.includes('[Shared]') || localStorage.getItem(`shared_link_${c.id}`))
-                  .map((c) => (
+                sharedChatsList.map((c) => (
                     <div key={c.id} className="flex items-center justify-between p-3 rounded-xl bg-surface-2 border border-border hover:border-border-2 transition-colors">
                       <div className="flex items-center gap-2 min-w-0 flex-1 pr-2">
                         <Link2 className="w-3 h-3 text-foreground-3 flex-shrink-0" />
@@ -2548,11 +2709,18 @@ export default function SettingsPage() {
                       <button
                         onClick={() => {
                           localStorage.removeItem(`shared_link_${c.id}`);
+                          if (c.title?.includes('[Shared]')) {
+                            useChatStore.getState().updateChat({
+                              ...c,
+                              title: c.title.replace(/\s*\[Shared\]/g, '').trim() || 'Conversation',
+                            });
+                          }
+                          setSharedLinksRefresh((n) => n + 1);
                           addToast('Shared link revoked.', 'success');
                         }}
                         className="inline-flex items-center gap-1 text-[11px] text-rose-400 hover:text-rose-300
                           font-semibold px-2.5 py-1 rounded-lg hover:bg-rose-950/20
-                          border border-transparent hover:border-rose-900/30 transition-all flex-shrink-0"
+                          border border-transparent hover:border-rose-900/30 transition-all flex-shrink-0 cursor-pointer"
                       >
                         <XCircle className="w-3 h-3" /> Revoke
                       </button>

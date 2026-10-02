@@ -124,6 +124,7 @@ class ProviderKeyManagerClass {
     const response = await fetch(`${BASE_URL}/api-keys`, {
       method: 'POST',
       headers,
+      credentials: 'include',
       body: JSON.stringify({ provider_name: cleanProv, api_key: key }),
     });
 
@@ -149,7 +150,7 @@ class ProviderKeyManagerClass {
     headers['x-api-keys'] = JSON.stringify(allKeys);
 
     try {
-      const res = await fetch(`${BASE_URL}/providers`, { headers });
+      const res = await fetch(`${BASE_URL}/providers`, { headers, credentials: 'include' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const backendProviders: ProviderState[] = await res.json();
       

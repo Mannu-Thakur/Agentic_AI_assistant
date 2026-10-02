@@ -62,6 +62,7 @@ interface ChatState {
   setIsStreaming: (streaming: boolean) => void;
   
   setProviders: (providers: Provider[]) => void;
+  updateProvider: (id: string, updates: Partial<Provider>) => void;
   setVerifiedProviders: (providers: string[]) => void;
   addVerifiedProvider: (provider: string) => void;
   removeVerifiedProvider: (provider: string) => void;
@@ -194,6 +195,30 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({
       providers,
       verifiedProviders: providers.filter(p => p.verified || p.status === 'VERIFIED').map(p => p.id),
+    });
+  },
+
+  updateProvider: (id, updates) => {
+    set((state) => {
+      const nextProviders = state.providers.map((p) =>
+        p.id === id ? { ...p, ...updates } : p
+      );
+      const sanitized = nextProviders.map((p: any) => {
+        const copy = { ...p };
+        delete copy.api_key;
+        delete copy.apiKey;
+        delete copy.secret;
+        delete copy.token;
+        delete copy.credentials;
+        return copy;
+      });
+      safeSetItem('omni_providers_cache', JSON.stringify(sanitized));
+      return {
+        providers: nextProviders,
+        verifiedProviders: nextProviders
+          .filter((p) => p.verified || p.status === 'VERIFIED')
+          .map((p) => p.id),
+      };
     });
   },
 
