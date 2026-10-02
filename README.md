@@ -12,7 +12,7 @@
 [![Pytest](https://img.shields.io/badge/Pytest-286_Passing-brightgreen?style=for-the-badge&logo=pytest&logoColor=white)](https://docs.pytest.org)
 [![License](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)](LICENSE)
 
-> A production-grade, enterprise-scale Agentic AI platform featuring **14-node LangGraph autonomous workflows**, **Neo4j Knowledge Graph RAG (GraphRAG)**, **BM25 + Dense Hybrid Retrieval with Cross-Encoder Reranking**, **Complexity-Based LLM/SLM Routing & Cost Tracking**, **Statistical Data Drift Detection (PSI & KS tests)**, **RAGAS & Deterministic Quality Evaluations**, **Domain Intelligence Overlays**, and **Zero-Trust Security**.
+> A production-grade, enterprise-scale Agentic AI platform featuring **14-node LangGraph autonomous workflows**, **Neo4j Knowledge Graph RAG (GraphRAG)**, **BM25 + Dense Hybrid Retrieval with Cross-Encoder Reranking**, **Complexity-Based LLM/SLM Routing & Cost Tracking**, **Statistical Data Drift Detection (PSI & KS tests)**, **RAGAS & Deterministic Quality Evaluations**, **Domain Intelligence Overlays**, **Proactive Intelligence Engine & Background Scanners**, and **Zero-Trust Security**.
 
 ---
 
@@ -29,6 +29,7 @@
   - [6. Business Domain Intelligence Overlays](#6-business-domain-intelligence-overlays)
   - [7. Model Context Protocol (MCP) & Extensible Tools](#7-model-context-protocol-mcp--extensible-tools)
   - [8. Zero-Trust Security & Production Hardening](#8-zero-trust-security--production-hardening)
+  - [9. Proactive Intelligence Engine & Background Scanners](#9-proactive-intelligence-engine--background-scanners)
 - [Enterprise Analytics Dashboard](#-enterprise-analytics-dashboard)
 - [Screenshots & UI Showcase](#-screenshots--ui-showcase)
 - [Tech Stack](#-tech-stack)
@@ -270,6 +271,59 @@ Set `DOMAIN_MODE` in `.env` to inject domain-specific instructions and entity tr
 
 ---
 
+### 9. Proactive Intelligence Engine & Background Scanners
+
+Standard chatbots are purely reactive: they sit idle until prompted. The **Proactive Intelligence Engine** shifts the platform into an autonomous, 24/7 knowledge sentinel that continuously analyzes the database, detects anomalies across documents, tracks system drift, and surfaces alerts in real-time.
+
+```
+                  ┌──────────────────────────────────────────────┐
+                  │       Proactive Intelligence Engine          │
+                  └──────────────────────┬───────────────────────┘
+                                         │
+                 ┌───────────────────────┼───────────────────────┐
+                 ▼                       ▼                       ▼
+    [Document Upload Trigger]   [30-Min System Scan]    [Daily Morning Briefing]
+                 │                       │                       │
+     • Cross-Doc Graph Match     • PSI/KS Drift Alert    • 12-Hour Activity Digest
+     • Temporal Anomaly Engine   • Hallucination Spike   • Accuracy & Latency Trends
+                                 • Cost Surge Detector   • Pending Graph Discoveries
+                 │                       │                       │
+                 └───────────────────────┼───────────────────────┘
+                                         ▼
+                         ┌──────────────────────────────┐
+                         │ Deduplication & Gating Layer │
+                         │ (MD5 Key + 12h Dedup Window) │
+                         └──────────────┬───────────────┘
+                                         │ (Confidence ≥ 0.65)
+                                         ▼
+                         ┌──────────────────────────────┐
+                         │   In-Process SSE Broadcast   │
+                         │    /api/v1/proactive/stream  │
+                         └──────────────┬───────────────┘
+                                         │
+                                         ▼
+                         ┌──────────────────────────────┐
+                         │ Frontend Notification Bell 🔔│
+                         │  • Live Pulse Animation      │
+                         │  • Severity Badging          │
+                         │  • Real-Time Alert Panel     │
+                         └──────────────────────────────┘
+```
+
+#### 🔍 6 Specialized Intelligence Scanners
+1. **Neo4j Cross-Document Entity Collision**: Traverses the knowledge graph to detect entities (`Supplier`, `Claimant`, `Policyholder`, `Location`) appearing across multiple uploaded files to flag hidden collusion, fraud, or supplier anomalies.
+2. **Zero-Cost Temporal Anomaly Detector**: High-speed regex engine that evaluates date sequences in uploaded texts, detecting policy discrepancies (such as claim/loss incident dates occurring prior to policy inception).
+3. **Statistical Drift Trigger**: Hooks into the PSI/KS telemetry monitor and issues high-priority alerts whenever query complexity, chunk volume, or response latency distributions drift beyond stability thresholds.
+4. **Hallucination Spike Monitor**: Audits rolling telemetry and alerts engineers if more than 30% of recent responses fail evidence verification gates.
+5. **Cost Spike Guard**: Detects rolling hourly LLM budget spikes and provides automatic recommendations for tier-routing adjustments.
+6. **Automated Morning Briefing**: Synthesizes activity across the previous 12 hours (query throughput, average confidence, cost, and latency metrics) delivered to users upon opening the platform.
+
+#### ⚡ Real-Time Push & UI Components
+- **Server-Sent Events (SSE)**: Streams proactive alerts directly to client browsers over `/api/v1/proactive/stream` with automated keep-alive pings and multi-tab synchronization.
+- **Interactive Notification Bell (`NotificationBell.tsx`)**: Displays real-time unread badges, pulsing alerts on incoming insights, and an expandable dropdown panel (`AlertPanel.tsx`) with markdown rendering and on-demand manual scan triggers.
+
+---
+
 ## 📊 Enterprise Analytics Dashboard
 
 Navigate to `/analytics` in the web application to view real-time system metrics:
@@ -370,12 +424,25 @@ Navigate to `/analytics` in the web application to view real-time system metrics
 │   │   │   ├── auth.py               # Authentication & JWT tokens
 │   │   │   ├── chat.py               # SSE chat streaming & conversation management
 │   │   │   ├── documents.py          # Document upload, chunking & indexing
+│   │   │   ├── proactive.py          # Real-time SSE alert streaming & insight triggers
 │   │   │   ├── analytics.py          # Real-time metrics & dashboard endpoints
 │   │   │   ├── monitoring.py         # Statistical drift (PSI/KS) & health
 │   │   │   ├── graph.py              # Neo4j GraphRAG inspection endpoints
 │   │   │   ├── evaluation.py         # Response quality evaluation endpoints
 │   │   │   ├── health.py             # Liveness & readiness probes
 │   │   │   └── api_keys.py           # Provider API key management & validation
+│   │   │
+│   │   ├── proactive/                # Proactive Intelligence Engine
+│   │   │   ├── engine.py             # Orchestrator & parallel scanner execution
+│   │   │   ├── scanners.py           # 6 intelligence scanners (Graph, Drift, Cost, etc.)
+│   │   │   ├── broadcaster.py        # In-process SSE connection pool & dispatch
+│   │   │   ├── models.py             # Alert dataclass, severity & alert types
+│   │   │   ├── db_models.py          # SQLAlchemy ORM for persisted alerts
+│   │   │   └── store.py              # Alert persistence, deduplication & badge count
+│   │   │
+│   │   ├── workers/                  # Background Worker Tasks
+│   │   │   ├── proactive_scheduler.py# 30-min system scanner & 7am briefing runner
+│   │   │   └── health_check.py       # LLM provider health check loop
 │   │   │
 │   │   ├── core/                     # Infrastructure & Core Services
 │   │   │   ├── config.py             # Pydantic Settings & environment loader
@@ -435,12 +502,16 @@ Navigate to `/analytics` in the web application to view real-time system metrics
     ├── package.json                  # Frontend dependencies & scripts
     ├── vite.config.ts                # Vite bundler configuration
     └── src/
+        ├── components/               # UI & Feature Components
+        │   ├── ProactiveAlerts/      # Real-time alert bell & expandable panel
+        │   └── chat/                 # Chat input, canvas, sources drawer
         ├── pages/                    # Page Views
         │   ├── ChatPage.tsx          # Agent chat interface & streaming UI
         │   ├── AnalyticsPage.tsx     # Enterprise Observability HUD
         │   ├── WorkspacePage.tsx     # Document management & upload
         │   └── SettingsPage.tsx      # Provider keys, preferences & settings
         ├── store/                    # Zustand State Stores
+        │   ├── alertStore.ts         # Proactive SSE alerts & unread badge state
         │   ├── chatStore.ts          # Active conversations & streaming state
         │   └── authStore.ts          # Authentication session state
         └── services/                 # API Client & SSE Handlers
@@ -592,6 +663,13 @@ Create a `.env` file in the root directory (based on `.env.template`):
 - `DELETE /api/v1/chat/conversations` — Clear all user conversations.
 - `POST /api/v1/chat/share` — Create a shareable public link for a conversation.
 
+### Proactive Intelligence
+- `GET /api/v1/proactive/stream` — Live Server-Sent Events (SSE) connection pushing proactive anomaly and drift alerts.
+- `GET /api/v1/proactive/alerts` — Paginated history of generated proactive insights with severity and source metadata.
+- `GET /api/v1/proactive/alerts/unread-count` — Count of unacknowledged alerts for real-time notification bell badge.
+- `POST /api/v1/proactive/alerts/mark-read` — Mark an individual alert or all alerts as read/dismissed.
+- `POST /api/v1/proactive/scan` — On-demand full knowledge base scan triggering all 6 autonomous scanners.
+
 ### Documents & Knowledge Base
 - `POST /api/v1/documents/upload` — Upload document (PDF, DOCX, CSV, TXT, images with OCR) and index embeddings.
 - `GET /api/v1/documents/list` — List ingested workspace documents with parsing status.
@@ -667,11 +745,12 @@ All configurable components carry explicit semantic versions embedded into reque
 
 | Component | Current Version | Description |
 |---|---|---|
-| **Platform** | `2.0.0` | Global platform release |
+| **Platform** | `2.1.0` | Global platform release with Proactive Intelligence |
 | **Agent Graph** | `3.0.0` | 14-node LangGraph state machine |
 | **Prompt Templates** | `3.1.0` | System prompts and domain overlays |
 | **Routing Logic** | `1.0.0` | Complexity analyzer and tier routing |
 | **Retrieval Engine**| `3.0.0` | Hybrid BM25 + dense + cross-encoder reranker |
+| **Proactive Engine**| `1.0.0` | 6 background anomaly & drift scanners + SSE alerts |
 | **Evaluation** | `1.0.0` | Deterministic checks and RAGAS integration |
 | **Knowledge Graph** | `1.0.0` | Neo4j GraphRAG extraction & 2-hop retrieval |
 | **Drift Detection** | `1.0.0` | PSI & KS statistical drift monitors |

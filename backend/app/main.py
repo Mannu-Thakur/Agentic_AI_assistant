@@ -26,6 +26,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.core.config import settings
 from app.api import auth, chat, documents, memories, api_keys, admin, mcp_servers, metrics as metrics_router, evaluation as evaluation_router
+from app.api import proactive as proactive_router
 
 from app.api import health as health_router
 from app.api import analytics as analytics_router
@@ -191,6 +192,27 @@ async def lifespan(app: FastAPI):
         logger.warning(f"Background health-check task failed to start (non-fatal): {_bg_err}")
 
 
+    # ── Proactive Intelligence Engine — ORM table + background scheduler ────────
+    try:
+        # Import the ORM model so it registers with Base.metadata on startup
+        from app.proactive.db_models import ProactiveAlertRecord  # noqa: F401
+        from app.core.database import run_schema_migrations
+        run_schema_migrations()   # adds proactive_alerts table if it doesn't exist
+        logger.info("[Proactive] DB table ensured.")
+    except Exception as _pie_err:
+        logger.warning(f"[Proactive] ORM setup warning (non-fatal): {_pie_err}")
+
+    # Start the proactive intelligence background scheduler task
+    proactive_task = None
+    try:
+        from app.workers.proactive_scheduler import proactive_scheduler_loop
+        proactive_task = asyncio.create_task(proactive_scheduler_loop())
+        _bg_tasks.add(proactive_task)
+        proactive_task.add_done_callback(_bg_tasks.discard)
+        logger.info("[Proactive] Background scheduler started.")
+    except Exception as _ps_err:
+        logger.warning(f"[Proactive] Scheduler failed to start (non-fatal): {_ps_err}")
+
     yield  # Application runs here
 
     # ── Shutdown Neo4j ────────────────────────────────────────────────────────
@@ -305,6 +327,7 @@ app.include_router(resume_router,       prefix=settings.API_V1_STR)
 app.include_router(graph_router.router, prefix=settings.API_V1_STR)
 app.include_router(analytics_router.router, prefix=settings.API_V1_STR)
 app.include_router(monitoring_router.router, prefix=settings.API_V1_STR)
+app.include_router(proactive_router.router, prefix=settings.API_V1_STR)
 
 
 # ── Cache metrics endpoint ─────────────────────────────────────────────────────

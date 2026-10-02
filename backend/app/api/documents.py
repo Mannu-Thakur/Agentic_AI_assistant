@@ -419,6 +419,16 @@ async def upload_document(
                 except Exception as ex:
                     logger.warning(f"[GraphRAG] Background extraction failed to start: {ex}")
 
+            # ── Proactive Intelligence Engine — scan new document ─────────────────
+            try:
+                from app.proactive.engine import ProactiveIntelligenceEngine
+                await ProactiveIntelligenceEngine.run_on_document_upload(
+                    user_id=current_user.id,
+                    doc_id=str(doc.id),
+                )
+            except Exception as _pie_err:
+                logger.warning(f"[Proactive] Post-upload scan warning (non-fatal): {_pie_err}")
+
         # CRIT-1 FIX: anchor the main ingestion task.
         _make_background_task(_ingest_and_extract())
         logger.info(f"[Upload] Scheduled ingestion for doc {doc.id} ({sanitized_filename})")

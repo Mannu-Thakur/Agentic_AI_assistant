@@ -25,6 +25,7 @@ import { SourcesDrawer, SourceItem, ActivityTrace } from '../components/chat/Sou
 import { AnswerContextMenu } from '../components/chat/AnswerContextMenu';
 import { TextSelectionTooltip } from '../components/chat/TextSelectionTooltip';
 import { CanvasPanel } from '../components/chat/CanvasPanel';
+import { NotificationBell } from '../components/ProactiveAlerts/NotificationBell';
 import {
   Upload, Plus, Terminal, Database, Lock,
   Sparkles, Cpu, X, CheckCircle2, Copy, Check,
@@ -2672,6 +2673,11 @@ export default function ChatPage() {
                 <BarChart2 className="w-4 h-4" />
               </button>
             </Tooltip>
+
+            {/* ── Proactive Intelligence Bell ── */}
+            <div className="relative flex items-center justify-center w-9 h-9">
+              <NotificationBell />
+            </div>
           </div>
         )}
 
