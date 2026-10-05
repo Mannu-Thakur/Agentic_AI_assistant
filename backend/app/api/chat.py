@@ -401,7 +401,7 @@ async def stream_agent_message(
         doc.storage_path
         for doc in user_docs
         if doc.storage_path
-        and doc.status in ("ready", "pending")
+        and doc.status == "ready"  # BUG-5 FIX: only "ready" docs are parsed; "pending" would fail retrieval
         and not any(doc.storage_path.lower().endswith(ext) for ext in _IMAGE_EXTENSIONS)
     ]
 
@@ -561,7 +561,12 @@ async def stream_agent_message(
           from app.tools.registry import ToolRegistry
           await ToolRegistry().sync_remote_servers(current_user.id)
       except Exception as _mcp_sync_err:
-          logger.warning(f"Failed to sync remote MCP servers before graph invoke: {_mcp_sync_err}")
+          # BUG-5 FIX: Fail-open — local tools + previously cached MCP tools still work.
+          # Include user_id for debugging stale MCP server records.
+          logger.warning(
+              f"[MCP] Failed to sync remote MCP servers for user={current_user.id} "
+              f"(fail-open, local tools still available): {_mcp_sync_err}"
+          )
 
       logger.info("STARTING GRAPH TASK...")
       task = asyncio.create_task(agent_graph.ainvoke(initial_state, config))

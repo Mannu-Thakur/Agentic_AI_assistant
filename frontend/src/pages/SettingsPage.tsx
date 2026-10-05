@@ -1021,10 +1021,13 @@ export default function SettingsPage() {
   }, []);
 
   const handleCopyMcpUrl = useCallback((id: string, url: string) => {
-    navigator.clipboard.writeText(url);
-    setCopiedServerId(id);
-    addToast('Server URL copied to clipboard!', 'success');
-    setTimeout(() => setCopiedServerId(null), 2000);
+    navigator.clipboard.writeText(url).then(() => {
+      setCopiedServerId(id);
+      addToast('Server URL copied to clipboard!', 'success');
+      setTimeout(() => setCopiedServerId(null), 2000);
+    }).catch(() => {
+      addToast('Failed to copy URL. Please copy it manually.', 'error');
+    });
   }, [addToast]);
 
   const handleTestMcpConnection = async () => {
@@ -1848,7 +1851,8 @@ export default function SettingsPage() {
                                     lastError={prov.lastError || null}
                                     initialMaskedKey={(prov.saved || ProviderKeyManager.hasKey(prov.id)) ? '••••••••••••••••' : ''}
                                     onSaveSuccess={(updated) => {
-                                      setProviders(providers.map((p) => p.id === prov.id ? updated : p));
+                                      const current = useChatStore.getState().providers;
+                                      setProviders(current.map((p) => p.id === prov.id ? updated : p));
                                       addToast(`${meta.name} API key verified & saved!`, 'success');
                                     }}
                                     onDeleteSuccess={async () => {
@@ -1947,7 +1951,8 @@ export default function SettingsPage() {
                                       lastError={prov.lastError || null}
                                       initialMaskedKey={(prov.saved || ProviderKeyManager.hasKey(prov.id)) ? '••••••••••••••••' : ''}
                                       onSaveSuccess={(updated) => {
-                                        setProviders(providers.map((p) => p.id === prov.id ? updated : p));
+                                        const current = useChatStore.getState().providers;
+                                        setProviders(current.map((p) => p.id === prov.id ? updated : p));
                                         addToast(`${sMeta.name} API key verified & saved!`, 'success');
                                       }}
                                       onDeleteSuccess={async () => {
@@ -2092,13 +2097,13 @@ export default function SettingsPage() {
                         <span className="text-[10px] font-semibold text-foreground">
                           {uploading ? 'Processing...' : 'Click to select a file'}
                         </span>
-                        <span className="text-[9px] text-foreground-3 mt-1">PDF, DOCX, TXT, XLSX &bull; up to 20 MB</span>
+                        <span className="text-[9px] text-foreground-3 mt-1">PDF, DOCX, TXT, XLSX, Code files &bull; up to 20 MB</span>
                         <input
                           type="file"
                           className="hidden"
                           onChange={handleFileUpload}
                           disabled={uploading}
-                          accept=".pdf,.docx,.xlsx,.xls,.pptx,.txt,.md,.csv,.json"
+                          accept=".pdf,.docx,.doc,.xlsx,.xls,.pptx,.ppt,.txt,.md,.csv,.json,.py,.js,.ts,.html,.css"
                         />
                       </label>
 

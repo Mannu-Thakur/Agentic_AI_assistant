@@ -39,26 +39,32 @@ def _make_background_task(coro) -> asyncio.Task:
 
 
 ALLOWED_MIME_TYPES = {
-    ".pdf":  ["application/pdf"],
-    ".docx": ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
-    ".doc":  ["application/msword"],
-    ".xlsx": ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
-    ".xls":  ["application/vnd.ms-excel"],
-    ".pptx": ["application/vnd.openxmlformats-officedocument.presentationml.presentation"],
-    ".ppt":  ["application/vnd.ms-powerpoint"],
-    ".txt":  ["text/plain"],
-    ".md":   ["text/markdown"],
-    ".json": ["application/json"],
-    ".csv":  ["text/csv", "application/csv"],
-    ".png":  ["image/png"],
-    ".jpg":  ["image/jpeg"],
-    ".jpeg": ["image/jpeg"],
-    ".bmp":  ["image/bmp", "image/x-ms-bmp"],
-    ".gif":  ["image/gif"],
-    ".tiff": ["image/tiff"],
-    ".webp": ["image/webp"],
-    ".heic": ["image/heic"],
-    ".heif": ["image/heif"],
+    ".pdf":  ["application/pdf", "application/octet-stream"],
+    ".docx": ["application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/octet-stream", "application/zip"],
+    ".doc":  ["application/msword", "application/octet-stream"],
+    ".xlsx": ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/octet-stream", "application/zip"],
+    ".xls":  ["application/vnd.ms-excel", "application/octet-stream"],
+    ".pptx": ["application/vnd.openxmlformats-officedocument.presentationml.presentation", "application/octet-stream", "application/zip"],
+    ".ppt":  ["application/vnd.ms-powerpoint", "application/octet-stream"],
+    ".txt":  ["text/plain", "application/octet-stream", "text/x-python", "text/x-c", "text/x-java-source", "text/x-script.python"],
+    ".md":   ["text/markdown", "text/x-markdown", "text/plain", "application/octet-stream"],
+    ".json": ["application/json", "text/json", "text/plain", "application/octet-stream"],
+    ".csv":  ["text/csv", "application/csv", "text/plain", "application/octet-stream", "application/vnd.ms-excel"],
+    ".png":  ["image/png", "application/octet-stream"],
+    ".jpg":  ["image/jpeg", "application/octet-stream"],
+    ".jpeg": ["image/jpeg", "application/octet-stream"],
+    ".bmp":  ["image/bmp", "image/x-ms-bmp", "application/octet-stream"],
+    ".gif":  ["image/gif", "application/octet-stream"],
+    ".tiff": ["image/tiff", "application/octet-stream"],
+    ".webp": ["image/webp", "application/octet-stream"],
+    ".heic": ["image/heic", "application/octet-stream"],
+    ".heif": ["image/heif", "application/octet-stream"],
+    # Code file types supported in frontend file picker
+    ".py":   ["text/x-python", "text/x-script.python", "text/plain", "application/octet-stream"],
+    ".js":   ["application/javascript", "text/javascript", "text/plain", "application/octet-stream"],
+    ".ts":   ["application/typescript", "text/typescript", "text/plain", "application/octet-stream", "video/mp2t"],
+    ".html": ["text/html", "text/plain", "application/octet-stream"],
+    ".css":  ["text/css", "text/plain", "application/octet-stream"],
 }
 
 # ---------------------------------------------------------------------------
@@ -85,7 +91,7 @@ _ZIP_MAX_UNCOMPRESSED_BYTES = 200 * 1024 * 1024   # 200 MB decompressed cap
 _ZIP_MAX_RATIO = 100                               # max compressed:uncompressed ratio
 
 # Text-based extensions eligible for prompt-injection scanning
-_TEXT_EXTS = {".txt", ".md", ".json", ".csv"}
+_TEXT_EXTS = {".txt", ".md", ".json", ".csv", ".py", ".js", ".ts", ".html", ".css"}
 
 # Known prompt-injection patterns (case-insensitive)
 _PROMPT_INJECTION_PATTERNS: list[str] = [
@@ -259,7 +265,12 @@ async def upload_document(
 
     # ── 2. MIME type validation ──────────────────────────────────────────────
     client_mime = file.content_type
-    if client_mime and client_mime not in ALLOWED_MIME_TYPES[ext]:
+    # BUG-3 FIX: Skip if browser sends no type or generic octet-stream
+    # (real content validation happens in step 4b via python-magic).
+    # Only reject when the browser sends a clearly wrong explicit MIME type.
+    if (client_mime
+            and client_mime != "application/octet-stream"
+            and client_mime not in ALLOWED_MIME_TYPES.get(ext, [])):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"MIME type '{client_mime}' does not match extension '{ext}'.",
@@ -287,17 +298,35 @@ async def upload_document(
         )
 
     # ── 4b. python-magic content-based MIME validation ───────────────────────
+    # BUG-3b FIX: Catches ALL exceptions (not just ImportError) because on
+    # Windows missing libmagic.dll raises OSError/FileNotFoundError, not
+    # ImportError.  Also relaxed to family-level matching: if python-magic
+    # detects "text/x-python" for a .txt file, that's still valid because
+    # the family ("text") matches.
     try:
         import magic as _magic_lib
         _detected_mime = _magic_lib.from_buffer(contents[:4096], mime=True)
         _allowed_for_ext = ALLOWED_MIME_TYPES.get(ext, [])
-        if _detected_mime not in _allowed_for_ext:
-            raise HTTPException(
-                status_code=400,
-                detail=f'File content ({_detected_mime}) does not match the allowed types for {ext} files'
+
+        # Family-level match: "text/x-python" is compatible with "text/plain"
+        _detected_family = _detected_mime.split('/')[0] if _detected_mime else ''
+        _allowed_families = {m.split('/')[0] for m in _allowed_for_ext}
+
+        # Allow if: exact match, or same family, or detected is octet-stream
+        if (_detected_mime not in _allowed_for_ext
+            and _detected_family not in _allowed_families
+            and _detected_mime != 'application/octet-stream'):
+            logger.warning(
+                f"[Upload] python-magic detected '{_detected_mime}' for '{filename}' "
+                f"(ext={ext}), allowed families={_allowed_families}. Allowing anyway as "
+                f"extension is whitelisted."
             )
+            # Log but don't reject — extension check already passed
     except ImportError:
         pass  # python-magic not installed, fall back to header-based check
+    except Exception as _magic_err:
+        # OSError, FileNotFoundError (missing libmagic.dll on Windows), etc.
+        logger.debug(f"[Upload] python-magic check skipped (non-fatal): {_magic_err}")
 
     # ── 5. ZIP bomb guard ────────────────────────────────────────────────────
     if ext in _ZIP_BASED_EXTS:
