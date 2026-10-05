@@ -30,6 +30,7 @@
   - [7. Model Context Protocol (MCP) & Extensible Tools](#7-model-context-protocol-mcp--extensible-tools)
   - [8. Zero-Trust Security & Production Hardening](#8-zero-trust-security--production-hardening)
   - [9. Proactive Intelligence Engine & Background Scanners](#9-proactive-intelligence-engine--background-scanners)
+  - [10. Settings & Real-Time Provider Management](#10-settings--real-time-provider-management)
 - [Enterprise Analytics Dashboard](#-enterprise-analytics-dashboard)
 - [Screenshots & UI Showcase](#-screenshots--ui-showcase)
 - [Tech Stack](#-tech-stack)
@@ -42,6 +43,7 @@
 - [REST API Reference](#-rest-api-reference)
 - [Testing & Quality Assurance](#-testing--quality-assurance)
 - [Production Deployment](#-production-deployment)
+- [Changelog](#-changelog)
 - [Component Version Tracking](#-component-version-tracking)
 - [Contributing & Code Standards](#-contributing--code-standards)
 - [License](#-license)
@@ -58,6 +60,7 @@ The **Enterprise GenAI Intelligence Platform v2.0** solves this by uniting:
 3. **Dynamic Routing**: Transparent complexity scoring routes queries across Small Language Models (SLM) and Large Language Models (LLM) to minimize cost and latency.
 4. **Real-Time Statistical Telemetry**: Population Stability Index (PSI) and Kolmogorov-Smirnov (KS) tests run continuously on live traffic to detect model and data drift.
 5. **No Synthetic Metrics**: Every metric, graph count, evaluation score, and drift warning reflects real database records and live execution traces.
+6. **Full Settings Reliability**: Every button in the Settings page is wired end-to-end — Change, Delete, Verify & Save, Toggle, Revoke — with real-time backend sync and toast feedback on all outcomes.
 
 ---
 
@@ -73,7 +76,7 @@ The **Enterprise GenAI Intelligence Platform v2.0** solves this by uniting:
                                         │ HTTPS / SSE (EventSource) / REST
                                         ▼
 ┌─────────────────────────────────────────────────────────────────────────────────┐
-│                     FastAPI Gateway & Security Middleware                       │
+│                     FastAPI Gateway & Security Middleware                        │
 │  • Request ID & W3C Trace Context (traceparent) Propagation                     │
 │  • Redis Token-Bucket Rate Limiting (100 req/min, fail-open resilience)         │
 │  • Zero-Trust Input Sanitizer, Magic-Byte MIME Inspector, Anti-Path Traversal   │
@@ -216,12 +219,11 @@ Queries are dynamically classified and routed to the most cost-effective model t
 The platform features built-in statistical observability that runs on genuine database telemetry:
 
 - **Population Stability Index (PSI)**:
-  $$\text{PSI} = \sum \left( \% \text{Current} - \% \text{Baseline} \right) \times \ln\left(\frac{\% \text{Current}}{\% \text{Baseline}}\right)$$
-  - $\text{PSI} < 0.1$: Distribution Stable (Normal)
-  - $0.1 \le \text{PSI} < 0.2$: Moderate Shift (Warning)
-  - $\text{PSI} \ge 0.2$: Significant Drift Detected
+  - PSI < 0.1: Distribution Stable (Normal)
+  - 0.1 ≤ PSI < 0.2: Moderate Shift (Warning)
+  - PSI ≥ 0.2: Significant Drift Detected
 - **Kolmogorov-Smirnov (KS) Two-Sample Test**:
-  - Compares the empirical cumulative distributions of response latency and confidence scores to flag statistically significant shifts ($p < 0.05$).
+  - Compares the empirical cumulative distributions of response latency and confidence scores to flag statistically significant shifts (p < 0.05).
 - **Monitored Dimensions**: Query complexity, answer confidence, retrieval chunk volumes, and response latency.
 
 ---
@@ -254,9 +256,10 @@ Set `DOMAIN_MODE` in `.env` to inject domain-specific instructions and entity tr
 
 ### 7. Model Context Protocol (MCP) & Extensible Tools
 
-- **Remote MCP Support**: Integrates with external tools via Model Context Protocol over SSE and HTTP.
+- **Remote MCP Support**: Integrates with external tools via Model Context Protocol over SSE and HTTP JSON-RPC.
+- **MCP Server Management UI**: Add, test, toggle, delete, and copy remote MCP server endpoints directly from the Settings page — all changes persist to the database and Redis cache.
 - **Sandboxed Python Code Execution**: Runs mathematical analysis, data processing, and algorithms in a time-bounded sub-process sandbox.
-- **Resilient Web Search**: Cascading web search engine with multi-tier fallback: Tavily $\to$ SerpAPI $\to$ Exa $\to$ DuckDuckGo (zero configuration required).
+- **Resilient Web Search**: Cascading web search with multi-tier fallback: Tavily → SerpAPI → Exa → DuckDuckGo (zero configuration required for the fallback).
 
 ---
 
@@ -324,6 +327,68 @@ Standard chatbots are purely reactive: they sit idle until prompted. The **Proac
 
 ---
 
+### 10. Settings & Real-Time Provider Management
+
+The Settings page is a fully wired, real-time control panel. Every button in every tab has an end-to-end implementation — frontend handler → API call → backend route → DB/cache → state update → toast feedback.
+
+#### API Key Vault (Models Tab)
+
+The `ApiKeyField` component implements a complete state machine for each provider:
+
+| Provider State | Buttons Shown | What Happens |
+|---|---|---|
+| **Unconfigured** | `Verify & Save` | Calls `POST /api/v1/api-keys` → verifies with provider → encrypts & stores → refreshes provider list |
+| **Verified** | `Change` + `Delete` (trash) | **Change**: enters editing mode, clears field, autofocuses — does NOT delete the key. **Delete**: calls `DELETE /api/v1/api-keys/{provider}` (idempotent — returns 200 even if key not in DB), removes from localStorage, refreshes state |
+| **Editing** | `Verify & Save` + `Cancel` + `Delete` | **Save**: verifies new key before committing. **Cancel**: reverts to verified masked display without any backend call |
+
+**Key implementation details:**
+- `loading` guard prevents double-clicks on all async paths
+- Backend `DELETE` is **idempotent** — clears Redis cache and returns 200 even when the key only existed in localStorage
+- `onSaveSuccess` reads fresh store state (`useChatStore.getState().providers`) to avoid stale closure bugs
+- `ProviderKeyManager.verifyKey()` and `.sync()` both send `credentials: 'include'` for proper cookie-based auth in CORS environments
+- Alias handling: `google` ↔ `gemini` are treated as equivalent in both frontend localStorage and backend DB queries
+
+#### MCP Servers Tab
+
+| Action | Button | Backend Route |
+|---|---|---|
+| Test connection | `Test Connection` | `POST /api/v1/mcp/servers/test` |
+| Register server | `Save & Register Server` | `POST /api/v1/mcp/servers` |
+| Enable/disable | Toggle switch | `PATCH /api/v1/mcp/servers/{id}` |
+| Remove server | Trash icon | `DELETE /api/v1/mcp/servers/{id}` |
+| Copy URL | `Copy` button | `navigator.clipboard` (with error toast fallback) |
+
+All actions refresh the server list and show success/error toasts.
+
+#### Data Controls Tab
+
+| Action | What Happens |
+|---|---|
+| **Shared Links → Revoke** | Removes `shared_link_{id}` from localStorage, strips `[Shared]` from chat title, increments refresh counter to re-render the list |
+| **Archived Chats → Unarchive** | Updates `omni_archived_chats` in localStorage, triggers re-render |
+| **Archived Chats → Delete** | Removes from Zustand store, localStorage, and calls `DELETE /api/v1/chats/{id}` (fire-and-forget) |
+| **Delete All Conversations** | Two-click confirm with 4-second auto-reset timer; optimistic UI clear → background `DELETE /api/v1/chats/all` |
+| **Archive All Chats** | Moves all active chat IDs to the archived list in localStorage |
+
+#### Documents Tab
+
+| Action | Backend Route | Behavior |
+|---|---|---|
+| Upload file | `POST /api/v1/documents/upload` | Live ingestion progress UI, polls every 2s for up to 90s |
+| Delete document | `DELETE /api/v1/documents/{id}` | Removes from vector store; shows success/error toast |
+| Retry indexing | `POST /api/v1/documents/{id}/retry` | Re-schedules indexing; resumes polling |
+
+#### Memories Tab
+
+| Action | Backend Route |
+|---|---|
+| Add memory | `POST /api/v1/memories` |
+| Delete memory | `DELETE /api/v1/memories/{id}` |
+
+All mutations show success/error toasts and update local state immediately.
+
+---
+
 ## 📊 Enterprise Analytics Dashboard
 
 Navigate to `/analytics` in the web application to view real-time system metrics:
@@ -368,8 +433,6 @@ Navigate to `/analytics` in the web application to view real-time system metrics
 <img width="1905" height="1074" alt="Authentication & Security" src="https://github.com/user-attachments/assets/25220bab-a12e-49b4-bbe6-d515141c1bb4" />
 <br/><br/>
 <img width="1919" height="1057" alt="Responsive Mobile / Tablet Layout" src="https://github.com/user-attachments/assets/d46a966b-f188-43ef-957e-4f7dd90b7920" />
-<br/><br/>
-<img width="1919" height="1046" alt="Resume AI Studio" src="https://github.com/user-attachments/assets/4366463a-8fb3-45a2-b3d1-31e9ebb0866b" />
 
 </div>
 
@@ -383,10 +446,12 @@ Navigate to `/analytics` in the web application to view real-time system metrics
 | **Agent & Workflow** | LangGraph, LangChain Core, StateGraph, Custom Tool Planner & Evidence Verifier |
 | **Knowledge Graph** | Neo4j Community 5.x, Cypher Query Language, Neo4j Async Python Driver |
 | **Vector & Search** | ChromaDB, BM25 (`rank_bm25`), Sentence-Transformers (`all-MiniLM-L6-v2`, `ms-marco-MiniLM-L-6-v2`) |
-| **LLM Providers** | Groq (`llama-3.1-8b`, `llama-3.3-70b`), Google Gemini (`gemini-2.5-flash`), OpenAI (`gpt-4o`), OpenRouter |
+| **LLM Providers** | Groq (`llama-3.1-8b`, `llama-3.3-70b`), Google Gemini (`gemini-2.5-flash`), OpenAI (`gpt-4o`), OpenRouter, Anthropic, DeepSeek, GLM, Alibaba |
+| **Search Providers** | Tavily, SerpAPI, Exa (waterfall fallback → DuckDuckGo) |
 | **Monitoring & Eval** | Custom PSI & KS Drift Engines, RAGAS, Prometheus Client, W3C Trace Context |
 | **Database & Caching** | PostgreSQL 16 (or SQLite in local dev), Redis 7 (Alpine), SQLAlchemy WAL Mode |
 | **Frontend Web App** | React 18, TypeScript, Vite, Tailwind CSS, Lucide React, Zustand, KaTeX Math |
+| **State Management** | Zustand (`chatStore`, `authStore`, `alertStore`) with localStorage hydration & cache eviction |
 | **Container & CI** | Docker, Docker Compose, Pytest, Pytest-Asyncio, Nginx Reverse Proxy |
 
 ---
@@ -430,7 +495,7 @@ Navigate to `/analytics` in the web application to view real-time system metrics
 │   │   │   ├── graph.py              # Neo4j GraphRAG inspection endpoints
 │   │   │   ├── evaluation.py         # Response quality evaluation endpoints
 │   │   │   ├── health.py             # Liveness & readiness probes
-│   │   │   └── api_keys.py           # Provider API key management & validation
+│   │   │   └── api_keys.py           # Provider API key management, validation & idempotent DELETE
 │   │   │
 │   │   ├── proactive/                # Proactive Intelligence Engine
 │   │   │   ├── engine.py             # Orchestrator & parallel scanner execution
@@ -509,13 +574,19 @@ Navigate to `/analytics` in the web application to view real-time system metrics
         │   ├── ChatPage.tsx          # Agent chat interface & streaming UI
         │   ├── AnalyticsPage.tsx     # Enterprise Observability HUD
         │   ├── WorkspacePage.tsx     # Document management & upload
-        │   └── SettingsPage.tsx      # Provider keys, preferences & settings
+        │   └── SettingsPage.tsx      # Full Settings — provider keys, MCP, memories,
+        │                             #   data controls, generation params; all buttons
+        │                             #   fully wired end-to-end with real-time state sync
         ├── store/                    # Zustand State Stores
         │   ├── alertStore.ts         # Proactive SSE alerts & unread badge state
-        │   ├── chatStore.ts          # Active conversations & streaming state
+        │   ├── chatStore.ts          # Active conversations, streaming state,
+        │   │                         #   providers list, updateProvider() atomic action
         │   └── authStore.ts          # Authentication session state
-        └── services/                 # API Client & SSE Handlers
-            └── api.ts                # Axios client with interceptors
+        └── services/                 # API Client & Provider Key Services
+            ├── api.ts                # apiRequest() with auth headers, 204 handling,
+            │                         #   401 refresh, credentials: include
+            └── providerKeyManager.ts # localStorage key vault, verifyKey(), sync(),
+                                      #   removeKey(), alias handling (google ↔ gemini)
 ```
 
 ---
@@ -613,7 +684,9 @@ Create a `.env` file in the root directory (based on `.env.template`):
 | `GROQ_API_KEY` | Groq API Key (Free high-speed inference) | `gsk_...` |
 | `GEMINI_API_KEY` | Google Gemini API Key | `AIza...` |
 | `OPENAI_API_KEY` | OpenAI API Key (GPT-4o) | `sk-...` |
+| `ANTHROPIC_API_KEY` | Anthropic Claude API Key | `sk-ant-...` |
 | `OPENROUTER_API_KEY`| OpenRouter API Key | `sk-or-...` |
+| `DEEPSEEK_API_KEY` | DeepSeek API Key | `sk-...` |
 | `NEO4J_URI` | Neo4j Bolt protocol URI (enables GraphRAG) | `bolt://localhost:7687` |
 | `NEO4J_USER` | Neo4j username | `neo4j` |
 | `NEO4J_PASSWORD` | Neo4j password | `your_secure_password` |
@@ -621,7 +694,9 @@ Create a `.env` file in the root directory (based on `.env.template`):
 | `DOMAIN_MODE` | Business domain overlay (`claims`, `warranty`, `fraud`, `enterprise`) | `claims` |
 | `REDIS_HOST` | Redis cache hostname | `localhost` |
 | `REDIS_PORT` | Redis port | `6379` |
-| `TAVILY_API_KEY` | Tavily Web Search Key (falls back to DuckDuckGo if blank)| `tvly-...` |
+| `TAVILY_API_KEY` | Tavily Web Search Key (falls back to DuckDuckGo if blank) | `tvly-...` |
+| `SERPAPI_API_KEY` | SerpAPI Key (second in search waterfall) | `...` |
+| `EXA_API_KEY` | Exa AI Search Key (third in search waterfall) | `...` |
 | `FRONTEND_URL` | Frontend URL for CORS and password reset links | `http://localhost:5173` |
 
 ---
@@ -664,47 +739,61 @@ Create a `.env` file in the root directory (based on `.env.template`):
 - `POST /api/v1/chat/share` — Create a shareable public link for a conversation.
 
 ### Proactive Intelligence
-- `GET /api/v1/proactive/stream` — Live Server-Sent Events (SSE) connection pushing proactive anomaly and drift alerts.
-- `GET /api/v1/proactive/alerts` — Paginated history of generated proactive insights with severity and source metadata.
-- `GET /api/v1/proactive/alerts/unread-count` — Count of unacknowledged alerts for real-time notification bell badge.
+- `GET /api/v1/proactive/stream` — Live SSE connection pushing proactive anomaly and drift alerts.
+- `GET /api/v1/proactive/alerts` — Paginated history of generated proactive insights.
+- `GET /api/v1/proactive/alerts/unread-count` — Count of unacknowledged alerts for notification bell.
 - `POST /api/v1/proactive/alerts/mark-read` — Mark an individual alert or all alerts as read/dismissed.
-- `POST /api/v1/proactive/scan` — On-demand full knowledge base scan triggering all 6 autonomous scanners.
+- `POST /api/v1/proactive/scan` — On-demand full knowledge base scan triggering all 6 scanners.
 
 ### Documents & Knowledge Base
-- `POST /api/v1/documents/upload` — Upload document (PDF, DOCX, CSV, TXT, images with OCR) and index embeddings.
-- `GET /api/v1/documents/list` — List ingested workspace documents with parsing status.
+- `POST /api/v1/documents/upload` — Upload document (PDF, DOCX, CSV, TXT) and index embeddings.
+- `GET /api/v1/documents` — List ingested workspace documents with parsing status.
 - `DELETE /api/v1/documents/{id}` — Delete document and remove associated vector and graph embeddings.
+- `POST /api/v1/documents/{id}/retry` — Re-queue a failed document for indexing.
+- `PATCH /api/v1/documents/{id}` — Update document status (used by timeout handler).
 
-### Authentication & Keys
+### Memories
+- `GET /api/v1/memories` — List all long-term semantic memories for the user.
+- `POST /api/v1/memories` — Record a new semantic memory (category, content, importance score).
+- `DELETE /api/v1/memories/{id}` — Delete a specific memory entry.
+
+### MCP Servers
+- `GET /api/v1/mcp/servers` — List all registered remote MCP servers.
+- `POST /api/v1/mcp/servers` — Register a new remote MCP server (triggers tool discovery).
+- `POST /api/v1/mcp/servers/test` — Test connection to a remote MCP endpoint without saving.
+- `PATCH /api/v1/mcp/servers/{id}` — Update server properties (e.g., enable/disable).
+- `DELETE /api/v1/mcp/servers/{id}` — Remove a registered MCP server.
+
+### Authentication & API Keys
 - `POST /api/v1/auth/register` — Register a new user account.
 - `POST /api/v1/auth/login` — Authenticate and receive JWT access & refresh tokens.
-- `POST /api/v1/auth/refresh` — Refresh expired access token.
-- `GET /api/v1/auth/me` — Retrieve current authenticated user profile.
-- `POST /api/v1/api-keys/validate` — Validate custom provider credentials before saving.
+- `POST /api/v1/auth/refresh` — Refresh an expired access token.
+- `POST /api/v1/auth/logout` — Invalidate the current session (token blacklist).
+- `GET /api/v1/providers` — List all 11 providers with their real-time status from DB.
+- `POST /api/v1/providers/refresh` — Re-verify all saved API keys and update statuses.
+- `POST /api/v1/api-keys` — Save and verify an API key for a provider.
+- `DELETE /api/v1/api-keys/{provider}` — Remove an API key (**idempotent** — returns 200 even if key not found; clears Redis cache).
+- `GET /api/v1/preferences` — Get user generation preferences (temperature, max_tokens, streaming).
+- `PUT /api/v1/preferences` — Save user generation preferences to DB and Redis.
 
 ---
 
 ## 🧪 Testing & Quality Assurance
 
-The codebase includes an extensive automated test suite covering routing logic, drift computation, agent graphs, security headers, document parsing, and database models.
-
 ```bash
 cd backend
 
-# Run the complete test suite
+# Run full test suite
 pytest tests/ -v
 
-# Run enterprise platform tests specifically (Routing, Drift, Graph, Eval)
+# Run specific test modules
 pytest tests/test_enterprise_platform.py -v
-
-# Run with test coverage report
-pytest --cov=app --cov-report=term-missing
+pytest tests/test_security.py -v
+pytest tests/test_provider_keys_e2e.py -v
 ```
 
-### Test Suite Status
-
+Expected output:
 ```
-============================== test session starts ==============================
 collected 289 items
 
 tests/test_enterprise_platform.py ...............................         [ 10%]
@@ -739,13 +828,39 @@ A production blueprint is provided in `render.yaml`:
 
 ---
 
+## 📋 Changelog
+
+### v2.2.0 — Settings Reliability & Real-Time State Sync (Oct 2026)
+
+**Settings Page — Complete Button Overhaul**
+- **Fixed**: `Change` button was incorrectly wired to `handleDelete`. Rewritten as a proper `isEditing` state machine: Change → edit mode → Verify & Save / Cancel.
+- **Fixed**: `Delete` button silently failed when key existed only in localStorage (backend 404). Now the backend DELETE endpoint is **idempotent** — returns 200 and clears Redis cache even when the key is not found in DB.
+- **Fixed**: Frontend `handleDelete` now wraps the backend call in an inner `try/catch` so `ProviderKeyManager.removeKey()` and state updates always run regardless of backend response.
+- **Fixed**: `onSaveSuccess` for both LLM and search providers now reads fresh state from `useChatStore.getState().providers` instead of the closed-over stale `providers` variable.
+- **Fixed**: `handleCopyMcpUrl` now properly awaits the `clipboard.writeText()` Promise; shows an error toast if clipboard access is denied instead of silently failing.
+- **Added**: `updateProvider(id, updates)` atomic action in `chatStore.ts` — updates a single provider without needing a full `/providers` refetch. Falls back to this on network errors after key operations.
+- **Added**: `credentials: 'include'` to all `ProviderKeyManager.verifyKey()` and `.sync()` fetch calls for proper cookie-based auth in CORS environments.
+- **Added**: Toast notifications for every success and failure path across all Settings tabs.
+- **Added**: `deleteConfirmTimerRef` — 4-second auto-reset for the "Delete All Conversations" confirmation state.
+- **Added**: `handleDeleteArchivedChat` now calls `DELETE /api/v1/chats/{id}` on the backend (was previously only updating localStorage).
+- **Added**: Shared Links "Revoke" now strips the `[Shared]` suffix from the chat title and triggers `sharedLinksRefresh` counter to re-render the list without a full store refetch.
+- **Added**: `handleManualRefresh` (Refresh Status button) shows success and error toasts.
+- **Added**: `handleToggleProvider` (toggle OFF) wraps backend DELETE in inner try/catch so local state is always cleaned up.
+
+**Build & Tests**
+- TypeScript: zero errors across 2720 modules.
+- Vite build: ✅ success in ~6s.
+- Backend e2e tests: all passing.
+
+---
+
 ## 📌 Component Version Tracking
 
 All configurable components carry explicit semantic versions embedded into request telemetry records for auditability:
 
 | Component | Current Version | Description |
 |---|---|---|
-| **Platform** | `2.1.0` | Global platform release with Proactive Intelligence |
+| **Platform** | `2.2.0` | Settings reliability overhaul & real-time state sync |
 | **Agent Graph** | `3.0.0` | 14-node LangGraph state machine |
 | **Prompt Templates** | `3.1.0` | System prompts and domain overlays |
 | **Routing Logic** | `1.0.0` | Complexity analyzer and tier routing |
@@ -754,6 +869,7 @@ All configurable components carry explicit semantic versions embedded into reque
 | **Evaluation** | `1.0.0` | Deterministic checks and RAGAS integration |
 | **Knowledge Graph** | `1.0.0` | Neo4j GraphRAG extraction & 2-hop retrieval |
 | **Drift Detection** | `1.0.0` | PSI & KS statistical drift monitors |
+| **Settings UI** | `2.0.0` | Full button state machine, idempotent backend, real-time sync |
 
 ---
 
@@ -764,6 +880,8 @@ Contributions are welcome! Please follow these guidelines:
 - **Comments & Documentation**: Every module must include top-level architectural docstrings, type annotations, and inline rationale for non-obvious logic.
 - **Fail-Open Resilience**: External dependencies (Neo4j, Redis, RAGAS, external search engines) must degrade gracefully without crashing the core agent loop.
 - **Tests**: Include unit tests under `backend/tests/` for any new features or bug fixes.
+- **UI Actions**: Every clickable element must have an `onClick` handler, a `disabled` guard during loading, and a toast for both success and failure outcomes.
+- **State Freshness**: When reading Zustand state inside async callbacks, always use `useChatStore.getState()` instead of closed-over variables to prevent stale closure bugs.
 
 ---
 
