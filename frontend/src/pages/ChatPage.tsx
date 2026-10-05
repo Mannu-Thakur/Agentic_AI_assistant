@@ -1157,14 +1157,13 @@ export default function ChatPage() {
       const data = await apiRequest(`/documents?chat_id=${chatId}`);
       setChatDocuments(Array.isArray(data) ? data : []);
     } catch {
-      // BUG-6 FIX: Retry once after 1.5s on transient failure (e.g., after upload
-      // when the document hasn't been committed to DB yet)
+      // On transient failure, retry once after 1.5s — keep existing list, don't wipe it
       setTimeout(async () => {
         try {
           const retryData = await apiRequest(`/documents?chat_id=${chatId}`);
           setChatDocuments(Array.isArray(retryData) ? retryData : []);
         } catch {
-          setChatDocuments([]);
+          // Silently keep whatever was already shown — do NOT set [] which wipes docs from UI
         }
       }, 1500);
     }

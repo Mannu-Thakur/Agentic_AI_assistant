@@ -398,98 +398,81 @@ async def stream_agent_message(
 
     _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tiff", ".heic", ".heif"}
 
-    # ── Detect chat-upload: message contains [Uploaded Document: ...] ─────────
-    # When a user attaches a file directly in chat, the upload and the chat
-    # message fire nearly simultaneously.  The background ingestion task hasn't
-    # finished yet, so doc.status is still "processing" — CRAG finds zero chunks
-    # and wrongly sets no_doc_answer=True, producing the ridiculous
-    # "not in my analysis knowledge base" response.
+    # ── Chat-upload inline context: extract doc text directly from disk ────────
+    # When a user attaches a file in chat, the background vectorisation hasn't
+    # finished yet when this handler runs.  The previous approach polled the DB
+    # (broken: SQLAlchemy identity-map cache returns stale objects) and checked
+    # status (broken: auto-heal marks new docs 'failed' immediately).
     #
-    # Fix strategy:
-    #   1. Detect the upload tag in the user message.
-    #   2. Poll the DB for up to 8 s (0.5 s intervals) for those docs to reach
-    #      "ready" so the normal vector-store path works whenever possible.
-    #   3. For docs still "processing" after the wait, extract text DIRECTLY
-    #      from disk via ParserService and inject it as inline_doc_context so
-    #      the LLM can answer immediately.
+    # New approach: detect the [Uploaded Document:] tag, open a FRESH DB session,
+    # find any doc with a matching filename uploaded in the last 5 minutes
+    # (regardless of status), and extract its text directly from disk so the LLM
+    # can answer immediately without waiting for vectorisation.
     import re as _chat_re
+    from datetime import datetime, timezone, timedelta
     _upload_tag_match = _chat_re.search(
         r"\[Uploaded Document:\s*([^\]]+)\]", schema.content or ""
     )
-    _inline_doc_context: str = ""   # injected into agent state
+    _inline_doc_context: str = ""
 
     if _upload_tag_match:
         _uploaded_names_raw = [
             n.strip() for n in _upload_tag_match.group(1).split(",") if n.strip()
         ]
-        # Docs just uploaded for this chat that are not yet vectorised
-        _processing_docs = [
-            d for d in user_docs
-            if d.status in ("processing", "pending", "uploaded")
-            and d.filename in _uploaded_names_raw
-        ]
+        from app.models.document import Document as _DocModel
+        from app.core.database import AsyncSessionLocal as _FreshSession
+        from app.services.parser_service import ParserService as _PS
+        _inline_parts: list = []
 
-        if _processing_docs:
-            # ── Step 1: Brief poll — wait up to 8 s for vectorisation to finish ──
-            _POLL_INTERVAL = 0.5
-            _POLL_MAX = 8.0
-            _elapsed = 0.0
-            _still_processing_ids = {d.id for d in _processing_docs}
-
-            while _elapsed < _POLL_MAX and _still_processing_ids:
-                await asyncio.sleep(_POLL_INTERVAL)
-                _elapsed += _POLL_INTERVAL
-                from app.models.document import Document as _Doc
-                _poll_result = await db.execute(
-                    select(_Doc).where(
-                        _Doc.id.in_(list(_still_processing_ids))
+        # Use a FRESH session — avoids SQLAlchemy identity-map returning stale status
+        try:
+            async with _FreshSession() as _fresh_db:
+                _cutoff = datetime.now(timezone.utc) - timedelta(minutes=5)
+                _fresh_result = await _fresh_db.execute(
+                    select(_DocModel).where(
+                        _DocModel.user_id == current_user.id,
+                        _DocModel.filename.in_(_uploaded_names_raw),
+                        _DocModel.uploaded_at >= _cutoff,
                     )
                 )
-                for _polled_doc in _poll_result.scalars().all():
-                    if _polled_doc.status == "ready":
-                        _still_processing_ids.discard(_polled_doc.id)
-                        # Update local user_docs so the path filter below picks it up
-                        for _ud in user_docs:
-                            if _ud.id == _polled_doc.id:
-                                _ud.status = "ready"
-                                break
+                _recent_docs = _fresh_result.scalars().all()
 
-            # ── Step 2: For docs still processing, extract text directly from disk ──
-            if _still_processing_ids:
-                from app.services.parser_service import ParserService as _PS
-                _inline_parts: list = []
-                for _proc_doc in _processing_docs:
-                    if _proc_doc.id not in _still_processing_ids:
-                        continue  # already became ready; normal RAG path handles it
+                for _rdoc in _recent_docs:
+                    if not _rdoc.storage_path or not os.path.exists(_rdoc.storage_path):
+                        logger.warning(f"[ChatUpload] File missing on disk: {_rdoc.storage_path}")
+                        continue
+                    _fext = os.path.splitext(_rdoc.storage_path)[1].lower()
+                    if _fext in _IMAGE_EXTENSIONS:
+                        continue  # images handled via vision path
                     try:
-                        _ext = os.path.splitext(_proc_doc.storage_path)[1].lower()
-                        _ftype = _proc_doc.file_type or _ext.lstrip(".")
+                        _ftype = _rdoc.file_type or _fext.lstrip(".")
                         _raw_text = await asyncio.to_thread(
-                            _PS.extract_text, _proc_doc.storage_path, _ftype
+                            _PS.extract_text, _rdoc.storage_path, _ftype
                         )
                         if _raw_text and _raw_text.strip():
-                            # Truncate to ~30 k chars to stay within context window
                             _truncated = _raw_text.strip()[:30_000]
                             _inline_parts.append(
-                                f"=== Uploaded Document: {_proc_doc.filename} ===\n{_truncated}"
+                                f"=== Uploaded Document: {_rdoc.filename} ===\n{_truncated}"
                             )
                             logger.info(
-                                f"[ChatUpload] Injected inline text for '{_proc_doc.filename}' "
-                                f"({len(_truncated)} chars) — vectorisation still in progress"
+                                f"[ChatUpload] Inline text extracted for '{_rdoc.filename}' "
+                                f"({len(_truncated)} chars)"
                             )
-                    except Exception as _extract_err:
+                    except Exception as _ex:
                         logger.warning(
-                            f"[ChatUpload] Could not extract inline text from "
-                            f"'{_proc_doc.filename}': {_extract_err}"
+                            f"[ChatUpload] Text extraction failed for '{_rdoc.filename}': {_ex}"
                         )
-                if _inline_parts:
-                    _inline_doc_context = "\n\n".join(_inline_parts)
+        except Exception as _fresh_err:
+            logger.warning(f"[ChatUpload] Fresh-session lookup failed (non-fatal): {_fresh_err}")
+
+        if _inline_parts:
+            _inline_doc_context = "\n\n".join(_inline_parts)
 
     uploaded_file_paths = [
         doc.storage_path
         for doc in user_docs
         if doc.storage_path
-        and doc.status == "ready"  # BUG-5 FIX: only "ready" docs pass to RAG
+        and doc.status == "ready"
         and not any(doc.storage_path.lower().endswith(ext) for ext in _IMAGE_EXTENSIONS)
     ]
 

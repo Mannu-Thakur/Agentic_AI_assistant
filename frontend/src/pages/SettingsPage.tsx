@@ -1417,6 +1417,24 @@ export default function SettingsPage() {
     if (!files || files.length === 0) return;
     const file = files[0];
     e.target.value = '';
+
+    // ── Client-side extension guard ───────────────────────────────────────────
+    // Catch unsupported files (e.g. .url, .exe) before they hit the backend,
+    // so the user sees a clear message instead of a cryptic "Indexing failed".
+    const ALLOWED_EXTS = new Set([
+      'pdf','docx','doc','xlsx','xls','pptx','ppt',
+      'txt','md','csv','json','py','js','ts','html','css',
+      'png','jpg','jpeg','webp','bmp','gif','tiff',
+    ]);
+    const fileExt = file.name.split('.').pop()?.toLowerCase() ?? '';
+    if (!ALLOWED_EXTS.has(fileExt)) {
+      setUploadError(
+        `File type ".${fileExt}" is not supported. Please upload a PDF, Word, Excel, PowerPoint, ` +
+        `text, code, or image file.`
+      );
+      return;
+    }
+
     setUploading(true);
     setUploadError(null);
     setIngestDone(false);
