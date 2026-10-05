@@ -17,7 +17,7 @@ import {
   Sun, Moon, Globe, Type, Archive, Link2, RotateCcw,
   Copy, CheckCheck, Radio, PlusCircle
 } from 'lucide-react';
-import { apiRequest, BASE_URL } from '../services/api';
+import { apiRequest } from '../services/api';
 import { ProviderKeyManager } from '../services/providerKeyManager';
 
 // -------------------------------------------------------------
@@ -742,7 +742,6 @@ export default function SettingsPage() {
     providers, setProviders,
     keysLoading, setKeysLoading,
   } = useChatStore();
-  const token = useAuthStore((state) => state.token);
 
   // ——— Generation settings (persist in localStorage) ———————————————
   const [temperature, setTemperatureState] = useState<number>(
@@ -1427,16 +1426,10 @@ export default function SettingsPage() {
     formData.append('file', file);
     try {
       startIngestionProgress(file.name);
-      const response = await fetch(`${BASE_URL}/documents/upload`, {
+      const doc: DocumentFile = await apiRequest('/documents/upload', {
         method: 'POST',
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
         body: formData,
       });
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.detail || 'File upload failed');
-      }
-      const doc: DocumentFile = await response.json();
       setDocuments((prev) => [doc, ...prev.filter((d) => d.id !== doc.id)]);
       pollUntilReady(doc.id);
     } catch (err: unknown) {
@@ -1445,7 +1438,7 @@ export default function SettingsPage() {
       setIngestStep(-1);
       setUploading(false);
     }
-  }, [token, startIngestionProgress, pollUntilReady]);
+  }, [startIngestionProgress, pollUntilReady]);
 
   const handleRetryDoc = useCallback(async (id: string) => {
     try {

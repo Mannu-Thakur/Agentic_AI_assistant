@@ -121,6 +121,7 @@ def compile_system_prompt(
     language_mode: Optional[str] = None,
     client_time: Optional[str] = None,
     client_location: Optional[str] = None,
+    inline_doc_context: Optional[str] = None,
 ) -> str:
     """
     Dynamically assembles the full system prompt injected at position [0]
@@ -347,6 +348,22 @@ def compile_system_prompt(
             "When writing Python code that reads uploaded files, use these paths directly. "
             "Do NOT use placeholder paths like '/path/to/file.csv'.\n"
         )
+
+    # ── Inline document context (chat-upload race condition) ──────────────────
+    # When a user uploads a file directly in chat and the vectorisation hasn't
+    # finished yet, the raw extracted text is injected here so the LLM can
+    # answer immediately without waiting for the vector store to be ready.
+    if inline_doc_context and inline_doc_context.strip():
+        system += (
+            "\n### Uploaded Document Content (Just Uploaded — Full Text):\n"
+            "The user just uploaded the following document(s) directly in this chat. "
+            "Read the full content below and use it to answer the user's question. "
+            "Provide a thorough analysis, summary, or answer based on this content.\n\n"
+            f"{inline_doc_context}\n"
+        )
+        # Suppress the no-doc hallucination guard when inline context is present —
+        # we DO have the document, just not via the vector store yet.
+        no_doc_answer = False
 
     # ── No-doc hallucination guard ────────────────────────────────────────────
     if no_doc_answer:

@@ -2821,9 +2821,12 @@ async def grade_documents_node(
                     logger.error(f"CRAG web search on empty docs failed: {e}")
 
         steps.append("grade_documents")
+        # If inline_doc_context is available (direct text extracted from a just-uploaded
+        # file), do NOT block the LLM — it has the content it needs even without vector chunks.
+        _has_inline_ctx = bool(state.get("inline_doc_context", ""))
         return {
             "document_relevance":  "no_docs",
-            "no_doc_answer":       is_private,
+            "no_doc_answer":       is_private and not _has_inline_ctx,
             "retrieved_documents": retrieved_docs,
             "retrieval_confidence": 0.0,
             "steps":               steps,
@@ -3016,15 +3019,20 @@ async def grade_documents_node(
 
     # No relevant chunks and no web search path for private doc queries
     if not relevant_chunks and is_private:
-        logger.info("CRAG: no relevant chunks for private query (Tavily blocked) → no doc answer guard active.")
+        # Suppress no_doc_answer when inline text was extracted directly from a just-uploaded file
+        _has_inline_ctx = bool(state.get("inline_doc_context", ""))
+        if _has_inline_ctx:
+            logger.info("CRAG: no RAG chunks but inline_doc_context present — allowing generation.")
+        else:
+            logger.info("CRAG: no relevant chunks for private query (Tavily blocked) → no doc answer guard active.")
         steps.append("grade_documents")
         return {
             "document_relevance":  "no_private_docs",
-            "no_doc_answer":       True,
+            "no_doc_answer":       not _has_inline_ctx,
             "retrieved_documents": memory_items,
             "source_documents":    [],
             "retrieval_confidence": confidence_score,
-            "generation_mode":     "crag_rejected",
+            "generation_mode":     "crag_rejected" if not _has_inline_ctx else "inline_doc",
             "steps":               steps,
         }
 
@@ -3403,6 +3411,7 @@ async def generate_response_node(
         language_mode=language_mode,
         client_time=state.get("client_time"),
         client_location=state.get("client_location"),
+        inline_doc_context=state.get("inline_doc_context") or None,
     )
 
 

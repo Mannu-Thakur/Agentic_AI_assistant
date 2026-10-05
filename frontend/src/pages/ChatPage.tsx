@@ -1490,7 +1490,25 @@ export default function ChatPage() {
 
     if (!trimmed && attachedFiles.length > 0) {
       const fileNames = attachedFiles.map((f) => f.name).join(', ');
-      trimmed = `[Uploaded Document: ${fileNames}] Please analyze and summarize the attached document content.`;
+      // Generate a context-aware prompt based on file type/name
+      const firstFile = attachedFiles[0];
+      const ext = firstFile.name.split('.').pop()?.toLowerCase() || '';
+      const nameLower = firstFile.name.toLowerCase();
+      let autoPrompt: string;
+      if (nameLower.includes('resume') || nameLower.includes('cv')) {
+        autoPrompt = 'Please review this resume and provide detailed feedback: key strengths, areas for improvement, ATS compatibility, and suggestions to make it stand out.';
+      } else if (ext === 'pdf') {
+        autoPrompt = 'Please read and summarize this document. Extract the key points, main topics, and any important information.';
+      } else if (['xlsx', 'xls', 'csv'].includes(ext)) {
+        autoPrompt = 'Please analyze this spreadsheet/data file. Summarize what it contains, identify key trends or patterns, and highlight any notable findings.';
+      } else if (['docx', 'doc'].includes(ext)) {
+        autoPrompt = 'Please read this document and provide a comprehensive summary of its content, key points, and main takeaways.';
+      } else if (['py', 'js', 'ts', 'html', 'css', 'json'].includes(ext)) {
+        autoPrompt = 'Please review this code/file. Explain what it does, identify any issues or improvements, and provide feedback.';
+      } else {
+        autoPrompt = 'Please analyze and summarize the content of this uploaded file.';
+      }
+      trimmed = `[Uploaded Document: ${fileNames}] ${autoPrompt}`;
     }
 
     let chatId = activeChatId;
