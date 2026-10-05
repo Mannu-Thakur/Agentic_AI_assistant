@@ -409,7 +409,6 @@ async def stream_agent_message(
     # (regardless of status), and extract its text directly from disk so the LLM
     # can answer immediately without waiting for vectorisation.
     import re as _chat_re
-    from datetime import datetime, timezone, timedelta
     _upload_tag_match = _chat_re.search(
         r"\[Uploaded Document:\s*([^\]]+)\]", schema.content or ""
     )
@@ -419,25 +418,41 @@ async def stream_agent_message(
         _uploaded_names_raw = [
             n.strip() for n in _upload_tag_match.group(1).split(",") if n.strip()
         ]
+        logger.info(f"[ChatUpload] Detected upload tag — filenames: {_uploaded_names_raw}")
         from app.models.document import Document as _DocModel
+        from sqlalchemy import desc as _desc
         from app.core.database import AsyncSessionLocal as _FreshSession
         from app.services.parser_service import ParserService as _PS
         _inline_parts: list = []
 
-        # Use a FRESH session — avoids SQLAlchemy identity-map returning stale status
+        # Use a FRESH session — avoids SQLAlchemy identity-map returning stale objects.
+        # NO uploaded_at filter: SQLite stores naive datetimes; comparing with a
+        # timezone-aware cutoff causes string-comparison failures (no results returned).
+        # Instead we ORDER BY uploaded_at DESC and take the LATEST doc per filename.
         try:
             async with _FreshSession() as _fresh_db:
-                _cutoff = datetime.now(timezone.utc) - timedelta(minutes=5)
                 _fresh_result = await _fresh_db.execute(
                     select(_DocModel).where(
                         _DocModel.user_id == current_user.id,
                         _DocModel.filename.in_(_uploaded_names_raw),
-                        _DocModel.uploaded_at >= _cutoff,
-                    )
+                    ).order_by(_desc(_DocModel.uploaded_at))
                 )
-                _recent_docs = _fresh_result.scalars().all()
+                _all_matches = _fresh_result.scalars().all()
+                logger.info(f"[ChatUpload] Fresh-session found {len(_all_matches)} doc(s) for {_uploaded_names_raw}")
+
+                # Deduplicate: keep only the most recent per filename
+                _seen_names: set = set()
+                _recent_docs = []
+                for _d in _all_matches:
+                    if _d.filename not in _seen_names:
+                        _seen_names.add(_d.filename)
+                        _recent_docs.append(_d)
 
                 for _rdoc in _recent_docs:
+                    logger.info(
+                        f"[ChatUpload] Doc '{_rdoc.filename}' status={_rdoc.status} "
+                        f"path={_rdoc.storage_path}"
+                    )
                     if not _rdoc.storage_path or not os.path.exists(_rdoc.storage_path):
                         logger.warning(f"[ChatUpload] File missing on disk: {_rdoc.storage_path}")
                         continue
@@ -455,9 +470,11 @@ async def stream_agent_message(
                                 f"=== Uploaded Document: {_rdoc.filename} ===\n{_truncated}"
                             )
                             logger.info(
-                                f"[ChatUpload] Inline text extracted for '{_rdoc.filename}' "
+                                f"[ChatUpload] ✓ Inline text extracted for '{_rdoc.filename}' "
                                 f"({len(_truncated)} chars)"
                             )
+                        else:
+                            logger.warning(f"[ChatUpload] extract_text returned empty for '{_rdoc.filename}'")
                     except Exception as _ex:
                         logger.warning(
                             f"[ChatUpload] Text extraction failed for '{_rdoc.filename}': {_ex}"
@@ -467,6 +484,9 @@ async def stream_agent_message(
 
         if _inline_parts:
             _inline_doc_context = "\n\n".join(_inline_parts)
+            logger.info(f"[ChatUpload] inline_doc_context ready ({len(_inline_doc_context)} chars)")
+        else:
+            logger.warning(f"[ChatUpload] inline_doc_context is EMPTY — LLM will get no document content")
 
     uploaded_file_paths = [
         doc.storage_path
