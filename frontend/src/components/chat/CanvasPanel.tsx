@@ -166,7 +166,7 @@ export const CanvasPanel: React.FC<CanvasPanelProps> = ({
     ta.focus();
   };
 
-  const copyTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     return () => {

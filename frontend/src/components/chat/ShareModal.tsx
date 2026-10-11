@@ -17,7 +17,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({
   shareUrl,
 }) => {
   const [copied, setCopied] = useState(false);
-  const timerRef = React.useRef<NodeJS.Timeout | null>(null);
+  const timerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   React.useEffect(() => {
     return () => {

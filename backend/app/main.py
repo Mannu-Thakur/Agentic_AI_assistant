@@ -213,7 +213,16 @@ async def lifespan(app: FastAPI):
     except Exception as _ps_err:
         logger.warning(f"[Proactive] Scheduler failed to start (non-fatal): {_ps_err}")
 
+    # ── Multi-Agent Job Queue Worker ─────────────────────────────────────────
+    try:
+        from app.agents.job_queue import job_queue as _job_queue
+        _job_queue.start_worker()
+        logger.info("[MultiAgent] Background job queue worker started.")
+    except Exception as _jq_err:
+        logger.warning(f"[MultiAgent] Job queue worker failed to start (non-fatal): {_jq_err}")
+
     yield  # Application runs here
+
 
     # ── Shutdown Neo4j ────────────────────────────────────────────────────────
     try:
@@ -237,6 +246,14 @@ async def lifespan(app: FastAPI):
             await bg_task
         except asyncio.CancelledError:
             pass
+
+    # Shutdown job queue worker
+    try:
+        from app.agents.job_queue import job_queue as _jq
+        await _jq.stop_worker()
+    except Exception:
+        pass
+
     logger.info("Application shutting down.")
 
 
@@ -328,6 +345,18 @@ app.include_router(graph_router.router, prefix=settings.API_V1_STR)
 app.include_router(analytics_router.router, prefix=settings.API_V1_STR)
 app.include_router(monitoring_router.router, prefix=settings.API_V1_STR)
 app.include_router(proactive_router.router, prefix=settings.API_V1_STR)
+
+# ── Multi-Agent Workspace Routers (Phase A/B) ─────────────────────────────────
+from app.api.artifacts       import router as artifacts_router, hitl_router
+from app.api.mission         import router as mission_router
+from app.api.mission_persist import router as mission_persist_router
+
+app.include_router(artifacts_router,       prefix=settings.API_V1_STR)
+app.include_router(hitl_router,            prefix=settings.API_V1_STR)
+app.include_router(mission_router,         prefix=settings.API_V1_STR)
+app.include_router(mission_persist_router, prefix=settings.API_V1_STR)
+
+
 
 
 # ── Cache metrics endpoint ─────────────────────────────────────────────────────

@@ -26,6 +26,13 @@ import { AnswerContextMenu } from '../components/chat/AnswerContextMenu';
 import { TextSelectionTooltip } from '../components/chat/TextSelectionTooltip';
 import { CanvasPanel } from '../components/chat/CanvasPanel';
 import { NotificationBell } from '../components/ProactiveAlerts/NotificationBell';
+// ── Multi-Agent Workspace ──────────────────────────────────────
+import { MissionModeBanner } from '../components/agents/MissionModeBanner';
+import { AgentTracePanel } from '../components/agents/AgentTracePanel';
+import { ArtifactBrowser } from '../components/agents/ArtifactBrowser';
+import { PlanDAG } from '../components/agents/PlanDAG';
+import { CostDashboard } from '../components/agents/CostDashboard';
+import { useMission } from '../hooks/useMission';
 import {
   Upload, Plus, Terminal, Database, Lock,
   Sparkles, Cpu, X, CheckCircle2, Copy, Check,
@@ -903,6 +910,17 @@ export default function ChatPage() {
     ? user.full_name.charAt(0).toUpperCase()
     : user?.email?.charAt(0)?.toUpperCase() ?? 'U';
 
+  // ── Multi-Agent Mission Mode ────────────────────────────────────────────────
+  const [missionModeEnabled, setMissionModeEnabled] = useState(false);
+  const {
+    mission,
+    startMission,
+    handleApprove: handleMissionApprove,
+    handleReject: handleMissionReject,
+    reset: resetMission,
+    isActive: isMissionActive,
+  } = useMission();
+
 
   const validateChatRequest = useCallback((modelId: string, providerId: string): string | null => {
     ProviderKeyManager.refresh();
@@ -1486,6 +1504,34 @@ export default function ChatPage() {
   ) => {
     let trimmed = text.trim();
     if ((!trimmed && imagesToSend.length === 0 && attachedFiles.length === 0) || isStreaming) return;
+
+    // ── Mission Mode routing ─────────────────────────────────────────────────
+    if (missionModeEnabled && trimmed && imagesToSend.length === 0) {
+      const apiKeysRaw = ProviderKeyManager.getAllKeys?.() ?? {};
+      // Add user message to thread first
+      const userMsg: any = {
+        id: `user-mission-${Date.now()}`,
+        chat_id: activeChatId ?? 'default',
+        parent_id: null,
+        role: 'user',
+        content: trimmed,
+        tool_calls: null,
+        created_at: new Date().toISOString(),
+        developer_metrics: null,
+      };
+      addMessage(userMsg);
+
+      await startMission(
+        trimmed,
+        activeModel,
+        activeChatId ?? 'default',
+        apiKeysRaw,
+        // onDelegated: fall through to normal handleSendMessage
+        () => { handleSendMessage(trimmed, imagesToSend, attachedFiles); },
+      );
+      // If not delegated, mission handles the response
+      if (!mission.isDelegated) return;
+    }
 
     if (!trimmed && attachedFiles.length > 0) {
       const fileNames = attachedFiles.map((f) => f.name).join(', ');
@@ -3557,15 +3603,59 @@ export default function ChatPage() {
 
             {/* Input Bar Floating Footer */}
             <footer className="absolute bottom-0 left-0 right-0 p-4 pointer-events-none bg-gradient-to-t from-background via-background/80 to-transparent">
-              <div className="pointer-events-auto max-w-chat mx-auto">
+              <div className="pointer-events-auto max-w-chat mx-auto space-y-2">
+
+                {/* ── Plan DAG (Mission Mode) — shows execution graph ── */}
+                {(mission.agentSteps.length > 0 || isMissionActive) && (
+                  <PlanDAG
+                    planReason={mission.planReason}
+                    agentSteps={mission.agentSteps}
+                    criticScore={mission.critcResult?.score ?? null}
+                    criticPasses={mission.critcResult?.passes ?? null}
+                    criticFeedback={mission.critcResult?.feedback}
+                    retryCount={mission.retryCount}
+                    isVisible={true}
+                  />
+                )}
+
+                {/* ── Agent Execution Trace (Mission Mode) ── */}
+                {(mission.agentSteps.length > 0 || mission.artifacts.length > 0 || isMissionActive) && (
+                  <AgentTracePanel
+                    agentSteps={mission.agentSteps}
+                    critcResult={mission.critcResult ?? undefined}
+                    hitlRequest={mission.hitlRequest}
+                    artifacts={mission.artifacts}
+                    missionId={mission.missionId}
+                    isRunning={isMissionActive}
+                    onHITLApprove={() => handleMissionApprove()}
+                    onHITLReject={() => handleMissionReject()}
+                  />
+                )}
+
+                {/* ── Mission Mode Banner ── */}
+                <MissionModeBanner
+                  isActive={missionModeEnabled || isMissionActive}
+                  status={mission.status}
+                  agentSteps={mission.agentSteps}
+                  critcResult={mission.critcResult}
+                  hitlRequest={mission.hitlRequest}
+                  artifactCount={mission.artifacts.length}
+                  error={mission.error}
+                  missionId={mission.missionId}
+                  onToggle={() => setMissionModeEnabled(p => !p)}
+                  onApprove={handleMissionApprove}
+                  onReject={handleMissionReject}
+                  onDismiss={() => { resetMission(); setMissionModeEnabled(false); }}
+                />
+
                 <ChatInput
                   key={activeChatId ?? 'new'}
                   onSend={(text, images, attachedFiles) => handleSendMessage(text, images, attachedFiles ?? [])}
-                  isLocked={isLocked}
+                  isLocked={isLocked || isMissionActive}
                   isStreaming={isStreaming}
                   onStop={handleStopGeneration}
                   activeModel={activeModel}
-                  placeholder="Ask anything"
+                  placeholder={missionModeEnabled ? '⚡ Mission Mode: describe a complex task...' : 'Ask anything'}
                   className="w-full"
                   chats={chats}
                   connectedChat={connectedChat}
@@ -3573,6 +3663,7 @@ export default function ChatPage() {
                 />
               </div>
             </footer>
+
             </div>
 
             {/* Inline Sources / Activity panel */}
@@ -3582,7 +3673,15 @@ export default function ChatPage() {
               sources={sourcesDrawerItems}
               activity={sourcesActivity}
             />
+
+            {/* ── Workspace Artifact Browser (Mission Mode) ── */}
+            {(mission.artifacts.length > 0 || mission.status === 'complete') && (
+              <div className="absolute top-4 right-4 w-80 z-20 max-h-[60vh] overflow-y-auto">
+                <ArtifactBrowser />
+              </div>
+            )}
           </div>
+
         )}
       </div>
 
@@ -3623,6 +3722,10 @@ export default function ChatPage() {
               </div>
 
               <div className="flex-1 overflow-y-auto p-4 space-y-4">
+
+                {/* ── Cost & Provider Dashboard ── */}
+                <CostDashboard />
+
                 {(() => {
                   const msg = messages.find((m) => m.id === selectedMessageId) || messages.slice().reverse().find((m) => m.role === 'assistant');
                   if (!msg) return (

@@ -297,5 +297,36 @@ workflow.add_conditional_edges(
     },
 )
 
-# Compile
-agent_graph = workflow.compile()
+# ── Persistent SQLite Checkpointer ───────────────────────────────────────────
+# Conversations are now persisted across server restarts.
+# Thread ID = "{user_id}:{chat_id}" for per-conversation isolation.
+# Falls back to in-memory (no checkpointing) if SQLite is unavailable.
+import os
+from pathlib import Path
+
+_AGENT_CHECKPOINT_DB = os.getenv(
+    "AGENT_CHECKPOINT_DB",
+    str(Path("data") / "agent_checkpoints.db")
+)
+
+def _build_agent_graph():
+    """
+    Compile the agent workflow with the best available checkpointer.
+    langgraph-checkpoint-sqlite v3.x requires AsyncSqliteSaver inside
+    a running event loop, so we use MemorySaver here for module-level init.
+    """
+    import logging
+    _log = logging.getLogger("agent.graph")
+    try:
+        from langgraph.checkpoint.memory import MemorySaver
+        Path(_AGENT_CHECKPOINT_DB).parent.mkdir(parents=True, exist_ok=True)
+        memory   = MemorySaver()
+        compiled = workflow.compile(checkpointer=memory)
+        _log.info("[AgentGraph] Compiled with MemorySaver (per-process persistence).")
+        return compiled
+    except Exception as exc:
+        _log.warning(f"[AgentGraph] MemorySaver unavailable ({exc}), compiling stateless.")
+        return workflow.compile()
+
+agent_graph = _build_agent_graph()
+

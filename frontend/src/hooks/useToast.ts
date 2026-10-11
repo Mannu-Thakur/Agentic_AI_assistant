@@ -11,7 +11,7 @@ export interface Toast {
 
 export function useToast() {
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const timersRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
+  const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   const removeToast = useCallback((id: string) => {
     if (timersRef.current.has(id)) {
