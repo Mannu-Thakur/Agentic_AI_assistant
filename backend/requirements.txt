@@ -44,7 +44,7 @@ langchain==0.3.25
 langchain-core==0.3.65
 langchain-community==0.3.24
 langgraph==0.2.76
-langgraph-checkpoint-sqlite==1.0.6   # Persistent SQLite checkpointer for conversation state
+langgraph-checkpoint-sqlite==3.1.0  # Persistent SQLite checkpointer for conversation state
 
 
 # chromadb 0.5.23: NumPy 2.x compatible (no np.float_ usage).
