@@ -19,7 +19,7 @@ import {
   Copy, CheckCheck, Radio, PlusCircle, BarChart2,
   Bell, Mic, MicOff, Volume2, ExternalLink, GitBranch
 } from 'lucide-react';
-import { apiRequest } from '../services/api';
+import { apiRequest, BASE_URL } from '../services/api';
 import { ProviderKeyManager } from '../services/providerKeyManager';
 
 // -------------------------------------------------------------
@@ -252,8 +252,22 @@ const cleanErrorMessage = (raw: string): string => {
   if (raw.includes('PERMISSION_DENIED') || raw.includes('denied access')) {
     return 'Google AI Studio denied project access for the configured Gemini key. The backend automatically switches to local neural embeddings on retry.';
   }
-  if (raw.includes('Failed to fetch') || raw.includes('NetworkError')) {
-    return 'Unable to connect to the backend server. Please verify that the backend is running on http://127.0.0.1:8000.';
+  if (
+    raw.includes('Failed to fetch') ||
+    raw.includes('NetworkError') ||
+    raw.includes('Load failed') ||
+    raw.toLowerCase().includes('abort')
+  ) {
+    const isLocal =
+      typeof window !== 'undefined' &&
+      (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+
+    if (isLocal) {
+      return 'Unable to connect to the backend server. Please verify that your local backend is running on http://127.0.0.1:8000.';
+    }
+
+    const target = BASE_URL ? `(${BASE_URL})` : '';
+    return `Unable to reach the backend server ${target}. If your backend is hosted on a free cloud platform (like Render), it may be waking up from sleep (cold start — please wait 30–60s and retry). Also check if your frontend domain is allowed in BACKEND_CORS_ORIGINS.`;
   }
   const jsonMatch = raw.match(/\{.*"message"\s*:\s*"([^"]+)".*\}/s);
   if (jsonMatch && jsonMatch[1]) {
