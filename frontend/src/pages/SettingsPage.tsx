@@ -15,7 +15,7 @@ import {
   XCircle, FileText, FileCode, Sparkles, Calendar, Info, ChevronRight,
   Database, Layers, Scissors, HardDrive, Plus, Monitor,
   Sun, Moon, Globe, Type, Archive, Link2, RotateCcw,
-  Copy, CheckCheck, Radio, PlusCircle
+  Copy, CheckCheck, Radio, PlusCircle, BarChart2
 } from 'lucide-react';
 import { apiRequest } from '../services/api';
 import { ProviderKeyManager } from '../services/providerKeyManager';
@@ -24,19 +24,33 @@ import { ProviderKeyManager } from '../services/providerKeyManager';
 // Types & Constants
 // -------------------------------------------------------------
 
-type SettingsTab = 'general' | 'datacontrols' | 'models' | 'generation' | 'features' | 'mcpservers' | 'documents' | 'memories' | 'account';
+type SettingsTab = 'general' | 'datacontrols' | 'models' | 'generation' | 'features' | 'mcpservers' | 'documents' | 'memories' | 'account' | 'appearance' | 'personalization' | 'voice' | 'storage' | 'notifications' | 'shortcuts' | 'usage' | 'profile' | 'connections' | 'git' | 'environments';
 
-const TABS: { id: SettingsTab | 'chat'; label: string; icon: React.ElementType }[] = [
-  { id: 'chat',       label: 'Back to Chat',    icon: ArrowLeft   },
-  { id: 'general',    label: 'General',         icon: Sliders     },
-  { id: 'datacontrols', label: 'Data controls', icon: Database    },
-  { id: 'models',     label: 'AI Models',       icon: Cpu         },
-  { id: 'generation', label: 'Generation',      icon: Zap         },
-  { id: 'features',   label: 'AI Features',     icon: Brain       },
-  { id: 'mcpservers', label: 'Remote MCP Servers', icon: Link2    },
-  { id: 'documents',  label: 'Documents',       icon: FolderClosed},
-  { id: 'memories',   label: 'Semantic Memory', icon: Sparkles    },
-  { id: 'account',    label: 'Account & Security', icon: User     },
+const TABS: { id: SettingsTab | 'chat'; label: string; icon: React.ElementType; group?: string }[] = [
+  { id: 'chat',            label: 'Back to Chat',       icon: ArrowLeft,    },
+  // ── Personal ──────────────────────────────────────────────────────────
+  { id: 'general',         label: 'General',            icon: Sliders,      group: 'Personal' },
+  { id: 'profile',         label: 'Profile',            icon: User,         group: 'Personal' },
+  { id: 'appearance',      label: 'Appearance',         icon: Monitor,      group: 'Personal' },
+  { id: 'personalization', label: 'Personalization',    icon: Sparkles,     group: 'Personal' },
+  { id: 'notifications',   label: 'Notifications',      icon: Radio,        group: 'Personal' },
+  { id: 'voice',           label: 'Voice',              icon: Radio,        group: 'Personal' },
+  { id: 'shortcuts',       label: 'Keyboard Shortcuts', icon: Zap,          group: 'Personal' },
+  { id: 'usage',           label: 'Usage & Billing',    icon: BarChart2,    group: 'Personal' },
+  { id: 'storage',         label: 'Storage',            icon: HardDrive,    group: 'Personal' },
+  { id: 'datacontrols',    label: 'Data Controls',      icon: Database,     group: 'Personal' },
+  { id: 'memories',        label: 'Semantic Memory',    icon: Brain,        group: 'Personal' },
+  { id: 'account',         label: 'Account & Security', icon: Shield,       group: 'Personal' },
+  // ── Integrations ──────────────────────────────────────────────────────
+  { id: 'models',          label: 'AI Models',          icon: Cpu,          group: 'Integrations' },
+  { id: 'generation',      label: 'Generation',         icon: Zap,          group: 'Integrations' },
+  { id: 'features',        label: 'AI Features',        icon: Sparkles,     group: 'Integrations' },
+  { id: 'mcpservers',      label: 'MCP Servers',        icon: Link2,        group: 'Integrations' },
+  { id: 'connections',     label: 'Connections',        icon: Link2,        group: 'Integrations' },
+  { id: 'documents',       label: 'Documents & RAG',    icon: FolderClosed, group: 'Integrations' },
+  // ── Coding ────────────────────────────────────────────────────────────
+  { id: 'git',             label: 'Git',                icon: FileCode,     group: 'Coding' },
+  { id: 'environments',    label: 'Environments',       icon: Layers,       group: 'Coding' },
 ];
 
 
@@ -1541,37 +1555,48 @@ export default function SettingsPage() {
         <div className="flex-1 min-h-0 flex flex-col lg:flex-row gap-0 rounded-2xl border border-border overflow-hidden shadow-2xl bg-surface transition-colors duration-250">
 
           {/* Sidebar */}
-          <aside className="settings-sidebar w-full lg:w-60 flex-shrink-0 flex lg:flex-col gap-1 bg-background p-4 border-b lg:border-b-0 lg:border-r border-border overflow-y-auto custom-scrollbar transition-colors duration-250">
-            {TABS.map(({ id, label, icon: Icon }) => {
-              const isChat   = id === 'chat';
-              const isActive = !isChat && tab === id;
-              return (
-                <div key={id} className="w-full">
-                  <button
-                    onClick={() => isChat ? navigate('/') : setTab(id as SettingsTab)}
-                    className={`group w-full flex items-center justify-center lg:justify-start gap-3 px-3.5 py-3 rounded-xl
-                      text-xs font-semibold whitespace-nowrap relative overflow-hidden transition-all duration-[180ms]
-                      ${isActive
-                        ? 'bg-surface-2 text-foreground shadow-sm'
-                        : 'text-foreground-2 hover:text-foreground hover:bg-surface-3/50'
-                      }`}
-                  >
-                    {/* Blue left indicator for active tab */}
-                    <span
-                      className={`absolute left-0 top-1/2 -translate-y-1/2 w-0.5 rounded-r-full bg-blue-500
-                        transition-all duration-[180ms] ease-out
-                        ${isActive ? 'h-5 opacity-100' : 'h-0 opacity-0'}`}
-                    />
-                    <Icon className={`w-4 h-4 flex-shrink-0 transition-colors duration-150
-                      ${isActive ? 'text-blue-400' : isChat ? 'text-blue-400 animate-pulse' : 'text-foreground-3 group-hover:text-foreground-2'}`}
-                    />
-                    <span>{label}</span>
-                  </button>
-                  {isChat && <div className="hidden lg:block my-2 border-t border-border" />}
-                </div>
-              );
-            })}
+          <aside className="settings-sidebar w-full lg:w-64 flex-shrink-0 flex lg:flex-col gap-0.5 bg-background p-3 border-b lg:border-b-0 lg:border-r border-border overflow-y-auto custom-scrollbar transition-colors duration-250">
+            {(() => {
+              let lastGroup: string | undefined = undefined;
+              return TABS.map(({ id, label, icon: Icon, group }) => {
+                const isChat   = id === 'chat';
+                const isActive = !isChat && tab === id;
+                const showGroupHeader = !isChat && group && group !== lastGroup;
+                if (showGroupHeader) lastGroup = group;
+                return (
+                  <div key={id} className="w-full">
+                    {showGroupHeader && (
+                      <p className="px-3 pt-4 pb-1.5 text-[9px] font-bold uppercase tracking-widest text-foreground-3/60 hidden lg:block select-none">
+                        {group}
+                      </p>
+                    )}
+                    <button
+                      onClick={() => isChat ? navigate('/') : setTab(id as SettingsTab)}
+                      className={`group w-full flex items-center justify-center lg:justify-start gap-2.5 px-3 py-2.5 rounded-lg
+                        text-xs font-medium whitespace-nowrap relative overflow-hidden transition-all duration-[180ms]
+                        ${isActive
+                          ? 'bg-surface-2 text-foreground shadow-sm'
+                          : 'text-foreground-2 hover:text-foreground hover:bg-surface-3/50'
+                        }`}
+                    >
+                      {/* Blue left indicator for active tab */}
+                      <span
+                        className={`absolute left-0 top-1/2 -translate-y-1/2 w-0.5 rounded-r-full bg-blue-500
+                          transition-all duration-[180ms] ease-out
+                          ${isActive ? 'h-5 opacity-100' : 'h-0 opacity-0'}`}
+                      />
+                      <Icon className={`w-3.5 h-3.5 flex-shrink-0 transition-colors duration-150
+                        ${isActive ? 'text-blue-400' : isChat ? 'text-blue-400' : 'text-foreground-3 group-hover:text-foreground-2'}`}
+                      />
+                      <span className="hidden lg:block">{label}</span>
+                    </button>
+                    {isChat && <div className="hidden lg:block my-2 border-t border-border" />}
+                  </div>
+                );
+              });
+            })()}
           </aside>
+
 
           {/* Content Panel */}
           <div
