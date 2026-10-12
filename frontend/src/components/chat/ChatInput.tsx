@@ -63,39 +63,62 @@ interface ChatInputProps {
   onSelectConnectedChat?: (chat: { id: string; title: string } | null) => void;
 }
 
-export const ChatInput = React.memo(function ChatInput({
-  onSend,
-  isLocked,
-  isStreaming,
-  onStop,
-  activeModel = '',
-  placeholder = 'Ask anything',
-  className = '',
-  chats = [],
-  connectedChat = null,
-  onSelectConnectedChat,
-}: ChatInputProps) {
-  const [text, setText] = useState('');
-  const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
-  const [isListening, setIsListening] = useState(false);
-  const [viewingSnippet, setViewingSnippet] = useState<AttachmentItem | null>(null);
-  const [showConnectModal, setShowConnectModal] = useState(false);
-  const [showPlusMenu, setShowPlusMenu] = useState(false);
-  const [showAdvancedModal, setShowAdvancedModal] = useState(false);
-  const [connectSearch, setConnectSearch] = useState('');
-  const [toggles, setToggles] = useState({
-    webSearch: true,
-    canvas: true,
-    voice: true,
-    connectorSearch: true,
-  });
+export interface ChatInputHandle {
+  setText: (text: string) => void;
+  openFilePicker: () => void;
+  focus: () => void;
+}
 
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const plusMenuRef = useRef<HTMLDivElement>(null);
-  const recognitionRef = useRef<any>(null);
-  const interimTextRef = useRef('');
-  const isSubmittingRef = useRef(false);
+export const ChatInput = React.memo(
+  React.forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput(
+    {
+      onSend,
+      isLocked,
+      isStreaming,
+      onStop,
+      activeModel = '',
+      placeholder = 'Ask anything',
+      className = '',
+      chats = [],
+      connectedChat = null,
+      onSelectConnectedChat,
+    }: ChatInputProps,
+    ref
+  ) {
+    const [text, setText] = useState('');
+    const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
+    const [isListening, setIsListening] = useState(false);
+    const [viewingSnippet, setViewingSnippet] = useState<AttachmentItem | null>(null);
+    const [showConnectModal, setShowConnectModal] = useState(false);
+    const [showPlusMenu, setShowPlusMenu] = useState(false);
+    const [showAdvancedModal, setShowAdvancedModal] = useState(false);
+    const [connectSearch, setConnectSearch] = useState('');
+    const [toggles, setToggles] = useState({
+      webSearch: true,
+      canvas: true,
+      voice: true,
+      connectorSearch: true,
+    });
+
+    const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const fileInputRef = useRef<HTMLInputElement>(null);
+    const plusMenuRef = useRef<HTMLDivElement>(null);
+    const recognitionRef = useRef<any>(null);
+    const interimTextRef = useRef('');
+    const isSubmittingRef = useRef(false);
+
+    React.useImperativeHandle(ref, () => ({
+      setText: (newText: string) => {
+        setText(newText);
+        setTimeout(() => textareaRef.current?.focus(), 50);
+      },
+      openFilePicker: () => {
+        fileInputRef.current?.click();
+      },
+      focus: () => {
+        textareaRef.current?.focus();
+      },
+    }));
 
   // Close plus menu on outside click
   useEffect(() => {
@@ -334,7 +357,14 @@ export const ChatInput = React.memo(function ChatInput({
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
+      const files = Array.from(e.target.files);
       processFiles(e.target.files);
+      if (!text.trim()) {
+        const hasDoc = files.some(f => !f.type.startsWith('image/'));
+        if (hasDoc) {
+          setText('Please analyze this document and summarize key points, conclusions, and action items.');
+        }
+      }
       e.target.value = '';
     }
   };
@@ -859,4 +889,5 @@ export const ChatInput = React.memo(function ChatInput({
       />
     </form>
   );
-});
+}));
+

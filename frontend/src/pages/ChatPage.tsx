@@ -16,7 +16,7 @@ import { Tooltip } from '../components/ui/Tooltip';
 import KeyboardShortcutsModal from '../components/ui/KeyboardShortcutsModal';
 import GlobalSearch from '../components/ui/GlobalSearch';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
-import { ChatInput } from '../components/chat/ChatInput';
+import { ChatInput, ChatInputHandle } from '../components/chat/ChatInput';
 import { TimeWidget } from '../components/chat/TimeWidget';
 import { ToastContainer } from '../components/ui/Toast';
 import { useToast } from '../hooks/useToast';
@@ -1061,6 +1061,7 @@ export default function ChatPage() {
   const [connectedChat, setConnectedChat]         = useState<{ id: string; title: string } | null>(null);
   const editTextareaRef                           = useRef<HTMLTextAreaElement>(null);
   const editFileInputRef                          = useRef<HTMLInputElement>(null);
+  const chatInputRef                              = useRef<ChatInputHandle>(null);
   // Guard: prevent concurrent new-chat creation
   const creatingChatRef                        = useRef(false);
   const skipFetchRef                           = useRef(false);
@@ -3395,43 +3396,81 @@ export default function ChatPage() {
                 <p className="text-sm text-foreground-3 mt-2">Your AI workspace — ask anything, search everywhere, build anything.</p>
               </div>
 
-              {/* Example prompt cards */}
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-3 w-full">
-                {[
-                  { icon: '🔍', label: 'Deep Research',   prompt: 'Research the latest advances in quantum computing and summarize key breakthroughs from the past year.',  category: 'web' },
-                  { icon: '💻', label: 'Write Code',       prompt: 'Write a Python FastAPI endpoint that accepts a CSV file, validates it, and returns summary statistics as JSON.', category: 'code' },
-                  { icon: '📄', label: 'Analyze Document', prompt: 'Analyze the uploaded document and extract the key points, main arguments, and any action items.',           category: 'kb' },
-                  { icon: '📊', label: 'Data Analysis',    prompt: 'Explain how to build a real-time analytics dashboard using Python, Streamlit and DuckDB.',                   category: 'data' },
-                  { icon: '✍️', label: 'Write & Edit',     prompt: 'Help me write a compelling technical blog post about building a RAG system with LangChain and ChromaDB.',     category: 'write' },
-                  { icon: '🧮', label: 'Math & Science',   prompt: 'Explain the backpropagation algorithm step by step with mathematical notation and a simple Python example.', category: 'math' },
-                ].map(({ icon, label, prompt }) => (
-                  <button
-                    key={label}
-                    onClick={() => handleSendMessage(prompt)}
-                    className="group text-left p-3.5 rounded-xl border border-border bg-surface-2/60 hover:bg-surface-2 hover:border-border-2 transition-all duration-150 active:scale-[0.98]"
-                  >
-                    <div className="text-xl mb-2">{icon}</div>
-                    <p className="text-xs font-semibold text-foreground">{label}</p>
-                    <p className="text-[10px] text-foreground-3 mt-0.5 line-clamp-2 leading-relaxed">{prompt.slice(0, 80)}…</p>
-                  </button>
-                ))}
-              </div>
-
               {/* Centered input form */}
+              <div className="w-full space-y-4">
+                <ChatInput
+                  ref={chatInputRef}
+                  key={activeChatId ?? 'new'}
+                  onSend={(text, images, attachedFiles) => handleSendMessage(text, images, attachedFiles ?? [])}
+                  isLocked={isLocked}
+                  isStreaming={isStreaming}
+                  onStop={handleStopGeneration}
+                  activeModel={activeModel}
+                  placeholder="Ask anything — web, docs, code, analysis..."
+                  className="w-full"
+                  chats={chats}
+                  connectedChat={connectedChat}
+                  onSelectConnectedChat={setConnectedChat}
+                />
 
-              <ChatInput
-                key={activeChatId ?? 'new'}
-                onSend={(text, images, attachedFiles) => handleSendMessage(text, images, attachedFiles ?? [])}
-                isLocked={isLocked}
-                isStreaming={isStreaming}
-                onStop={handleStopGeneration}
-                activeModel={activeModel}
-                placeholder="Ask anything — web, docs, code, analysis..."
-                className="w-full"
-                chats={chats}
-                connectedChat={connectedChat}
-                onSelectConnectedChat={setConnectedChat}
-              />
+                {/* Streamlined Capability Pills */}
+                <div className="flex flex-wrap items-center justify-center gap-2 max-w-xl mx-auto pt-1">
+                  {[
+                    {
+                      icon: '🔬',
+                      label: 'Deep Research',
+                      action: () => {
+                        chatInputRef.current?.setText('Research the latest developments and provide a comprehensive report on: ');
+                      },
+                    },
+                    {
+                      icon: '💻',
+                      label: 'Write Code',
+                      action: () => {
+                        chatInputRef.current?.setText('Write a clean, production-ready implementation for: ');
+                      },
+                    },
+                    {
+                      icon: '📄',
+                      label: 'Analyze Document',
+                      action: () => {
+                        chatInputRef.current?.openFilePicker();
+                      },
+                    },
+                    {
+                      icon: '📊',
+                      label: 'Data Analysis',
+                      action: () => {
+                        chatInputRef.current?.setText('Analyze this dataset, calculate summary statistics, and highlight key trends: ');
+                      },
+                    },
+                    {
+                      icon: '✍️',
+                      label: 'Write & Edit',
+                      action: () => {
+                        chatInputRef.current?.setText('Help me draft and refine a clear, well-structured document about: ');
+                      },
+                    },
+                    {
+                      icon: '🧮',
+                      label: 'Math & Science',
+                      action: () => {
+                        chatInputRef.current?.setText('Explain the following concept step-by-step with mathematical formulation: ');
+                      },
+                    },
+                  ].map(({ icon, label, action }) => (
+                    <button
+                      key={label}
+                      type="button"
+                      onClick={action}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-border/70 bg-surface-2/40 hover:bg-surface-2 hover:border-border text-xs text-foreground-3 hover:text-foreground transition-all duration-150 active:scale-95 shadow-2xs"
+                    >
+                      <span className="text-sm">{icon}</span>
+                      <span className="font-medium text-[11px]">{label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
         ) : (

@@ -2512,6 +2512,19 @@ async def retrieve_context_node(
             async with AsyncSessionLocal() as db:
                 user_docs = await DocumentService.get_user_documents(db, user_id)
                 user_docs = user_docs or []
+                # If any document is currently in 'processing' (just uploaded with this prompt),
+                # wait briefly (up to 4s) for background indexing to complete so chunks are queryable.
+                processing_docs = [d for d in user_docs if getattr(d, 'status', None) == 'processing']
+                if processing_docs:
+                    logger.info(f"[retrieve_context] Waiting for {len(processing_docs)} in-flight document(s) to finish indexing...")
+                    for _ in range(8):
+                        await asyncio.sleep(0.5)
+                        async with AsyncSessionLocal() as _check_db:
+                            recheck = await DocumentService.get_user_documents(_check_db, user_id)
+                            if not any(getattr(d, 'status', None) == 'processing' for d in (recheck or [])):
+                                user_docs = recheck or []
+                                break
+                    user_docs = user_docs or []
                 num_docs = len(user_docs)
                 total_size_bytes = sum(getattr(d, "size_bytes", 0) or 0 for d in user_docs)
 
