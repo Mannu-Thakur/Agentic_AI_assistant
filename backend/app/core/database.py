@@ -218,8 +218,9 @@ def run_schema_migrations() -> None:
         logger.info(f"[schema] Added column {table_name}.{col_name}")
 
     try:
-        Base.metadata.create_all(bind=engine)
-        inspector = inspect(engine)
+        real_engine = _get_engine()   # bypass _EngineProxy so inspect() gets a real Engine
+        Base.metadata.create_all(bind=real_engine)
+        inspector = inspect(real_engine)
 
         # 1. Update memories table
         if inspector.has_table("memories"):

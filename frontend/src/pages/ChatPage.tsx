@@ -2997,7 +2997,7 @@ export default function ChatPage() {
       <div className="flex-1 flex flex-col min-w-0 overflow-x-hidden relative bg-background">
 
         {/* Toolbar */}
-        <header className="h-[var(--header-height)] px-4 flex items-center justify-between bg-background flex-shrink-0 z-10 relative">
+        <header className="h-[var(--header-height)] px-4 flex items-center justify-between bg-background flex-shrink-0 z-30 relative">
           <div className="flex items-center gap-2.5 min-w-0">
             <button onClick={() => setConvoOpen((v) => !v)} className="lg:hidden p-1.5 text-foreground-3 hover:text-foreground">
               <MessageSquare className="w-4 h-4" />
