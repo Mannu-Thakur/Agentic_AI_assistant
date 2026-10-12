@@ -139,7 +139,7 @@ export function CostDashboard() {
     if (!token) return;
     setLoading(true);
     try {
-      const res = await fetch(`${BASE_URL}/api/v1/metrics/providers`, {
+      const res = await fetch(`${BASE_URL}/metrics/providers`, {
         headers: { 'Authorization': `Bearer ${token}` },
       });
       if (res.ok) {

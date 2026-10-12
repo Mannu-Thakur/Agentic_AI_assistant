@@ -45,7 +45,7 @@ export async function enqueueMission(
   token: string,
   apiKeys: Record<string, string>,
 ): Promise<MissionRunResponse> {
-  const res = await fetch(`${BASE_URL}/api/v1/mission/run`, {
+  const res = await fetch(`${BASE_URL}/mission/run`, {
     method: 'POST',
     headers: {
       'Content-Type':  'application/json',
@@ -86,7 +86,7 @@ export function streamMissionEvents(
 
   (async () => {
     try {
-      const res = await fetch(`${BASE_URL}/api/v1/mission/${jobId}/stream`, {
+      const res = await fetch(`${BASE_URL}/mission/${jobId}/stream`, {
         headers,
         signal: controller.signal,
       });
@@ -145,7 +145,7 @@ export function streamMissionEvents(
  * Step 3 — Poll final job status (fallback / periodic check).
  */
 export async function getMissionStatus(jobId: string, token: string): Promise<any> {
-  const res = await fetch(`${BASE_URL}/api/v1/mission/${jobId}`, {
+  const res = await fetch(`${BASE_URL}/mission/${jobId}`, {
     headers: { 'Authorization': `Bearer ${token}` },
   });
   if (!res.ok) return null;
@@ -156,7 +156,7 @@ export async function getMissionStatus(jobId: string, token: string): Promise<an
  * Get all missions for the current user.
  */
 export async function listMissions(token: string): Promise<any[]> {
-  const res = await fetch(`${BASE_URL}/api/v1/mission/`, {
+  const res = await fetch(`${BASE_URL}/mission/`, {
     headers: { 'Authorization': `Bearer ${token}` },
   });
   if (!res.ok) return [];
@@ -172,7 +172,7 @@ export async function approveHITL(
   token: string,
   reason?: string,
 ): Promise<void> {
-  await fetch(`${BASE_URL}/api/v1/hitl/approve/${missionId}`, {
+  await fetch(`${BASE_URL}/hitl/approve/${missionId}`, {
     method: 'POST',
     headers: {
       'Content-Type':  'application/json',
@@ -190,7 +190,7 @@ export async function rejectHITL(
   token: string,
   reason?: string,
 ): Promise<void> {
-  await fetch(`${BASE_URL}/api/v1/hitl/reject/${missionId}`, {
+  await fetch(`${BASE_URL}/hitl/reject/${missionId}`, {
     method: 'POST',
     headers: {
       'Content-Type':  'application/json',
@@ -217,7 +217,7 @@ export async function persistMission(
   },
 ): Promise<{ user_message_id: string; assistant_message_id: string } | null> {
   try {
-    const res = await fetch(`${BASE_URL}/api/v1/mission/persist`, {
+    const res = await fetch(`${BASE_URL}/mission/persist`, {
       method: 'POST',
       headers: {
         'Content-Type':  'application/json',

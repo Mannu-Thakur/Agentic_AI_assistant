@@ -162,3 +162,33 @@ async def test_smoke_pin_and_star_chat(auth_user):
             assert missing_resp.status_code == 404
     finally:
         app.dependency_overrides.pop(get_current_user, None)
+
+
+@pytest.mark.anyio
+async def test_api_prefix_normalization_and_mission_endpoints(auth_user):
+    """Verify ASGI normalizer transparently rewrites duplicate /api/v1 prefixes and mission routes work."""
+    app.dependency_overrides[get_current_user] = lambda: auth_user
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # 1. Normal health check
+            r1 = await client.get("/api/v1/health")
+            assert r1.status_code == 200
+
+            # 2. Duplicate prefix normalized transparently (not 404!)
+            r2 = await client.get("/api/v1/api/v1/health")
+            assert r2.status_code == 200
+            assert r2.json()["status"] == r1.json()["status"]
+
+            # 3. Mission list endpoint with normal prefix
+            r3 = await client.get("/api/v1/mission/")
+            assert r3.status_code == 200
+            assert "missions" in r3.json()
+
+            # 4. Mission list endpoint with duplicate prefix normalized
+            r4 = await client.get("/api/v1/api/v1/mission/")
+            assert r4.status_code == 200
+            assert r4.json() == r3.json()
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+

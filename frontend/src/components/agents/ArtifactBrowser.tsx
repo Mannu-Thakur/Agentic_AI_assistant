@@ -85,7 +85,7 @@ function formatDate(iso: string): string {
 // ─────────────────────────────────────────────────────────────
 
 async function fetchArtifacts(token: string): Promise<Artifact[]> {
-  const res = await fetch(`${BASE_URL}/api/v1/artifacts`, {
+  const res = await fetch(`${BASE_URL}/artifacts`, {
     headers: { 'Authorization': `Bearer ${token}` },
   });
   if (!res.ok) return [];
@@ -94,11 +94,20 @@ async function fetchArtifacts(token: string): Promise<Artifact[]> {
 }
 
 async function deleteArtifact(id: string, token: string): Promise<boolean> {
-  const res = await fetch(`${BASE_URL}/api/v1/artifacts/${id}`, {
+  const res = await fetch(`${BASE_URL}/artifacts/${id}`, {
     method: 'DELETE',
     headers: { 'Authorization': `Bearer ${token}` },
   });
   return res.ok || res.status === 204;
+}
+
+function getArtifactDownloadUrl(downloadUrl: string): string {
+  if (!downloadUrl) return '#';
+  if (downloadUrl.startsWith('http')) return downloadUrl;
+  const cleanPath = downloadUrl.startsWith('/api/v1')
+    ? downloadUrl.slice('/api/v1'.length)
+    : downloadUrl;
+  return `${BASE_URL}${cleanPath.startsWith('/') ? '' : '/'}${cleanPath}`;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -129,7 +138,7 @@ function PreviewModal({ artifact, onClose }: { artifact: Artifact; onClose: () =
         </div>
         <div className="flex gap-2 mt-4">
           <a
-            href={`${BASE_URL}${artifact.download_url}`}
+            href={getArtifactDownloadUrl(artifact.download_url)}
             download={artifact.filename}
             className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent/90 transition-colors"
           >
@@ -204,7 +213,7 @@ function ArtifactCard({
           </button>
         )}
         <a
-          href={`${BASE_URL}${artifact.download_url}`}
+          href={getArtifactDownloadUrl(artifact.download_url)}
           download={artifact.filename}
           className="p-1.5 rounded-lg hover:bg-surface-2 text-foreground-3 hover:text-foreground transition-colors"
           title="Download"

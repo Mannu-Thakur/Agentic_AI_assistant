@@ -466,6 +466,22 @@ async def request_lifecycle_middleware(request: Request, call_next):
     return response
 
 
+@app.middleware("http")
+async def normalize_api_prefix_middleware(request: Request, call_next):
+    """
+    Normalizes duplicated /api/v1 prefixes in scope path (e.g. /api/v1/api/v1/...)
+    before reaching downstream routing and handlers.
+    """
+    path = request.scope.get("path", "")
+    if "/api/v1/api/v1" in path:
+        while "/api/v1/api/v1" in path:
+            path = path.replace("/api/v1/api/v1", "/api/v1")
+        request.scope["path"] = path
+        if "raw_path" in request.scope:
+            request.scope["raw_path"] = path.encode("ascii")
+    return await call_next(request)
+
+
 # CORSMiddleware MUST be added LAST so it becomes the outermost middleware,
 # ensuring Access-Control-Allow-Origin headers are attached to all responses,
 # preflight OPTIONS requests, and unhandled exception responses.
