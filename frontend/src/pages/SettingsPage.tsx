@@ -19,7 +19,7 @@ import {
   Copy, CheckCheck, Radio, PlusCircle, BarChart2,
   Bell, Mic, MicOff, Volume2, ExternalLink, GitBranch
 } from 'lucide-react';
-import { apiRequest, BASE_URL } from '../services/api';
+import { apiRequest, apiRequestWithWakeup, BASE_URL } from '../services/api';
 import { ProviderKeyManager } from '../services/providerKeyManager';
 
 // -------------------------------------------------------------
@@ -114,10 +114,11 @@ type IngestionStep = {
 };
 
 const INGESTION_STEPS: IngestionStep[] = [
+  { id: 'waking',    icon: Zap,        label: 'Waking up server',     detail: 'Backend is starting from cold sleep (Render free tier — ~30-60s)' },
   { id: 'uploading', icon: UploadCloud, label: 'Uploading document',   detail: 'Transmitting file bytes to the server' },
   { id: 'parsing',   icon: FileText,    label: 'Parsing document',     detail: 'Extracting raw text from PDF/DOCX/XLSX' },
   { id: 'chunking',  icon: Scissors,    label: 'Chunking text',        detail: 'Splitting content into semantic segments' },
-  { id: 'splitting', icon: Layers,      label: 'Text splitting',       detail: 'Applying recursive character splitter' },
+  { id: 'splitting', icon: Layers,      label: 'Text splitting',        detail: 'Applying recursive character splitter' },
   { id: 'embedding', icon: Cpu,         label: 'Creating embeddings',  detail: 'Encoding chunks into dense vector space' },
   { id: 'storing',   icon: HardDrive,   label: 'Storing in vector DB', detail: 'Writing vectors into Chroma/FAISS index' },
   { id: 'indexing',  icon: Database,    label: 'Indexing complete',    detail: 'Document is ready for semantic retrieval' },
@@ -1837,14 +1838,16 @@ export default function SettingsPage() {
   }, []);
 
   // -- Ingestion progress ------------------------------------
-  const startIngestionProgress = useCallback((filename: string) => {
+  const startIngestionProgress = useCallback((filename: string, startStep = 1) => {
+    // startStep=0 → show 'waking up' first; startStep=1 → skip straight to 'uploading'
     setIngestFilename(filename);
-    setIngestStep(0);
+    setIngestStep(startStep);
     setIngestDone(false);
     setUploadError(null);
 
-    let step = 0;
-    const STEP_DURATIONS = [600, 900, 800, 700, 1200, 800];
+    let step = startStep;
+    // Durations for steps 1-7 (index 0 = waking, handled separately)
+    const STEP_DURATIONS = [0, 600, 900, 800, 700, 1200, 800];
 
     const advance = () => {
       step += 1;
@@ -1853,7 +1856,8 @@ export default function SettingsPage() {
         ingestTimerRef.current = setTimeout(advance, STEP_DURATIONS[step]);
       }
     };
-    ingestTimerRef.current = setTimeout(advance, STEP_DURATIONS[0]);
+    const delay = STEP_DURATIONS[startStep] ?? 600;
+    ingestTimerRef.current = setTimeout(advance, delay);
   }, []);
 
   const pollUntilReady = useCallback(async (docId: string) => {
@@ -1961,11 +1965,24 @@ export default function SettingsPage() {
     const formData = new FormData();
     formData.append('file', file);
     try {
-      startIngestionProgress(file.name);
-      const doc: DocumentFile = await apiRequest('/documents/upload', {
-        method: 'POST',
-        body: formData,
-      });
+      // Show the 'waking up' step (index 0) immediately so users know what's happening.
+      // onWaking is called only when a cold-start network failure is detected.
+      setIngestFilename(file.name);
+      setIngestStep(0);          // step 0 = "Waking up server"
+      setIngestDone(false);
+      setUploadError(null);
+
+      const doc: DocumentFile = await apiRequestWithWakeup(
+        '/documents/upload',
+        { method: 'POST', body: formData },
+        (_attempt, _max) => {
+          // Keep the waking step active during each retry tick — UI already shows it.
+          setIngestStep(0);
+        },
+      );
+
+      // Backend is now warm — advance to the upload→indexing animation steps
+      startIngestionProgress(file.name, 1);   // startStep=1 skips 'waking'
       setDocuments((prev) => [doc, ...prev.filter((d) => d.id !== doc.id)]);
       pollUntilReady(doc.id);
     } catch (err: unknown) {

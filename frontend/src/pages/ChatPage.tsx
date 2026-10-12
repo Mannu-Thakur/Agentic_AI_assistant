@@ -9,7 +9,7 @@ import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { useChatStore, getChatTimestamp } from '../store/chatStore';
 import { useUIStore } from '../store/uiStore';
 import { useAuthStore } from '../store/authStore';
-import { apiRequest, BASE_URL } from '../services/api';
+import { apiRequest, apiRequestWithWakeup, BASE_URL } from '../services/api';
 import { ProviderKeyManager } from '../services/providerKeyManager';
 import Logo from '../components/ui/Logo';
 import { Tooltip } from '../components/ui/Tooltip';
@@ -1759,7 +1759,7 @@ export default function ChatPage() {
           const fd = new FormData();
           fd.append('file', docFile);
           fd.append('chat_id', chatId);
-          uploads.push(apiRequest('/documents/upload', { method: 'POST', body: fd }));
+          uploads.push(apiRequestWithWakeup('/documents/upload', { method: 'POST', body: fd }));
         }
         const uploadedDocs: any[] = await Promise.all(uploads);
 

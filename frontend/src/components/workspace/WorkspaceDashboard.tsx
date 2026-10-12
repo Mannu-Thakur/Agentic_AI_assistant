@@ -5,7 +5,7 @@ import {
   Trash2, RefreshCw, Layers, ShieldCheck, HardDrive,
   FileCode, CheckCircle2, Loader2, XCircle
 } from 'lucide-react';
-import { apiRequest } from '../../services/api';
+import { apiRequest, apiRequestWithWakeup } from '../../services/api';
 
 interface WorkspaceDoc {
   id: string;
@@ -46,11 +46,14 @@ export function WorkspaceDashboard() {
     fetchDocuments();
   }, []);
 
+  const [waking, setWaking] = useState<boolean>(false);
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
     setUploading(true);
+    setWaking(false);
     setError(null);
 
     const formData = new FormData();
@@ -59,12 +62,18 @@ export function WorkspaceDashboard() {
     }
 
     try {
-      await apiRequest('/documents/upload', {
-        method: 'POST',
-        body: formData,
-      });
+      await apiRequestWithWakeup(
+        '/documents/upload',
+        { method: 'POST', body: formData },
+        (_attempt, _max) => {
+          // Show "Waking up server…" in the button while we wait for the cold start
+          setWaking(true);
+        },
+      );
+      setWaking(false);
       await fetchDocuments();
     } catch (err: any) {
+      setWaking(false);
       setError(err?.message || 'Failed to upload document');
     } finally {
       setUploading(false);
@@ -114,14 +123,14 @@ export function WorkspaceDashboard() {
             </button>
             <label className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition cursor-pointer shadow-lg shadow-blue-500/20">
               <UploadCloud className="w-4 h-4" />
-              {uploading ? 'Uploading...' : 'Upload Files'}
+              {waking ? 'Waking up server…' : uploading ? 'Uploading...' : 'Upload Files'}
               <input
                 type="file"
                 multiple
                 accept=".pdf,.docx,.doc,.xlsx,.xls,.pptx,.ppt,.txt,.md,.json,.csv,.png,.jpg,.jpeg,.bmp,.gif,.tiff,.webp,.heic,.heif"
                 className="hidden"
                 onChange={handleFileUpload}
-                disabled={uploading}
+                disabled={uploading || waking}
               />
             </label>
           </div>

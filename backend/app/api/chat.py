@@ -234,6 +234,9 @@ async def stream_agent_message(
     clean_save_content = _re.sub(r"\[System Context:[^\]]*\]\s*", "", schema.content or "")
     clean_save_content = _re.sub(r"\[System Context\]\s*", "", clean_save_content)
     clean_save_content = _re.sub(r"\[User Location Context:[^\]]*\]\s*", "", clean_save_content).strip()
+    # NOTE: [Uploaded Document: ...] tags are intentionally kept in the saved content
+    # so that file chips remain visible when the chat is reloaded from the DB.
+    # They are stripped only from the LangChain message history (langchain_messages) below.
 
     images_payload = (
         [img.model_dump() for img in schema.images] if schema.images else None
@@ -392,7 +395,10 @@ async def stream_agent_message(
     for msg in db_messages_trimmed:
       c = _re.sub(r"\[System Context:[^\]]*\]\s*", "", msg.content or "")
       c = _re.sub(r"\[System Context\]\s*", "", c)
-      c = _re.sub(r"\[User Location Context:[^\]]*\]\s*", "", c).strip()
+      c = _re.sub(r"\[User Location Context:[^\]]*\]\s*", "", c)
+      # Strip the [Uploaded Document:] tag from history — actual content is
+      # injected separately as inline_doc_context below.
+      c = _re.sub(r"\[Uploaded Document:[^\]]*\]\s*", "", c).strip()
       if msg.role == "user":
         langchain_messages.append(HumanMessage(content=c))
       elif msg.role == "assistant":
@@ -439,15 +445,19 @@ async def stream_agent_message(
         ]
         logger.info(f"[ChatUpload] Detected upload tag — filenames: {_uploaded_names_raw}")
 
-    # Build candidate names set (raw, sanitized, lowercase)
+    # Build candidate names set (raw, sanitized, lowercase, and space↔underscore variants)
     _candidate_names = set()
     for _n in _uploaded_names_raw:
-        _candidate_names.add(_n)
-        _candidate_names.add(_sanitize_fn(_n))
+        _candidate_names.add(_n)                          # original name as sent by frontend
+        _candidate_names.add(_sanitize_fn(_n))            # sanitized (underscores etc.)
         _candidate_names.add(_n.lower())
         _candidate_names.add(_sanitize_fn(_n).lower())
+        # Also add space↔underscore variant for names like "My Report.pdf" → "My_Report.pdf"
+        _candidate_names.add(_n.replace(" ", "_"))
+        _candidate_names.add(_n.replace("_", " "))
 
     try:
+        from datetime import timedelta as _td
         async with _FreshSession() as _fresh_db:
             _filters = [_DocModel.user_id == current_user.id]
             _sub_conds = []
@@ -455,6 +465,10 @@ async def stream_agent_message(
                 _sub_conds.append(_DocModel.filename.in_(list(_candidate_names)))
             if chat_id:
                 _sub_conds.append(_DocModel.chat_id == chat_id)
+            # Time-window fallback: any doc uploaded in the last 10 minutes for this user
+            # catches sanitization mismatches (e.g. "My Report.pdf" stored as "My_Report.pdf")
+            _ten_min_ago = datetime.now(timezone.utc) - _td(minutes=10)
+            _sub_conds.append(_DocModel.uploaded_at >= _ten_min_ago)
 
             if _sub_conds:
                 _filters.append(_sql_or(*_sub_conds))
@@ -516,7 +530,8 @@ async def stream_agent_message(
     elif _upload_tag_match or (user_docs and any(d.chat_id == chat_id for d in user_docs)):
         logger.warning(f"[ChatUpload] inline_doc_context is EMPTY — LLM will get no document content")
 
-    # Build uploaded_file_paths: include any document on disk for this chat/user, whether ready or processing
+    # Build uploaded_file_paths: include docs on disk for this chat/user regardless of status
+    # (status='failed' docs still have their file on disk and can be parsed inline)
     uploaded_file_paths = []
     _all_candidate_docs = list(user_docs)
     for _d in _recent_docs:
@@ -527,7 +542,6 @@ async def stream_agent_message(
         if (
             doc.storage_path
             and os.path.exists(doc.storage_path)
-            and doc.status in ("ready", "processing")
             and not any(doc.storage_path.lower().endswith(ext) for ext in _IMAGE_EXTENSIONS)
         ):
             if doc.storage_path not in uploaded_file_paths:
