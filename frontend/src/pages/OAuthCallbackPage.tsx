@@ -60,7 +60,7 @@ export default function OAuthCallbackPage({ provider }: { provider: 'google' | '
         }
         
         // Save auth details in store (remember by default for OAuth)
-        loginStore(data.access_token, user, true, data.expires_in);
+        loginStore(data.access_token, user, true, data.expires_in, data.refresh_token);
         navigate('/');
       } catch (err: any) {
         setError(err.message || 'OAuth exchange failed.');

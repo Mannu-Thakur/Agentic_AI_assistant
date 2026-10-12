@@ -22,7 +22,7 @@ from app.core.security import (
     verify_reset_token,
     verify_and_consume_reset_token,
 )
-from app.schemas.auth import UserRegister, UserLogin, Token, UserOut, ForgotPasswordRequest, ResetPasswordRequest
+from app.schemas.auth import UserRegister, UserLogin, Token, UserOut, ForgotPasswordRequest, ResetPasswordRequest, RefreshTokenRequest
 from app.services.auth_service import AuthService
 from app.services.audit_service import AuditService
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -155,27 +155,39 @@ async def login(
     access_token = create_access_token(user.id, expires_delta=access_token_expires)
     refresh_token = create_refresh_token(user.id, expires_delta=refresh_token_expires)
     
-    # Set Refresh Token in HTTP-Only cookie for security
+    # Set Refresh Token in HTTP-Only cookie for security (scoped to root path)
     response.set_cookie(
         key="refresh_token",
         value=refresh_token,
         httponly=True,
         max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 3600,
         samesite=settings.COOKIE_SAMESITE,
-        secure=request.url.scheme == "https" or settings.ENVIRONMENT in ("staging", "production"),   
+        secure=request.url.scheme == "https" or settings.ENVIRONMENT in ("staging", "production"),
+        path="/",
     )
     
     return Token(
         access_token=access_token,
+        refresh_token=refresh_token,
         expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
     )
 
 
 @router.post("/refresh", response_model=Token)
-async def refresh_token(request: Request, response: Response, db: AsyncSession = Depends(get_db)):
+async def refresh_token(
+    request: Request,
+    response: Response,
+    body: Optional[RefreshTokenRequest] = None,
+    db: AsyncSession = Depends(get_db)
+):
     refresh_token = request.cookies.get("refresh_token")
+    if not refresh_token and body and body.refresh_token:
+        refresh_token = body.refresh_token
     if not refresh_token:
-        response.delete_cookie("refresh_token")
+        refresh_token = request.headers.get("x-refresh-token")
+
+    if not refresh_token:
+        response.delete_cookie("refresh_token", path="/")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing refresh token"
@@ -208,7 +220,7 @@ async def refresh_token(request: Request, response: Response, db: AsyncSession =
 
     user_id = verify_token(refresh_token, "refresh")
     if not user_id:
-        response.delete_cookie("refresh_token")
+        response.delete_cookie("refresh_token", path="/")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired refresh token"
@@ -216,7 +228,7 @@ async def refresh_token(request: Request, response: Response, db: AsyncSession =
         
     # Check if the user session has been globally revoked
     if await is_token_blacklisted(f"user_revoked:{user_id}"):
-        response.delete_cookie("refresh_token")
+        response.delete_cookie("refresh_token", path="/")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Session has been revoked"
@@ -224,6 +236,7 @@ async def refresh_token(request: Request, response: Response, db: AsyncSession =
         
     user = await AuthService.get_user_by_id(db, user_id)
     if not user:
+        response.delete_cookie("refresh_token", path="/")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found"
@@ -231,7 +244,6 @@ async def refresh_token(request: Request, response: Response, db: AsyncSession =
         
     # Blacklist the old refresh token as we rotate it
     await blacklist_token(refresh_token, settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 3600)
-
 
     access_token = create_access_token(user.id)
     new_refresh_token = create_refresh_token(user.id)
@@ -243,10 +255,12 @@ async def refresh_token(request: Request, response: Response, db: AsyncSession =
         max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 3600,
         samesite=settings.COOKIE_SAMESITE,
         secure=request.url.scheme == "https" or settings.ENVIRONMENT in ("staging", "production"),
+        path="/",
     )
     
     return Token(
         access_token=access_token,
+        refresh_token=new_refresh_token,
         expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
     )
 
@@ -495,10 +509,12 @@ async def google_callback(
         max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 3600,
         samesite=settings.COOKIE_SAMESITE,
         secure=request.url.scheme == "https" or settings.ENVIRONMENT in ("staging", "production"),
+        path="/",
     )
     
     return Token(
         access_token=access_token,
+        refresh_token=refresh_token,
         expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         user=UserOut.model_validate(user)
     )
@@ -722,10 +738,12 @@ async def github_callback(
         max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 3600,
         samesite=settings.COOKIE_SAMESITE,
         secure=request.url.scheme == "https" or settings.ENVIRONMENT in ("staging", "production"),
+        path="/",
     )
     
     return Token(
         access_token=access_token,
+        refresh_token=refresh_token,
         expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         user=UserOut.model_validate(user)
     )

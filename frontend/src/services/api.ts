@@ -26,9 +26,22 @@ async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs: nu
 /** Attempt a token refresh. Returns the new access token, or null on failure. */
 async function attemptTokenRefresh(): Promise<string | null> {
   try {
+    const storedRefresh = useAuthStore.getState().getRefreshToken();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (storedRefresh) {
+      headers['x-refresh-token'] = storedRefresh;
+    }
+
     const refreshResponse = await fetchWithTimeout(
       `${BASE_URL}/auth/refresh`,
-      { method: 'POST', credentials: 'include' },
+      {
+        method: 'POST',
+        credentials: 'include',
+        headers,
+        body: JSON.stringify({ refresh_token: storedRefresh || undefined }),
+      },
       15_000,
     );
 
@@ -36,7 +49,8 @@ async function attemptTokenRefresh(): Promise<string | null> {
       const refreshData = await refreshResponse.json();
       const newToken: string = refreshData.access_token;
       const expiresIn: number | undefined = refreshData.expires_in;
-      useAuthStore.getState().updateToken(newToken, expiresIn);
+      const newRefreshToken: string | undefined = refreshData.refresh_token;
+      useAuthStore.getState().updateToken(newToken, expiresIn, newRefreshToken);
       return newToken;
     }
   } catch {

@@ -57,7 +57,7 @@ export default function LoginPage() {
           headers: { Authorization: `Bearer ${data.access_token}` }
         });
         
-        loginStore(data.access_token, user, rememberMe, data.expires_in);
+        loginStore(data.access_token, user, rememberMe, data.expires_in, data.refresh_token);
         navigate('/');
       } else {
         await apiRequest('/auth/register', {
@@ -74,7 +74,7 @@ export default function LoginPage() {
           headers: { Authorization: `Bearer ${data.access_token}` }
         });
         
-        loginStore(data.access_token, user, rememberMe, data.expires_in);
+        loginStore(data.access_token, user, rememberMe, data.expires_in, data.refresh_token);
         navigate('/');
       }
     } catch (err: any) {

@@ -51,9 +51,9 @@ class Settings(BaseSettings):
 
     # Security & JWT
     SECRET_KEY: str = _DEFAULT_SECRET_KEY
-    # M-1 FIX: Reduced from 1440 (24h) to 30 minutes. Short-lived access tokens limit
-    # the blast radius if a token is stolen. Refresh tokens remain 30 days.
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    # Extended access token expiry (7 days) prevents early logouts during active sessions.
+    # Refresh tokens remain valid for 30 days.
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 10080  # 7 days (10080 minutes)
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30       # 30 days rolling refresh
     ALGORITHM: str = "HS256"
 

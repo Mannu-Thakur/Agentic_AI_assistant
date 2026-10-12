@@ -15,10 +15,11 @@ interface AuthState {
   user: User | null;
   isAuthenticated: boolean;
   rememberMe: boolean; // tracks which storage was used at login, for updateToken
-  login: (token: string, user: User, rememberMe?: boolean, expiresIn?: number) => void;
+  login: (token: string, user: User, rememberMe?: boolean, expiresIn?: number, refreshToken?: string) => void;
   logout: () => void;
   updateUser: (user: User) => void;
-  updateToken: (token: string, expiresIn?: number) => void;
+  updateToken: (token: string, expiresIn?: number, newRefreshToken?: string) => void;
+  getRefreshToken: () => string | null;
   isTokenExpiringSoon: (thresholdSeconds?: number) => boolean;
 }
 
@@ -42,10 +43,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   isAuthenticated: !!getStorageItem('access_token'),
   rememberMe: !!localStorage.getItem('access_token'), // true if token was stored in localStorage
 
-  login: (token, user, rememberMe = true, expiresIn) => {
+  login: (token, user, rememberMe = true, expiresIn, refreshToken) => {
     const storage = rememberMe ? localStorage : sessionStorage;
     storage.setItem('access_token', token);
     storage.setItem('user_info', JSON.stringify(user));
+    if (refreshToken) {
+      storage.setItem('refresh_token', refreshToken);
+    }
 
     // Persist token expiry (ms since epoch) so it survives page refresh
     const expiry = expiresIn ? Date.now() + expiresIn * 1000 : null;
@@ -58,6 +62,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // Clear the other storage type to avoid stale data
     const otherStorage = rememberMe ? sessionStorage : localStorage;
     otherStorage.removeItem('access_token');
+    otherStorage.removeItem('refresh_token');
     otherStorage.removeItem('user_info');
     otherStorage.removeItem('token_expiry');
 
@@ -66,9 +71,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   logout: () => {
     localStorage.removeItem('access_token');
+    localStorage.removeItem('refresh_token');
     localStorage.removeItem('user_info');
     localStorage.removeItem('token_expiry');
     sessionStorage.removeItem('access_token');
+    sessionStorage.removeItem('refresh_token');
     sessionStorage.removeItem('user_info');
     sessionStorage.removeItem('token_expiry');
     set({ token: null, tokenExpiry: null, user: null, isAuthenticated: false });
@@ -84,16 +91,21 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   /** Silently update the stored token (e.g. after a background refresh) */
-  updateToken: (token, expiresIn) => {
+  updateToken: (token, expiresIn, newRefreshToken) => {
     const expiry = expiresIn ? Date.now() + expiresIn * 1000 : get().tokenExpiry;
     const { rememberMe } = get();
     const storage = rememberMe ? localStorage : sessionStorage;
     storage.setItem('access_token', token);
+    if (newRefreshToken) {
+      storage.setItem('refresh_token', newRefreshToken);
+    }
     if (expiry !== null && expiry !== undefined) {
       storage.setItem('token_expiry', String(expiry));
     }
     set({ token, tokenExpiry: expiry ?? null });
   },
+
+  getRefreshToken: () => getStorageItem('refresh_token'),
 
   /** Returns true if the token will expire within `thresholdSeconds` (default 60s). */
   isTokenExpiringSoon: (thresholdSeconds = 60) => {

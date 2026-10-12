@@ -31,10 +31,14 @@ class UserOut(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+class RefreshTokenRequest(BaseModel):
+    refresh_token: Optional[str] = None
+
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
     expires_in: int
+    refresh_token: Optional[str] = None
     user: Optional[UserOut] = None
 
 class UserPreferenceOut(BaseModel):
