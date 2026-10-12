@@ -1280,6 +1280,19 @@ export default function ChatPage() {
         });
         setChats(Array.from(chatMap.values()));
 
+        // ── Sync DB pin flags into local pinnedChats state ───────────
+        // Backend is truth; merge with localStorage so cross-device pins work
+        const dbPinnedIds = (loadedChats || [])
+          .filter((c: any) => c.is_pinned)
+          .map((c: any) => c.id as string);
+        if (dbPinnedIds.length > 0) {
+          setPinnedChats((prev) => {
+            const merged = Array.from(new Set([...prev, ...dbPinnedIds]));
+            localStorage.setItem('omni_pinned_chats', JSON.stringify(merged));
+            return merged;
+          });
+        }
+
         if (urlChatId) {
           // Hydrate the cache BEFORE setting activeChatId so the effect at line ~993
           // sees hasCachedMessages=true and skips the redundant second fetch
@@ -1527,29 +1540,41 @@ export default function ChatPage() {
   };
 
   // ── Pin Toggle ──────────────────────────────────────────────
-  const togglePinChat = (id: string, e?: React.MouseEvent) => {
+  const togglePinChat = async (id: string, e?: React.MouseEvent) => {
     e?.stopPropagation();
-    let next: string[];
-    if (pinnedChats.includes(id)) {
-      next = pinnedChats.filter((cid) => cid !== id);
-    } else {
-      next = [...pinnedChats, id];
-    }
+    const willPin = !pinnedChats.includes(id);
+    // Optimistic update
+    const next = willPin ? [...pinnedChats, id] : pinnedChats.filter((cid) => cid !== id);
     setPinnedChats(next);
     localStorage.setItem('omni_pinned_chats', JSON.stringify(next));
+    // Persist to backend
+    try {
+      await apiRequest(`/chats/${id}`, { method: 'PATCH', json: { is_pinned: willPin } });
+    } catch {
+      // Rollback optimistic update on failure
+      setPinnedChats(pinnedChats);
+      localStorage.setItem('omni_pinned_chats', JSON.stringify(pinnedChats));
+      addToast('Failed to save pin state', 'error');
+    }
   };
 
-  // ── Archive Toggle ──────────────────────────────────────────
-  const toggleArchiveChat = (id: string, e?: React.MouseEvent) => {
+  // ── Archive Toggle (maps to is_favorite=false for now; archived via localStorage) ──
+  const toggleArchiveChat = async (id: string, e?: React.MouseEvent) => {
     e?.stopPropagation();
-    let next: string[];
-    if (archivedChats.includes(id)) {
-      next = archivedChats.filter((cid) => cid !== id);
-    } else {
-      next = [...archivedChats, id];
-    }
+    const willArchive = !archivedChats.includes(id);
+    // Optimistic update
+    const next = willArchive ? [...archivedChats, id] : archivedChats.filter((cid) => cid !== id);
     setArchivedChats(next);
     localStorage.setItem('omni_archived_chats', JSON.stringify(next));
+    // If archiving, also un-pin
+    if (willArchive && pinnedChats.includes(id)) {
+      const nextPinned = pinnedChats.filter((cid) => cid !== id);
+      setPinnedChats(nextPinned);
+      localStorage.setItem('omni_pinned_chats', JSON.stringify(nextPinned));
+      try {
+        await apiRequest(`/chats/${id}`, { method: 'PATCH', json: { is_pinned: false } });
+      } catch { /* non-critical */ }
+    }
   };
 
   // ── Stop generation ──────────────────────────────────────────

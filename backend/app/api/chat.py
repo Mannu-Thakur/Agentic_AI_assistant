@@ -141,14 +141,16 @@ async def update_chat(
     current_user: UserOut = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-  chat = await ChatService.get_chat_by_id(db, chat_id, current_user.id)
-  if not chat:
+  """Update chat title, pin state, or favorite state (any combination)."""
+  updated = await ChatService.update_chat_fields(
+      db, chat_id, current_user.id,
+      title=schema.title,
+      is_pinned=schema.is_pinned,
+      is_favorite=schema.is_favorite,
+  )
+  if not updated:
     raise HTTPException(status_code=404, detail="Conversation session not found")
-  if schema.title is not None:
-    updated = await ChatService.update_chat_title(db, chat_id, current_user.id, schema.title)
-    if updated:
-      return updated
-  return chat
+  return updated
 
 
 @router.delete("/all")
@@ -625,6 +627,7 @@ async def stream_agent_message(
 
       config = {
           "configurable": {
+              "thread_id": f"{current_user.id}:{chat_id}",
               "user_id": current_user.id,
               "chat_id": chat_id,
               "memories": memories,

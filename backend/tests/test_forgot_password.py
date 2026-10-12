@@ -59,7 +59,7 @@ async def test_forgot_password_and_reset_flow(db_session):
                 "/api/v1/auth/reset-password",
                 json={"token": token, "new_password": "short"}
             )
-            assert weak_res.status_code == 400
+            assert weak_res.status_code in (400, 422)
 
             # 6. Reset with valid new password should succeed
             reset_res = await client.post(

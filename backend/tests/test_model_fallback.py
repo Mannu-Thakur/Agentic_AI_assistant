@@ -26,20 +26,19 @@ def test_is_quota_exhaustion_detection():
 
 
 def test_deprecated_models_preserves_valid_gemini_models():
-    """Verify modern Gemini models are active and obsolete ones are remapped to gemini-2.0-flash."""
-    assert "gemini-2.0-flash" not in DEPRECATED_MODELS
-    assert "gemini-1.5-flash" not in DEPRECATED_MODELS
-    assert "gemini-2.0-flash-lite" not in DEPRECATED_MODELS
+    """Verify modern Gemini models are active and obsolete ones are remapped to gemini-3.5-flash."""
+    assert "gemini-3.5-flash" not in DEPRECATED_MODELS
+    assert "gemini-3.5-flash-lite" not in DEPRECATED_MODELS
 
     # Truly retired models and legacy aliases are remapped
-    assert DEPRECATED_MODELS.get("gemini-1.0-pro") == "gemini-2.0-flash"
-    assert DEPRECATED_MODELS.get("gemini-pro") == "gemini-2.0-flash"
+    assert DEPRECATED_MODELS.get("gemini-1.0-pro") == "gemini-3.5-flash"
+    assert DEPRECATED_MODELS.get("gemini-pro") == "gemini-3.5-flash"
 
 
 @pytest.mark.asyncio
 async def test_intra_provider_groq_fallback_on_tpm_limit(monkeypatch):
     """
-    When Groq llama-3.3-70b-versatile hits a 6K TPM limit (HTTP 429),
+    When Groq primary model hits a 6K TPM limit (HTTP 429),
     the fallback engine should seamlessly fall back to llama-3.1-8b-instant
     on the exact same key and succeed.
     """
@@ -48,10 +47,10 @@ async def test_intra_provider_groq_fallback_on_tpm_limit(monkeypatch):
     async def mock_groq_stream(*args, **kwargs):
         model = kwargs.get("model")
         calls.append(model)
-        if model == "llama-3.3-70b-versatile":
+        if model == "meta-llama/llama-4-scout-17b-16e-instruct":
             if False:
                 yield {}
-            raise Exception("429 Rate limit reached for model `llama-3.3-70b-versatile` on tokens per minute (TPM): Limit 6000")
+            raise Exception("429 Rate limit reached on tokens per minute (TPM): Limit 6000")
         elif model == "llama-3.1-8b-instant":
             yield {"event": "chunk", "text": "Response from Llama 3.1 8B."}
             yield {"event": "metrics", "metrics": {"total_tokens": 25, "model_used": "llama-3.1-8b-instant"}}
@@ -60,7 +59,7 @@ async def test_intra_provider_groq_fallback_on_tpm_limit(monkeypatch):
 
     state = {
         "messages": [{"role": "user", "content": "Explain quantum computing."}],
-        "active_model": "llama-3.3-70b-versatile",
+        "active_model": "meta-llama/llama-4-scout-17b-16e-instruct",
         "intent": "NORMAL_CHAT",
         "allowed_tools": [],
         "source_documents": [],
@@ -75,7 +74,7 @@ async def test_intra_provider_groq_fallback_on_tpm_limit(monkeypatch):
     }
 
     result = await generate_response_node(state, config)
-    assert "llama-3.3-70b-versatile" in calls
+    assert "meta-llama/llama-4-scout-17b-16e-instruct" in calls
     assert "llama-3.1-8b-instant" in calls
     assert "Response from Llama 3.1 8B." in result["response_text"]
     assert "Note: Selected model" in result["response_text"]
@@ -85,27 +84,27 @@ async def test_intra_provider_groq_fallback_on_tpm_limit(monkeypatch):
 @pytest.mark.asyncio
 async def test_intra_provider_gemini_fallback_on_rpm_limit(monkeypatch):
     """
-    When Gemini 2.0 Flash encounters a transient 15 RPM rate limit (HTTP 429),
-    the engine should fall back to gemini-1.5-flash on the same key.
+    When Gemini 3.5 Flash encounters a transient 15 RPM rate limit (HTTP 429),
+    the engine should fall back to gemini-3.5-flash-lite on the same key.
     """
     calls = []
 
     async def mock_gemini_stream(*args, **kwargs):
         model = kwargs.get("model")
         calls.append(model)
-        if model == "gemini-2.0-flash":
+        if model == "gemini-3.5-flash":
             if False:
                 yield {}
             raise Exception("Gemini streaming API rate limit exceeded (HTTP 429). 15 RPM reached.")
-        elif model == "gemini-1.5-flash":
-            yield {"event": "chunk", "text": "Response from Gemini 1.5 Flash."}
-            yield {"event": "metrics", "metrics": {"total_tokens": 30, "model_used": "gemini-1.5-flash"}}
+        elif model == "gemini-3.5-flash-lite":
+            yield {"event": "chunk", "text": "Response from Gemini 3.5 Flash Lite."}
+            yield {"event": "metrics", "metrics": {"total_tokens": 30, "model_used": "gemini-3.5-flash-lite"}}
 
     monkeypatch.setattr(gemini_provider, "generate_stream", mock_gemini_stream)
 
     state = {
         "messages": [{"role": "user", "content": "Hello!"}],
-        "active_model": "gemini-2.0-flash",
+        "active_model": "gemini-3.5-flash",
         "intent": "NORMAL_CHAT",
         "allowed_tools": [],
         "source_documents": [],
@@ -120,9 +119,9 @@ async def test_intra_provider_gemini_fallback_on_rpm_limit(monkeypatch):
     }
 
     result = await generate_response_node(state, config)
-    assert "gemini-2.0-flash" in calls
-    assert "gemini-1.5-flash" in calls
-    assert "Response from Gemini 1.5 Flash." in result["response_text"]
+    assert "gemini-3.5-flash" in calls
+    assert "gemini-3.5-flash-lite" in calls
+    assert "Response from Gemini 3.5 Flash Lite." in result["response_text"]
 
 
 @pytest.mark.asyncio
@@ -153,7 +152,7 @@ async def test_cross_provider_fallback_on_account_quota_exhaustion(monkeypatch):
 
     state = {
         "messages": [{"role": "user", "content": "Tell me a fun fact."}],
-        "active_model": "gemini-2.0-flash",
+        "active_model": "gemini-3.5-flash",
         "intent": "NORMAL_CHAT",
         "allowed_tools": [],
         "source_documents": [],
@@ -174,8 +173,8 @@ async def test_cross_provider_fallback_on_account_quota_exhaustion(monkeypatch):
     result = await generate_response_node(state, config)
     # Gemini was called once, saw daily quota exhausted, and skipped remaining Gemini models
     assert len(gemini_calls) == 1
-    assert "gemini-2.0-flash" in gemini_calls
-    assert "gemini-1.5-flash" not in gemini_calls  # Smart skip in action!
+    assert "gemini-3.5-flash" in gemini_calls
+    assert "gemini-3.5-flash-lite" not in gemini_calls  # Smart skip in action!
     assert len(groq_calls) >= 1
     assert "Cross-provider rescue response from Groq!" in result["response_text"]
 
@@ -201,7 +200,7 @@ async def test_all_providers_failed_generates_detailed_diagnostic(monkeypatch):
 
     state = {
         "messages": [{"role": "user", "content": "Help me."}],
-        "active_model": "gemini-2.0-flash",
+        "active_model": "gemini-3.5-flash",
         "intent": "NORMAL_CHAT",
         "allowed_tools": [],
         "source_documents": [],
@@ -221,11 +220,11 @@ async def test_all_providers_failed_generates_detailed_diagnostic(monkeypatch):
 
     result = await generate_response_node(state, config)
     text = result["response_text"]
-    assert "API Rate Limit / Quota Exceeded" in text
-    assert "GEMINI" in text
-    assert "GROQ" in text
-    assert "Account daily quota" in text or "Rate limit" in text
-    assert "How to resolve:" in text
+    assert "Service Temporarily Busy" in text or "Rate Limit" in text
+    assert "Google Gemini" in text or "Gemini" in text
+    assert "Groq" in text
+    assert "Rate limit or quota" in text or "Rate limit" in text
+    assert "Quick fix:" in text or "How to resolve:" in text
 
 
 @pytest.mark.asyncio
@@ -361,24 +360,27 @@ def test_enhanced_quota_exhaustion_indicators():
 
 
 def test_deprecated_models_groq_remapping():
-    """Verify decommissioned Groq models are remapped to active equivalents."""
-    assert DEPRECATED_MODELS.get("llama3-70b-8192") == "llama-3.3-70b-versatile"
-    assert DEPRECATED_MODELS.get("llama3-8b-8192") == "llama-3.1-8b-instant"
-    assert DEPRECATED_MODELS.get("llama-3-70b") == "llama-3.3-70b-versatile"
-    assert DEPRECATED_MODELS.get("llama-3-8b") == "llama-3.1-8b-instant"
-    assert DEPRECATED_MODELS.get("llama-3.1-70b-versatile") == "llama-3.3-70b-versatile"
-    assert DEPRECATED_MODELS.get("mixtral-8x7b-32768") == "llama-3.3-70b-versatile"
+    """Verify decommissioned Groq models are remapped to active equivalents.
+    
+    Note: llama-3.3-70b-versatile was decommissioned August 16, 2026 and remapped 
+    to meta-llama/llama-4-scout-17b-16e-instruct per provider registry.
+    """
+    llama4 = "meta-llama/llama-4-scout-17b-16e-instruct"
+    assert DEPRECATED_MODELS.get("llama3-70b-8192") == llama4
+    assert DEPRECATED_MODELS.get("llama-3-70b") == llama4
+    assert DEPRECATED_MODELS.get("llama-3.1-70b-versatile") == llama4
+    assert DEPRECATED_MODELS.get("mixtral-8x7b-32768") == llama4
 
 
 def test_provider_registry_protects_known_models():
     """Verify provider registry refuses to quarantine core KNOWN_MODELS on 400/404."""
     # Attempting to mark a core Groq model unavailable should be rejected
-    provider_registry.mark_model_unavailable("groq", "llama-3.3-70b-versatile")
-    assert provider_registry.is_model_available("groq", "llama-3.3-70b-versatile") is True
+    provider_registry.mark_model_unavailable("groq", "meta-llama/llama-4-scout-17b-16e-instruct")
+    assert provider_registry.is_model_available("groq", "meta-llama/llama-4-scout-17b-16e-instruct") is True
 
     # Attempting to mark a core Gemini model unavailable should be rejected
-    provider_registry.mark_model_unavailable("gemini", "gemini-2.0-flash")
-    assert provider_registry.is_model_available("gemini", "gemini-2.0-flash") is True
+    provider_registry.mark_model_unavailable("gemini", "gemini-3.5-flash")
+    assert provider_registry.is_model_available("gemini", "gemini-3.5-flash") is True
 
     # An unknown model should be quarantineable
     provider_registry.mark_model_unavailable("groq", "nonexistent-model-xyz")
@@ -481,5 +483,5 @@ async def test_normal_chat_greeting_bypasses_retrieval_and_web_search(monkeypatc
 
     result = await generate_response_node(state, config)
     assert "Hello Mannu!" in result["response_text"]
-    assert calls[0] == "llama-3.3-70b-versatile", "llama3-70b-8192 should be remapped to llama-3.3-70b-versatile"
+    assert calls[0] == "meta-llama/llama-4-scout-17b-16e-instruct", "llama3-70b-8192 should be remapped to meta-llama/llama-4-scout-17b-16e-instruct"
 

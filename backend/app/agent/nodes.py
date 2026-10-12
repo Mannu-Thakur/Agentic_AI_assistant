@@ -3613,10 +3613,10 @@ async def generate_response_node(
 
     # 1. Tier 1 — Intra-provider fallback (same provider, lighter / higher-rate-limit models)
     if primary_prov_name == "gemini" and gemini_key:
-        for m in ("gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.0-flash-lite"):
+        for m in ("gemini-3.5-flash", "gemini-3.5-flash-lite"):
             candidates.append(("gemini", gemini_provider, m, gemini_key))
     elif primary_prov_name == "groq" and groq_key:
-        for m in ("llama-3.3-70b-versatile", "llama-3.1-8b-instant", "deepseek-r1-distill-llama-70b"):
+        for m in ("meta-llama/llama-4-scout-17b-16e-instruct", "llama-3.1-8b-instant"):
             candidates.append(("groq", groq_provider, m, groq_key))
     elif primary_prov_name == "openai" and openai_key:
         for m in ("gpt-4o-mini", "gpt-4o"):
@@ -3629,20 +3629,20 @@ async def generate_response_node(
     cross_providers = []
     if primary_prov_name == "gemini":
         cross_providers = [
-            ("groq", groq_provider, ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "deepseek-r1-distill-llama-70b"], groq_key),
+            ("groq", groq_provider, ["meta-llama/llama-4-scout-17b-16e-instruct", "llama-3.1-8b-instant"], groq_key),
             ("openai", openai_provider, ["gpt-4o-mini", "gpt-4o"], openai_key),
             ("openrouter", openrouter_provider, ["google/gemini-2.0-flash-001"], openrouter_key),
         ]
     elif primary_prov_name == "groq":
         cross_providers = [
-            ("gemini", gemini_provider, ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.0-flash-lite"], gemini_key),
+            ("gemini", gemini_provider, ["gemini-3.5-flash", "gemini-3.5-flash-lite"], gemini_key),
             ("openai", openai_provider, ["gpt-4o-mini", "gpt-4o"], openai_key),
             ("openrouter", openrouter_provider, ["google/gemini-2.0-flash-001"], openrouter_key),
         ]
     elif primary_prov_name == "openai":
         cross_providers = [
-            ("gemini", gemini_provider, ["gemini-2.0-flash", "gemini-1.5-flash"], gemini_key),
-            ("groq", groq_provider, ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"], groq_key),
+            ("gemini", gemini_provider, ["gemini-3.5-flash", "gemini-3.5-flash-lite"], gemini_key),
+            ("groq", groq_provider, ["meta-llama/llama-4-scout-17b-16e-instruct", "llama-3.1-8b-instant"], groq_key),
             ("openrouter", openrouter_provider, [
                 actual_model_id if "/" in actual_model_id else f"openai/{actual_model_id}",
                 "google/gemini-2.0-flash-001"
@@ -3662,8 +3662,8 @@ async def generate_response_node(
                 or_primary,
                 "google/gemini-2.0-flash-001",
             ], openrouter_key),
-            ("gemini", gemini_provider, ["gemini-2.0-flash", "gemini-1.5-flash"], gemini_key),
-            ("groq", groq_provider, ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"], groq_key),
+            ("gemini", gemini_provider, ["gemini-3.5-flash", "gemini-3.5-flash-lite"], gemini_key),
+            ("groq", groq_provider, ["meta-llama/llama-4-scout-17b-16e-instruct", "llama-3.1-8b-instant"], groq_key),
             ("openai", openai_provider, ["gpt-4o-mini"], openai_key),
         ]
 

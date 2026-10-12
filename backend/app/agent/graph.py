@@ -323,6 +323,34 @@ def _build_agent_graph():
         memory   = MemorySaver()
         compiled = workflow.compile(checkpointer=memory)
         _log.info("[AgentGraph] Compiled with MemorySaver (per-process persistence).")
+
+        _orig_ainvoke = compiled.ainvoke
+        _orig_invoke = compiled.invoke
+
+        async def _safe_ainvoke(input, config=None, **kwargs):
+            if config is None:
+                config = {}
+            else:
+                config = dict(config)
+            cfg = dict(config.get("configurable") or {})
+            if "thread_id" not in cfg:
+                cfg["thread_id"] = str(cfg.get("chat_id") or "default_thread")
+            config["configurable"] = cfg
+            return await _orig_ainvoke(input, config, **kwargs)
+
+        def _safe_invoke(input, config=None, **kwargs):
+            if config is None:
+                config = {}
+            else:
+                config = dict(config)
+            cfg = dict(config.get("configurable") or {})
+            if "thread_id" not in cfg:
+                cfg["thread_id"] = str(cfg.get("chat_id") or "default_thread")
+            config["configurable"] = cfg
+            return _orig_invoke(input, config, **kwargs)
+
+        compiled.ainvoke = _safe_ainvoke
+        compiled.invoke = _safe_invoke
         return compiled
     except Exception as exc:
         _log.warning(f"[AgentGraph] MemorySaver unavailable ({exc}), compiling stateless.")

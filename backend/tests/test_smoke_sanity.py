@@ -117,3 +117,48 @@ async def test_smoke_chat_with_search_modes(auth_user):
             assert hybrid_msg_resp.status_code == 200
     finally:
         app.dependency_overrides.pop(get_current_user, None)
+@pytest.mark.anyio
+async def test_smoke_pin_and_star_chat(auth_user):
+    """Verify PATCH /chats/{id} correctly updates is_pinned and is_favorite fields."""
+    app.dependency_overrides[get_current_user] = lambda: auth_user
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # Create a chat
+            create_resp = await client.post("/api/v1/chats", json={"title": "Pin Test Chat"})
+            assert create_resp.status_code in (200, 201)
+            chat_id = create_resp.json()["id"]
+
+            # Pin the chat
+            pin_resp = await client.patch(f"/api/v1/chats/{chat_id}", json={"is_pinned": True})
+            assert pin_resp.status_code == 200
+            assert pin_resp.json()["is_pinned"] is True
+            assert pin_resp.json()["id"] == chat_id
+
+            # Star (favorite) the chat
+            star_resp = await client.patch(f"/api/v1/chats/{chat_id}", json={"is_favorite": True})
+            assert star_resp.status_code == 200
+            assert star_resp.json()["is_favorite"] is True
+
+            # Unpin the chat
+            unpin_resp = await client.patch(f"/api/v1/chats/{chat_id}", json={"is_pinned": False})
+            assert unpin_resp.status_code == 200
+            assert unpin_resp.json()["is_pinned"] is False
+
+            # Combined update: title + pin
+            combo_resp = await client.patch(
+                f"/api/v1/chats/{chat_id}",
+                json={"title": "Renamed & Pinned", "is_pinned": True}
+            )
+            assert combo_resp.status_code == 200
+            assert combo_resp.json()["title"] == "Renamed & Pinned"
+            assert combo_resp.json()["is_pinned"] is True
+
+            # 404 for non-existent chat
+            missing_resp = await client.patch(
+                "/api/v1/chats/nonexistent-chat-id",
+                json={"is_pinned": True}
+            )
+            assert missing_resp.status_code == 404
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)

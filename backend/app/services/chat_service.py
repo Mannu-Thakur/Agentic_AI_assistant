@@ -239,6 +239,33 @@ class ChatService:
     return chat
 
   @staticmethod
+  async def update_chat_fields(
+      db: AsyncSession,
+      chat_id: str,
+      user_id: str,
+      *,
+      title: Optional[str] = None,
+      is_pinned: Optional[bool] = None,
+      is_favorite: Optional[bool] = None,
+  ) -> Optional[Chat]:
+    """Update any combination of title / is_pinned / is_favorite in one DB round-trip."""
+    result = await db.execute(
+        select(Chat).where(Chat.id == chat_id, Chat.user_id == user_id)
+    )
+    chat = result.scalar_one_or_none()
+    if chat is None:
+      return None
+    if title is not None:
+      chat.title = title
+    if is_pinned is not None:
+      chat.is_pinned = is_pinned
+    if is_favorite is not None:
+      chat.is_favorite = is_favorite
+    await db.commit()
+    await db.refresh(chat)
+    return chat
+
+  @staticmethod
   async def delete_chat(db: AsyncSession, chat_id: str, user_id: str) -> bool:
     chat = await ChatService.get_chat_by_id(db, chat_id, user_id)
     if not chat:

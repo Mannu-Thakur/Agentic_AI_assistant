@@ -58,6 +58,8 @@ class ChatCreate(BaseModel):
 
 class ChatUpdate(BaseModel):
   title: Optional[str] = None
+  is_pinned: Optional[bool] = None
+  is_favorite: Optional[bool] = None
 
 class ChatOut(BaseModel):
   id: str
