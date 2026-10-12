@@ -252,6 +252,9 @@ const cleanErrorMessage = (raw: string): string => {
   if (raw.includes('PERMISSION_DENIED') || raw.includes('denied access')) {
     return 'Google AI Studio denied project access for the configured Gemini key. The backend automatically switches to local neural embeddings on retry.';
   }
+  if (raw.includes('Failed to fetch') || raw.includes('NetworkError')) {
+    return 'Unable to connect to the backend server. Please verify that the backend is running on http://127.0.0.1:8000.';
+  }
   const jsonMatch = raw.match(/\{.*"message"\s*:\s*"([^"]+)".*\}/s);
   if (jsonMatch && jsonMatch[1]) {
     return jsonMatch[1];

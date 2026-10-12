@@ -495,12 +495,8 @@ if settings.BACKEND_CORS_ORIGINS:
         allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|0\.0\.0\.0|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+)(:\d+)?$",
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=[
-            "Authorization", "Content-Type", "X-Request-ID",
-            "X-API-Key", "x-api-keys", "Accept", "Origin",
-            "x-telemetry-enabled", "x-client-time", "x-client-timezone", "x-client-location",
-        ],
-        expose_headers=["X-Request-ID", "X-Process-Time", "X-Trace-ID"],
+        allow_headers=["*"],
+        expose_headers=["*"],
     )
 
 
