@@ -2999,23 +2999,23 @@ export default function ChatPage() {
               {modelDropdownOpen && (
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => setModelDropdownOpen(false)} />
-                  <div className="absolute left-0 top-full mt-2 w-[220px] bg-surface border border-border/80 rounded-2xl shadow-2xl p-1.5 z-50 animate-scale-in flex flex-col gap-1 overflow-hidden backdrop-blur-2xl">
+                  <div className="absolute left-0 top-full mt-2 w-[230px] bg-[#18181b] border border-white/10 rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.85)] p-1.5 z-50 animate-scale-in flex flex-col gap-1 overflow-hidden">
                     
                     {/* Header with Search Input */}
-                    <div className="p-1 space-y-1.5 border-b border-border/40 pb-2">
+                    <div className="p-1 space-y-1.5 border-b border-white/10 pb-2">
                       <div className="flex items-center justify-between px-1">
-                        <span className="text-[9px] font-bold text-foreground-3 uppercase tracking-wider">Models</span>
-                        <span className="text-[9px] font-medium text-foreground-3 bg-surface-2 px-1.5 py-0.2 rounded-full">{models.length}</span>
+                        <span className="text-[9px] font-bold text-white/50 uppercase tracking-wider">Models</span>
+                        <span className="text-[9px] font-medium text-white/70 bg-white/10 px-1.5 py-0.2 rounded-full">{models.length}</span>
                       </div>
                       {models.length > 5 && (
                         <div className="relative">
-                          <Search className="w-3 h-3 absolute left-2 top-1/2 -translate-y-1/2 text-foreground-3 pointer-events-none" />
+                          <Search className="w-3 h-3 absolute left-2 top-1/2 -translate-y-1/2 text-white/40 pointer-events-none" />
                           <input 
                             type="text"
                             value={modelSearchQuery}
                             onChange={(e) => setModelSearchQuery(e.target.value)}
                             placeholder="Filter models..."
-                            className="w-full bg-surface-2/80 border border-border/50 rounded-lg pl-7 pr-2 py-1 text-[11px] text-foreground placeholder:text-foreground-3/60 focus:outline-none focus:border-accent/50"
+                            className="w-full bg-[#27272a] border border-white/10 rounded-lg pl-7 pr-2 py-1 text-[11px] text-white placeholder:text-white/40 focus:outline-none focus:border-white/30"
                             autoFocus
                           />
                         </div>
@@ -3049,17 +3049,17 @@ export default function ChatPage() {
                                 }}
                                 className={`w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg text-left transition-all duration-150 group ${
                                   isSelected 
-                                    ? 'bg-accent/15 text-foreground font-semibold' 
-                                    : 'text-foreground-2 hover:text-foreground hover:bg-surface-2/80'
+                                    ? 'bg-white/10 text-white font-semibold' 
+                                    : 'text-white/70 hover:text-white hover:bg-white/5'
                                 }`}
                               >
                                 <div className="flex items-center gap-2 min-w-0 flex-1">
                                   {IconComponent && (
-                                    <IconComponent className={`w-3.5 h-3.5 flex-shrink-0 transition-colors ${isSelected ? 'text-accent' : 'text-foreground-3 group-hover:text-foreground-2'}`} />
+                                    <IconComponent className={`w-3.5 h-3.5 flex-shrink-0 transition-colors ${isSelected ? 'text-accent' : 'text-white/50 group-hover:text-white'}`} />
                                   )}
                                   <div className="min-w-0 flex-1">
-                                    <div className="text-[11px] truncate leading-tight font-medium text-foreground">{m.name}</div>
-                                    <div className="text-[8.5px] text-foreground-3 font-normal truncate mt-0.5">{m.provider}</div>
+                                    <div className="text-[11px] truncate leading-tight font-medium text-white">{m.name}</div>
+                                    <div className="text-[8.5px] text-white/50 font-normal truncate mt-0.5">{m.provider}</div>
                                   </div>
                                 </div>
                                 {isSelected && <Check className="w-3 h-3 text-accent flex-shrink-0 stroke-[2.5]" />}
@@ -3088,9 +3088,9 @@ export default function ChatPage() {
               {searchDropdownOpen && (
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => setSearchDropdownOpen(false)} />
-                  <div className="absolute left-0 top-full mt-2 w-[240px] bg-surface border border-border/80 rounded-2xl shadow-2xl p-1.5 z-50 animate-scale-in flex flex-col gap-1 overflow-hidden backdrop-blur-2xl">
-                    <div className="px-2 py-1 border-b border-border/40">
-                      <span className="text-[9px] font-bold text-foreground-3 uppercase tracking-wider">Search Strategy</span>
+                  <div className="absolute left-0 top-full mt-2 w-[250px] bg-[#18181b] border border-white/10 rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.85)] p-1.5 z-50 animate-scale-in flex flex-col gap-1 overflow-hidden">
+                    <div className="px-2.5 py-1.5 border-b border-white/10">
+                      <span className="text-[9px] font-bold text-white/50 uppercase tracking-wider">Search Strategy</span>
                     </div>
                     {SEARCH_STRATEGIES.map((mode) => (
                       <button
@@ -3101,17 +3101,17 @@ export default function ChatPage() {
                         }}
                         className={`w-full flex items-start gap-2.5 px-2.5 py-2 rounded-xl text-left transition-all duration-150 ${
                           searchMode === mode.id
-                            ? 'bg-accent/15 text-foreground font-semibold'
-                            : 'text-foreground-2 hover:text-foreground hover:bg-surface-2/80'
+                            ? 'bg-white/10 text-white font-semibold'
+                            : 'text-white/70 hover:text-white hover:bg-white/5'
                         }`}
                       >
                         <span className="text-base flex-shrink-0 mt-0.5">{mode.icon}</span>
                         <div className="min-w-0 flex-1">
-                          <div className="text-xs font-medium leading-tight flex items-center justify-between">
+                          <div className="text-xs font-medium leading-tight flex items-center justify-between text-white">
                             <span>{mode.label}</span>
-                            {searchMode === mode.id && <Check className="w-3.5 h-3.5 text-accent flex-shrink-0 stroke-[2.5]" />}
+                            {searchMode === mode.id && <Check className="w-3.5 h-3.5 text-blue-400 flex-shrink-0 stroke-[2.5]" />}
                           </div>
-                          <div className="text-[10px] text-foreground-3 font-normal leading-snug mt-0.5">{mode.desc}</div>
+                          <div className="text-[10px] text-white/40 font-normal leading-snug mt-0.5">{mode.desc}</div>
                         </div>
                       </button>
                     ))}
