@@ -38,7 +38,7 @@ const TABS: { id: SettingsTab | 'chat'; label: string; icon: React.ElementType; 
   { id: 'notifications',   label: 'Notifications',      icon: Radio,        group: 'Personal' },
   { id: 'voice',           label: 'Voice',              icon: Radio,        group: 'Personal' },
   { id: 'shortcuts',       label: 'Keyboard Shortcuts', icon: Zap,          group: 'Personal' },
-  { id: 'usage',           label: 'Usage & Billing',    icon: BarChart2,    group: 'Personal' },
+  { id: 'usage',           label: 'Usage & Free Limits', icon: BarChart2,   group: 'Personal' },
   { id: 'storage',         label: 'Storage',            icon: HardDrive,    group: 'Personal' },
   { id: 'datacontrols',    label: 'Data Controls',      icon: Database,     group: 'Personal' },
   { id: 'memories',        label: 'Semantic Memory',    icon: Brain,        group: 'Personal' },
@@ -979,11 +979,11 @@ function UsageTab() {
           <p className="py-4 text-xs text-foreground-3 text-center">Could not load usage statistics.</p>
         )}
       </SectionCard>
-      <SectionCard title="Billing Information">
+      <SectionCard title="Free Tier & Quota Guidelines">
         <div className="py-4 space-y-3 text-xs text-foreground-2 leading-relaxed">
-          <p className="flex items-start gap-2"><span className="text-emerald-400 font-bold mt-0.5">✓</span> All usage is tracked locally. No subscription or billing required for core features.</p>
-          <p className="flex items-start gap-2"><span className="text-blue-400 font-bold mt-0.5">ℹ</span> External AI providers (OpenAI, Groq, Gemini, etc.) have their own free tiers and rate limits. Manage API keys in the <span className="text-blue-400 font-semibold">AI Models</span> tab.</p>
-          <p className="flex items-start gap-2"><span className="text-amber-400 font-bold mt-0.5">⚡</span> Groq provides free access to Llama and DeepSeek models. Google Gemini has a generous free tier. No credit card required for these providers.</p>
+          <p className="flex items-start gap-2"><span className="text-emerald-400 font-bold mt-0.5">✓</span> <strong>100% Free & Open:</strong> All usage is tracked locally on your device. There are zero subscriptions, credit card requirements, or billing charges for this workspace.</p>
+          <p className="flex items-start gap-2"><span className="text-blue-400 font-bold mt-0.5">ℹ</span> <strong>Provider Free Tiers:</strong> Configured external AI providers (Groq, Google Gemini, Ollama, OpenRouter) operate on generous free-tier quotas. Configure your free API keys in the <span className="text-blue-400 font-semibold">AI Models</span> tab.</p>
+          <p className="flex items-start gap-2"><span className="text-amber-400 font-bold mt-0.5">⚡</span> <strong>Zero-Cost Recommendations:</strong> Groq offers high-speed free inference for Llama 3 and DeepSeek models without a credit card. Local Ollama runs completely offline at zero cost.</p>
         </div>
       </SectionCard>
     </>
@@ -3175,7 +3175,7 @@ export default function SettingsPage() {
               </>
             )}
 
-            {/* ── Usage & Billing tab ── */}
+            {/* ── Usage & Free Limits tab ── */}
             {tab === 'usage' && (
               <UsageTab />
             )}

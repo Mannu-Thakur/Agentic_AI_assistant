@@ -349,7 +349,7 @@ AI Assistan Chatbot/
 
 ### v3.1.0 — Workspace UI & Settings Center Overhaul (Current)
 - **NEW** — **20-Tab Categorized Settings Center**: Reorganized with grouped sidebar navigation (Personal, Integrations, Coding):
-  - *Personal*: General, Profile, Appearance, Personalization (custom instructions & coding preferences), Notifications (in-app & browser permission), Voice (speech recognition & TTS synthesis test), Keyboard Shortcuts, Usage & Billing, Storage (health monitors & semantic memory management), Data Controls, Semantic Memory, Account & Security.
+  - *Personal*: General, Profile, Appearance, Personalization (custom instructions & coding preferences), Notifications (in-app & browser permission), Voice (speech recognition & TTS synthesis test), Keyboard Shortcuts, Usage & Free Limits, Storage (health monitors & semantic memory management), Data Controls, Semantic Memory, Account & Security.
   - *Integrations*: AI Models, Generation, AI Features, Remote MCP Servers, Connections (search APIs & OAuth), Documents & RAG.
   - *Coding*: Git integration & commit assistant configuration, Runtime Environments & `.env` configuration guide.
 - **NEW** — **Interactive Mermaid Diagrams**: Inline rendering for `mermaid` diagrams with dynamic loading, dark theme styling, and fallback.
