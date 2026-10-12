@@ -411,92 +411,127 @@ async def stream_agent_message(
     # (regardless of status), and extract its text directly from disk so the LLM
     # can answer immediately without waiting for vectorisation.
     import re as _chat_re
+    import unicodedata as _unicodedata
+    import pathlib as _pathlib
+
+    def _sanitize_fn(raw_name: str) -> str:
+        s = _unicodedata.normalize('NFKD', raw_name).encode('ascii', 'ignore').decode('ascii')
+        s = _pathlib.Path(s).name
+        return _chat_re.sub(r'[^a-zA-Z0-9_.\-]', '_', s) or 'upload'
+
     _upload_tag_match = _chat_re.search(
         r"\[Uploaded Document:\s*([^\]]+)\]", schema.content or ""
     )
     _inline_doc_context: str = ""
+    _inline_parts: list = []
+    _recent_docs: list = []
 
+    from app.models.document import Document as _DocModel
+    from sqlalchemy import desc as _desc, or_ as _sql_or
+    from app.core.database import AsyncSessionLocal as _FreshSession
+    from app.services.parser_service import ParserService as _PS
+
+    # Detect files either from [Uploaded Document:] tag or from user_docs attached to this chat
+    _uploaded_names_raw = []
     if _upload_tag_match:
         _uploaded_names_raw = [
             n.strip() for n in _upload_tag_match.group(1).split(",") if n.strip()
         ]
         logger.info(f"[ChatUpload] Detected upload tag — filenames: {_uploaded_names_raw}")
-        from app.models.document import Document as _DocModel
-        from sqlalchemy import desc as _desc
-        from app.core.database import AsyncSessionLocal as _FreshSession
-        from app.services.parser_service import ParserService as _PS
-        _inline_parts: list = []
 
-        # Use a FRESH session — avoids SQLAlchemy identity-map returning stale objects.
-        # NO uploaded_at filter: SQLite stores naive datetimes; comparing with a
-        # timezone-aware cutoff causes string-comparison failures (no results returned).
-        # Instead we ORDER BY uploaded_at DESC and take the LATEST doc per filename.
-        try:
-            async with _FreshSession() as _fresh_db:
+    # Build candidate names set (raw, sanitized, lowercase)
+    _candidate_names = set()
+    for _n in _uploaded_names_raw:
+        _candidate_names.add(_n)
+        _candidate_names.add(_sanitize_fn(_n))
+        _candidate_names.add(_n.lower())
+        _candidate_names.add(_sanitize_fn(_n).lower())
+
+    try:
+        async with _FreshSession() as _fresh_db:
+            _filters = [_DocModel.user_id == current_user.id]
+            _sub_conds = []
+            if _candidate_names:
+                _sub_conds.append(_DocModel.filename.in_(list(_candidate_names)))
+            if chat_id:
+                _sub_conds.append(_DocModel.chat_id == chat_id)
+
+            if _sub_conds:
+                _filters.append(_sql_or(*_sub_conds))
                 _fresh_result = await _fresh_db.execute(
-                    select(_DocModel).where(
-                        _DocModel.user_id == current_user.id,
-                        _DocModel.filename.in_(_uploaded_names_raw),
-                    ).order_by(_desc(_DocModel.uploaded_at))
+                    select(_DocModel).where(*_filters).order_by(_desc(_DocModel.uploaded_at))
                 )
                 _all_matches = _fresh_result.scalars().all()
-                logger.info(f"[ChatUpload] Fresh-session found {len(_all_matches)} doc(s) for {_uploaded_names_raw}")
+                logger.info(f"[ChatUpload] Fresh-session found {len(_all_matches)} doc(s) for targets (names={_candidate_names}, chat_id={chat_id})")
 
                 # Deduplicate: keep only the most recent per filename
                 _seen_names: set = set()
-                _recent_docs = []
                 for _d in _all_matches:
                     if _d.filename not in _seen_names:
                         _seen_names.add(_d.filename)
                         _recent_docs.append(_d)
 
-                for _rdoc in _recent_docs:
-                    logger.info(
-                        f"[ChatUpload] Doc '{_rdoc.filename}' status={_rdoc.status} "
-                        f"path={_rdoc.storage_path}"
-                    )
-                    if not _rdoc.storage_path or not os.path.exists(_rdoc.storage_path):
+            for _rdoc in _recent_docs:
+                logger.info(
+                    f"[ChatUpload] Doc '{_rdoc.filename}' status={_rdoc.status} "
+                    f"path={_rdoc.storage_path}"
+                )
+                if not _rdoc.storage_path or not os.path.exists(_rdoc.storage_path):
+                    # Check in UPLOAD_DIR with basename
+                    _fallback_path = os.path.join(settings.UPLOAD_DIR, os.path.basename(_rdoc.storage_path or ""))
+                    if os.path.exists(_fallback_path):
+                        _rdoc.storage_path = _fallback_path
+                    else:
                         logger.warning(f"[ChatUpload] File missing on disk: {_rdoc.storage_path}")
                         continue
-                    _fext = os.path.splitext(_rdoc.storage_path)[1].lower()
-                    if _fext in _IMAGE_EXTENSIONS:
-                        continue  # images handled via vision path
-                    try:
-                        _ftype = _rdoc.file_type or _fext.lstrip(".")
-                        _raw_text = await asyncio.to_thread(
-                            _PS.extract_text, _rdoc.storage_path, _ftype
+                _fext = os.path.splitext(_rdoc.storage_path)[1].lower()
+                if _fext in _IMAGE_EXTENSIONS:
+                    continue  # images handled via vision path
+                try:
+                    _ftype = _rdoc.file_type or _fext.lstrip(".")
+                    _raw_text = await asyncio.to_thread(
+                        _PS.extract_text, _rdoc.storage_path, _ftype
+                    )
+                    if _raw_text and _raw_text.strip():
+                        _truncated = _raw_text.strip()[:40_000]
+                        _inline_parts.append(
+                            f"=== Uploaded Document: {_rdoc.filename} ===\n{_truncated}"
                         )
-                        if _raw_text and _raw_text.strip():
-                            _truncated = _raw_text.strip()[:30_000]
-                            _inline_parts.append(
-                                f"=== Uploaded Document: {_rdoc.filename} ===\n{_truncated}"
-                            )
-                            logger.info(
-                                f"[ChatUpload] ✓ Inline text extracted for '{_rdoc.filename}' "
-                                f"({len(_truncated)} chars)"
-                            )
-                        else:
-                            logger.warning(f"[ChatUpload] extract_text returned empty for '{_rdoc.filename}'")
-                    except Exception as _ex:
-                        logger.warning(
-                            f"[ChatUpload] Text extraction failed for '{_rdoc.filename}': {_ex}"
+                        logger.info(
+                            f"[ChatUpload] ✓ Inline text extracted for '{_rdoc.filename}' "
+                            f"({len(_truncated)} chars)"
                         )
-        except Exception as _fresh_err:
-            logger.warning(f"[ChatUpload] Fresh-session lookup failed (non-fatal): {_fresh_err}")
+                    else:
+                        logger.warning(f"[ChatUpload] extract_text returned empty for '{_rdoc.filename}'")
+                except Exception as _ex:
+                    logger.warning(
+                        f"[ChatUpload] Text extraction failed for '{_rdoc.filename}': {_ex}"
+                    )
+    except Exception as _fresh_err:
+        logger.warning(f"[ChatUpload] Fresh-session lookup failed (non-fatal): {_fresh_err}")
 
-        if _inline_parts:
-            _inline_doc_context = "\n\n".join(_inline_parts)
-            logger.info(f"[ChatUpload] inline_doc_context ready ({len(_inline_doc_context)} chars)")
-        else:
-            logger.warning(f"[ChatUpload] inline_doc_context is EMPTY — LLM will get no document content")
+    if _inline_parts:
+        _inline_doc_context = "\n\n".join(_inline_parts)
+        logger.info(f"[ChatUpload] inline_doc_context ready ({len(_inline_doc_context)} chars)")
+    elif _upload_tag_match or (user_docs and any(d.chat_id == chat_id for d in user_docs)):
+        logger.warning(f"[ChatUpload] inline_doc_context is EMPTY — LLM will get no document content")
 
-    uploaded_file_paths = [
-        doc.storage_path
-        for doc in user_docs
-        if doc.storage_path
-        and doc.status == "ready"
-        and not any(doc.storage_path.lower().endswith(ext) for ext in _IMAGE_EXTENSIONS)
-    ]
+    # Build uploaded_file_paths: include any document on disk for this chat/user, whether ready or processing
+    uploaded_file_paths = []
+    _all_candidate_docs = list(user_docs)
+    for _d in _recent_docs:
+        if not any(cd.id == _d.id for cd in _all_candidate_docs):
+            _all_candidate_docs.append(_d)
+
+    for doc in _all_candidate_docs:
+        if (
+            doc.storage_path
+            and os.path.exists(doc.storage_path)
+            and doc.status in ("ready", "processing")
+            and not any(doc.storage_path.lower().endswith(ext) for ext in _IMAGE_EXTENSIONS)
+        ):
+            if doc.storage_path not in uploaded_file_paths:
+                uploaded_file_paths.append(doc.storage_path)
 
     initial_state = {
         "messages": langchain_messages,

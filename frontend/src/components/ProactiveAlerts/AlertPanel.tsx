@@ -101,9 +101,10 @@ function AlertRow({ alert, onRead }: { alert: ProactiveAlert; onRead: (id: strin
 
 interface AlertPanelProps {
   onClose: () => void;
+  placement?: 'sidebar' | 'header';
 }
 
-export function AlertPanel({ onClose }: AlertPanelProps) {
+export function AlertPanel({ onClose, placement = 'sidebar' }: AlertPanelProps) {
   const { alerts, isLoading, markAllRead, markOneRead, fetchAlerts } = useAlertStore();
   const token = useAuthStore((s) => s.token);
   const [scanning, setScanning] = useState(false);
@@ -131,10 +132,14 @@ export function AlertPanel({ onClose }: AlertPanelProps) {
     }
   };
 
+  const posClasses = placement === 'sidebar'
+    ? 'left-full top-0 ml-3'
+    : 'right-0 top-full mt-2';
+
   return (
-    <div className="absolute right-0 top-full mt-2 w-80 sm:w-96 z-50
+    <div className={`absolute ${posClasses} w-80 sm:w-96 z-50
       bg-zinc-900 border border-white/10 rounded-xl shadow-2xl
-      flex flex-col max-h-[480px] overflow-hidden">
+      flex flex-col max-h-[480px] overflow-hidden`}>
 
       {/* ── Header ── */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">

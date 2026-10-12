@@ -252,7 +252,7 @@ function sanitizeAssistantContent(str: string): string {
     .trim();
 }
 
-function parseUserMessageFiles(content: string) {
+function parseUserMessageFiles(content: string, messageAttachedFiles?: Array<{ name: string; size?: number; type?: string }>) {
   let cleanPrompt = decodeHtmlEntities(content || '');
   let refTitle: string | null = null;
 
@@ -292,13 +292,35 @@ function parseUserMessageFiles(content: string) {
     const fullMatch = uploadMatch[0];
     const fileNames = uploadMatch[1].split(',').map((f: string) => f.trim()).filter(Boolean);
     for (const fname of fileNames) {
-      files.push({ name: fname, content: '(Uploaded to workspace — available in RAG context)' });
+      if (!files.some(f => f.name === fname)) {
+        files.push({ name: fname, content: '(Uploaded to workspace — available in RAG context)' });
+      }
     }
     cleanPrompt = cleanPrompt.replace(fullMatch, '');
   }
 
-  // Strip the auto-generated analyze prompt suffix that comes after [Uploaded Document:]
-  cleanPrompt = cleanPrompt.replace(/^\s*Please analyze and summarize the attached document content\.\s*/i, '');
+  // Also include messageAttachedFiles if passed
+  if (messageAttachedFiles && Array.isArray(messageAttachedFiles)) {
+    for (const af of messageAttachedFiles) {
+      if (af.name && !files.some(f => f.name === af.name)) {
+        files.push({ name: af.name, content: '(Uploaded to workspace — available in RAG context)' });
+      }
+    }
+  }
+
+  // Strip auto-generated prompt suffixes so default prompts don't leak into the bubble
+  const autoPromptPatterns = [
+    /^\s*Please review this resume and provide detailed feedback[\s\S]*$/i,
+    /^\s*Please read and summarize this document[\s\S]*$/i,
+    /^\s*Please analyze this spreadsheet[\s\S]*$/i,
+    /^\s*Please review this code[\s\S]*$/i,
+    /^\s*Please analyze and summarize the content of this uploaded file[\s\S]*$/i,
+    /^\s*Please analyze and summarize the attached document[\s\S]*$/i,
+    /^\s*Please review and summarize the uploaded document[\s\S]*$/i,
+  ];
+  for (const pat of autoPromptPatterns) {
+    cleanPrompt = cleanPrompt.replace(pat, '');
+  }
 
   return { prompt: cleanPrompt.trim(), files, refTitle };
 }
@@ -1097,8 +1119,19 @@ export default function ChatPage() {
     setCanvasMsgId(null);
   }, [updateMessage]);
 
-  // ── Search Mode ───────────────────────────────────────────────
+  // ── Search Strategy ───────────────────────────────────────────
+  const SEARCH_STRATEGIES = [
+    { id: 'auto',          label: 'Auto',           icon: '✨', desc: 'AI selects optimal retrieval strategy' },
+    { id: 'web',           label: 'Web Search',     icon: '🌐', desc: 'Live web search via Tavily & SerpAPI' },
+    { id: 'kb',            label: 'Knowledge Base', icon: '📚', desc: 'Search uploaded documents (RAG)' },
+    { id: 'cache',         label: 'Fast Cache',     icon: '⚡', desc: 'Direct response avoiding heavy live retrieval' },
+    { id: 'deep_research', label: 'Deep Research',  icon: '🔬', desc: 'Multi-step agentic planning & deep search' },
+    { id: 'hybrid',        label: 'Hybrid Mode',    icon: '🔀', desc: 'Combine web search + Knowledge Base docs' },
+  ] as const;
+
   const [searchMode, setSearchMode] = useState<'auto' | 'web' | 'kb' | 'cache' | 'deep_research' | 'hybrid'>('auto');
+  const [searchDropdownOpen, setSearchDropdownOpen] = useState(false);
+  const currentSearchModeObj = SEARCH_STRATEGIES.find((s) => s.id === searchMode) || SEARCH_STRATEGIES[0];
 
   // ── More Dropdowns & Archiving ───────────────────────────────
   const [menuOpen, setMenuOpen]               = useState(false);
@@ -1617,27 +1650,31 @@ export default function ChatPage() {
       if (!mission.isDelegated) return;
     }
 
-    if (!trimmed && attachedFiles.length > 0) {
+    if (attachedFiles.length > 0) {
       const fileNames = attachedFiles.map((f) => f.name).join(', ');
-      // Generate a context-aware prompt based on file type/name
-      const firstFile = attachedFiles[0];
-      const ext = firstFile.name.split('.').pop()?.toLowerCase() || '';
-      const nameLower = firstFile.name.toLowerCase();
-      let autoPrompt: string;
-      if (nameLower.includes('resume') || nameLower.includes('cv')) {
-        autoPrompt = 'Please review this resume and provide detailed feedback: key strengths, areas for improvement, ATS compatibility, and suggestions to make it stand out.';
-      } else if (ext === 'pdf') {
-        autoPrompt = 'Please read and summarize this document. Extract the key points, main topics, and any important information.';
-      } else if (['xlsx', 'xls', 'csv'].includes(ext)) {
-        autoPrompt = 'Please analyze this spreadsheet/data file. Summarize what it contains, identify key trends or patterns, and highlight any notable findings.';
-      } else if (['docx', 'doc'].includes(ext)) {
-        autoPrompt = 'Please read this document and provide a comprehensive summary of its content, key points, and main takeaways.';
-      } else if (['py', 'js', 'ts', 'html', 'css', 'json'].includes(ext)) {
-        autoPrompt = 'Please review this code/file. Explain what it does, identify any issues or improvements, and provide feedback.';
+      if (!trimmed) {
+        // Generate a context-aware prompt based on file type/name
+        const firstFile = attachedFiles[0];
+        const ext = firstFile.name.split('.').pop()?.toLowerCase() || '';
+        const nameLower = firstFile.name.toLowerCase();
+        let autoPrompt: string;
+        if (nameLower.includes('resume') || nameLower.includes('cv')) {
+          autoPrompt = 'Please review this resume and provide detailed feedback: key strengths, areas for improvement, ATS compatibility, and suggestions to make it stand out.';
+        } else if (ext === 'pdf') {
+          autoPrompt = 'Please read and summarize this document. Extract the key points, main topics, and any important information.';
+        } else if (['xlsx', 'xls', 'csv'].includes(ext)) {
+          autoPrompt = 'Please analyze this spreadsheet/data file. Summarize what it contains, identify key trends or patterns, and highlight any notable findings.';
+        } else if (['docx', 'doc'].includes(ext)) {
+          autoPrompt = 'Please read this document and provide a comprehensive summary of its content, key points, and main takeaways.';
+        } else if (['py', 'js', 'ts', 'html', 'css', 'json'].includes(ext)) {
+          autoPrompt = 'Please review this code/file. Explain what it does, identify any issues or improvements, and provide feedback.';
+        } else {
+          autoPrompt = 'Please analyze and summarize the content of this uploaded file.';
+        }
+        trimmed = `[Uploaded Document: ${fileNames}]\n\n${autoPrompt}`;
       } else {
-        autoPrompt = 'Please analyze and summarize the content of this uploaded file.';
+        trimmed = `[Uploaded Document: ${fileNames}]\n\n${trimmed}`;
       }
-      trimmed = `[Uploaded Document: ${fileNames}] ${autoPrompt}`;
     }
 
     let chatId = activeChatId;
@@ -1675,6 +1712,7 @@ export default function ChatPage() {
       imagePreviewUrls: imagesToSend.length > 0
         ? imagesToSend.map((img) => `data:${img.mimeType};base64,${img.base64}`)
         : undefined,
+      attachedFiles: attachedFiles.map((f) => ({ name: f.name, size: f.size, type: f.type })),
     };
 
     // Instant 0ms optimistic UI rendering
@@ -3034,10 +3072,60 @@ export default function ChatPage() {
                 </>
               )}
             </div>
+
+            {/* Search Strategy Dropdown */}
+            <div className="relative">
+              <button 
+                onClick={() => setSearchDropdownOpen((v) => !v)}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold text-foreground-2 hover:text-foreground bg-surface-2/60 hover:bg-surface-2 border border-border/50 transition-all duration-150 active:scale-[0.97] outline-none"
+                title="Select search & retrieval strategy"
+              >
+                <span className="text-xs">{currentSearchModeObj.icon}</span>
+                <span className="truncate max-w-[110px] sm:max-w-[140px] tracking-tight">{currentSearchModeObj.label}</span>
+                <ChevronDown className={`w-3 h-3 text-foreground-3 transition-transform duration-200 flex-shrink-0 ${searchDropdownOpen ? 'rotate-180 text-foreground' : ''}`} />
+              </button>
+
+              {searchDropdownOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setSearchDropdownOpen(false)} />
+                  <div className="absolute left-0 top-full mt-2 w-[240px] bg-surface border border-border/80 rounded-2xl shadow-2xl p-1.5 z-50 animate-scale-in flex flex-col gap-1 overflow-hidden backdrop-blur-2xl">
+                    <div className="px-2 py-1 border-b border-border/40">
+                      <span className="text-[9px] font-bold text-foreground-3 uppercase tracking-wider">Search Strategy</span>
+                    </div>
+                    {SEARCH_STRATEGIES.map((mode) => (
+                      <button
+                        key={mode.id}
+                        onClick={() => {
+                          setSearchMode(mode.id as any);
+                          setSearchDropdownOpen(false);
+                        }}
+                        className={`w-full flex items-start gap-2.5 px-2.5 py-2 rounded-xl text-left transition-all duration-150 ${
+                          searchMode === mode.id
+                            ? 'bg-accent/15 text-foreground font-semibold'
+                            : 'text-foreground-2 hover:text-foreground hover:bg-surface-2/80'
+                        }`}
+                      >
+                        <span className="text-base flex-shrink-0 mt-0.5">{mode.icon}</span>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs font-medium leading-tight flex items-center justify-between">
+                            <span>{mode.label}</span>
+                            {searchMode === mode.id && <Check className="w-3.5 h-3.5 text-accent flex-shrink-0 stroke-[2.5]" />}
+                          </div>
+                          <div className="text-[10px] text-foreground-3 font-normal leading-snug mt-0.5">{mode.desc}</div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
           </div>
 
-
           <div className="flex items-center gap-1.5 flex-shrink-0">
+            {/* ── Notification Bell in Header ── */}
+            <div className="relative flex items-center justify-center">
+              <NotificationBell placement="header" />
+            </div>
 
             {/* ── Follow-ups trigger ── */}
             {messages.filter((m) => m.role === 'user').length > 0 && (
@@ -3330,28 +3418,6 @@ export default function ChatPage() {
               </div>
 
               {/* Centered input form */}
-              {/* Search mode pills for welcome screen */}
-              <div className="flex items-center gap-1.5 flex-wrap justify-center w-full">
-                {([
-                  { id: 'auto',          label: 'Auto',           icon: '✨' },
-                  { id: 'web',           label: 'Web Search',     icon: '🌐' },
-                  { id: 'kb',            label: 'Knowledge Base', icon: '📚' },
-                  { id: 'deep_research', label: 'Deep Research',  icon: '🔬' },
-                  { id: 'hybrid',        label: 'Hybrid',         icon: '🔀' },
-                ] as const).map(({ id, label, icon }) => (
-                  <button
-                    key={id}
-                    onClick={() => setSearchMode(id)}
-                    className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-semibold border transition-all duration-150 active:scale-95
-                      ${searchMode === id
-                        ? 'bg-blue-600/20 border-blue-500/40 text-blue-300'
-                        : 'bg-surface-2 border-border text-foreground-3 hover:text-foreground'
-                      }`}
-                  >
-                    <span>{icon}</span><span>{label}</span>
-                  </button>
-                ))}
-              </div>
 
               <ChatInput
                 key={activeChatId ?? 'new'}
@@ -3487,7 +3553,7 @@ export default function ChatPage() {
                               </div>
                             </div>
                           ) : (() => {
-                            const { prompt: userPrompt, files: userAttachedFiles, refTitle } = parseUserMessageFiles(m.content);
+                            const { prompt: userPrompt, files: userAttachedFiles, refTitle } = parseUserMessageFiles(m.content, (m as any).attachedFiles);
                             const displayImageUrls = (m.imagePreviewUrls && m.imagePreviewUrls.length > 0)
                               ? m.imagePreviewUrls
                               : (m.images && m.images.length > 0
@@ -3779,31 +3845,6 @@ export default function ChatPage() {
                   onDismiss={() => { resetMission(); setMissionModeEnabled(false); }}
                 />
 
-                {/* ── Search Mode Selector ── */}
-                <div className="flex items-center gap-1.5 flex-wrap px-1">
-                  {([
-                    { id: 'auto',          label: 'Auto',           icon: '✨', desc: 'AI picks the best search strategy' },
-                    { id: 'web',           label: 'Web',            icon: '🌐', desc: 'Live web search via Tavily/SerpAPI' },
-                    { id: 'kb',            label: 'Knowledge Base', icon: '📚', desc: 'Search your uploaded documents (RAG)' },
-                    { id: 'cache',         label: 'Cache',          icon: '⚡', desc: 'Use cached results for faster responses' },
-                    { id: 'deep_research', label: 'Deep Research',  icon: '🔬', desc: 'Multi-step agentic research (slower, thorough)' },
-                    { id: 'hybrid',        label: 'Hybrid',         icon: '🔀', desc: 'Combine web + knowledge base results' },
-                  ] as const).map(({ id, label, icon, desc }) => (
-                    <button
-                      key={id}
-                      title={desc}
-                      onClick={() => setSearchMode(id)}
-                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-semibold border transition-all duration-150 active:scale-95
-                        ${searchMode === id
-                          ? 'bg-blue-600/20 border-blue-500/40 text-blue-300'
-                          : 'bg-surface-2 border-border text-foreground-3 hover:text-foreground hover:border-border-2'
-                        }`}
-                    >
-                      <span>{icon}</span>
-                      <span>{label}</span>
-                    </button>
-                  ))}
-                </div>
 
                 <ChatInput
                   key={activeChatId ?? 'new'}

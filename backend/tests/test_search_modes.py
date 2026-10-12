@@ -83,3 +83,25 @@ async def test_search_mode_deep_research_override():
     
     assert result["intent"] == INTENT_COMPLEX
     assert route_after_classify(result) == "planner"
+
+@pytest.mark.anyio
+async def test_search_mode_cache_override():
+    """search_mode='cache' must set needs_retrieval=False and route to check_retrieval."""
+    state = _make_state(search_mode="cache")
+    with patch("app.agent.nodes._call_llm_judge", new_callable=AsyncMock) as mock_judge:
+        mock_judge.return_value = {"intent": "NORMAL_CHAT"}
+        result = await classify_intent_node(state, _make_config())
+    
+    assert result["needs_retrieval"] is False
+    assert route_after_classify(result) == "check_retrieval"
+
+@pytest.mark.anyio
+async def test_search_mode_auto():
+    """search_mode='auto' or None must use standard intent classification."""
+    state = _make_state(search_mode="auto")
+    with patch("app.agent.nodes._call_llm_judge", new_callable=AsyncMock) as mock_judge:
+        mock_judge.return_value = {"intent": "NORMAL_CHAT"}
+        result = await classify_intent_node(state, _make_config())
+    
+    assert result["intent"] == "NORMAL_CHAT"
+    assert route_after_classify(result) == "check_retrieval"

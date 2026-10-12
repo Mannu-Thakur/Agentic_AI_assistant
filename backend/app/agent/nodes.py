@@ -1699,6 +1699,7 @@ async def classify_intent_node(
         "intent":                intent,
         "allowed_tools":         allowed_tools,
         "is_private_doc_query":  is_private_doc_query,
+        "needs_retrieval":       state.get("needs_retrieval", False),
         "no_doc_answer":         False,
         "memory_write_content":  memory_write_content,
         "memory_write_category": memory_write_category,
@@ -2844,14 +2845,14 @@ async def grade_documents_node(
                     logger.error(f"CRAG web search on empty docs failed: {e}")
 
         steps.append("grade_documents")
-        # If inline_doc_context is available (direct text extracted from a just-uploaded
-        # file), do NOT block the LLM — it has the content it needs even without vector chunks.
-        _has_inline_ctx = bool(state.get("inline_doc_context", ""))
+        # If inline_doc_context or uploaded_file_paths is available (direct file on disk),
+        # do NOT block the LLM — it has the document content it needs even without vector chunks.
+        _has_inline_ctx = bool(state.get("inline_doc_context", "") or state.get("uploaded_file_paths"))
         return {
-            "document_relevance":  "no_docs",
+            "document_relevance":  "no_docs" if not _has_inline_ctx else "inline_doc",
             "no_doc_answer":       is_private and not _has_inline_ctx,
             "retrieved_documents": retrieved_docs,
-            "retrieval_confidence": 0.0,
+            "retrieval_confidence": 0.0 if not _has_inline_ctx else 1.0,
             "steps":               steps,
         }
 
@@ -3042,19 +3043,19 @@ async def grade_documents_node(
 
     # No relevant chunks and no web search path for private doc queries
     if not relevant_chunks and is_private:
-        # Suppress no_doc_answer when inline text was extracted directly from a just-uploaded file
-        _has_inline_ctx = bool(state.get("inline_doc_context", ""))
+        # Suppress no_doc_answer when inline text or files were uploaded directly
+        _has_inline_ctx = bool(state.get("inline_doc_context", "") or state.get("uploaded_file_paths"))
         if _has_inline_ctx:
-            logger.info("CRAG: no RAG chunks but inline_doc_context present — allowing generation.")
+            logger.info("CRAG: no RAG chunks but inline_doc_context/uploaded files present — allowing generation.")
         else:
             logger.info("CRAG: no relevant chunks for private query (Tavily blocked) → no doc answer guard active.")
         steps.append("grade_documents")
         return {
-            "document_relevance":  "no_private_docs",
+            "document_relevance":  "no_private_docs" if not _has_inline_ctx else "inline_doc",
             "no_doc_answer":       not _has_inline_ctx,
             "retrieved_documents": memory_items,
             "source_documents":    [],
-            "retrieval_confidence": confidence_score,
+            "retrieval_confidence": confidence_score if not _has_inline_ctx else 1.0,
             "generation_mode":     "crag_rejected" if not _has_inline_ctx else "inline_doc",
             "steps":               steps,
         }

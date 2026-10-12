@@ -18,7 +18,7 @@ import { useAlertStore } from '../../store/alertStore';
 import { useAuthStore } from '../../store/authStore';
 import { AlertPanel } from './AlertPanel';
 
-export function NotificationBell() {
+export function NotificationBell({ placement = 'sidebar' }: { placement?: 'sidebar' | 'header' }) {
   const { unreadCount, isConnected, initSSE, closeSSE } = useAlertStore();
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const [open, setOpen] = useState(false);
@@ -89,7 +89,7 @@ export function NotificationBell() {
       </button>
 
       {/* Dropdown panel */}
-      {open && <AlertPanel onClose={() => setOpen(false)} />}
+      {open && <AlertPanel onClose={() => setOpen(false)} placement={placement} />}
     </div>
   );
 }
