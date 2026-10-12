@@ -128,6 +128,14 @@ class Settings(BaseSettings):
                 return f"sqlite:///{abs_db_path.as_posix()}"
         return v
 
+    @field_validator("VECTOR_DB_DIR", "UPLOAD_DIR", mode="before")
+    @classmethod
+    def _canonicalize_storage_paths(cls, v: Any) -> str:
+        if isinstance(v, str) and not os.path.isabs(v):
+            backend_dir = Path(__file__).resolve().parent.parent.parent
+            return str((backend_dir / v).resolve())
+        return v
+
     @property
     def ASYNC_DATABASE_URL(self) -> str:
         url = self.DATABASE_URL

@@ -2512,17 +2512,47 @@ async def retrieve_context_node(
             async with AsyncSessionLocal() as db:
                 user_docs = await DocumentService.get_user_documents(db, user_id)
                 user_docs = user_docs or []
+                # ── Auto-retry failed docs (server-restart interrupted ingestion) ──────
+                # Docs left in 'failed' status after a server restart still have their
+                # files on disk. Trigger re-ingestion inline so users don't have to
+                # manually click the Retry button.
+                failed_docs = [d for d in user_docs if getattr(d, 'status', None) == 'failed' and getattr(d, 'storage_path', None)]
+                if failed_docs:
+                    logger.info(f"[retrieve_context] Auto-retrying {len(failed_docs)} failed doc(s) with intact storage paths")
+                    import os as _os
+                    from app.services.parser_service import ParserService as _PS
+                    for _fdoc in failed_docs:
+                        if _fdoc.storage_path and _os.path.exists(_fdoc.storage_path):
+                            try:
+                                _ftype = (getattr(_fdoc, 'file_type', None) or
+                                          _os.path.splitext(_fdoc.storage_path)[1].lstrip('.') or 'text')
+                                asyncio.ensure_future(
+                                    _PS.process_document_ingestion(
+                                        document_id=_fdoc.id,
+                                        user_id=user_id,
+                                        file_path=_fdoc.storage_path,
+                                        filename=getattr(_fdoc, 'filename', 'doc'),
+                                        file_type=_ftype,
+                                    )
+                                )
+                                logger.info(f"[retrieve_context] Queued re-ingestion for failed doc {_fdoc.id} ({_fdoc.storage_path})")
+                            except Exception as _retry_err:
+                                logger.warning(f"[retrieve_context] Could not auto-retry doc {_fdoc.id}: {_retry_err}")
+
                 # If any document is currently in 'processing' (just uploaded with this prompt),
-                # wait briefly (up to 4s) for background indexing to complete so chunks are queryable.
+                # wait up to 15s (30 × 0.5s) for background indexing to complete.
+                # NOTE: The SentenceTransformer model cold-start alone takes ~7s, so the
+                # previous 4s (8 iterations) limit caused false 'document not found' responses.
                 processing_docs = [d for d in user_docs if getattr(d, 'status', None) == 'processing']
                 if processing_docs:
-                    logger.info(f"[retrieve_context] Waiting for {len(processing_docs)} in-flight document(s) to finish indexing...")
-                    for _ in range(8):
+                    logger.info(f"[retrieve_context] Waiting for {len(processing_docs)} in-flight document(s) to finish indexing (up to 15s)...")
+                    for _wait_i in range(30):
                         await asyncio.sleep(0.5)
                         async with AsyncSessionLocal() as _check_db:
                             recheck = await DocumentService.get_user_documents(_check_db, user_id)
                             if not any(getattr(d, 'status', None) == 'processing' for d in (recheck or [])):
                                 user_docs = recheck or []
+                                logger.info(f"[retrieve_context] All docs ready after {(_wait_i+1)*0.5:.1f}s")
                                 break
                     user_docs = user_docs or []
                 num_docs = len(user_docs)

@@ -1750,6 +1750,8 @@ export default function ChatPage() {
     }
 
     // ── Upload any attached document files to Documents API ─────────────
+    // Wait for ingestion to complete (up to 20s) before sending the message so
+    // ChromaDB has chunks indexed and the LLM never gets a false 'not found'.
     if (attachedFiles.length > 0 && chatId) {
       try {
         const uploads: Promise<any>[] = [];
@@ -1757,10 +1759,27 @@ export default function ChatPage() {
           const fd = new FormData();
           fd.append('file', docFile);
           fd.append('chat_id', chatId);
-          // F-C2 FIX: Use apiRequest instead of raw fetch — auth token and base URL handled centrally
           uploads.push(apiRequest('/documents/upload', { method: 'POST', body: fd }));
         }
-        await Promise.all(uploads);
+        const uploadedDocs: any[] = await Promise.all(uploads);
+
+        // Poll until all docs are 'ready' (or 'failed') — max 20 seconds
+        const uploadedIds = new Set(uploadedDocs.map((d: any) => d?.id).filter(Boolean));
+        if (uploadedIds.size > 0) {
+          const POLL_INTERVAL = 1000;
+          const MAX_POLLS = 20;
+          for (let i = 0; i < MAX_POLLS; i++) {
+            await new Promise((r) => setTimeout(r, POLL_INTERVAL));
+            try {
+              const docList: any[] = await apiRequest(`/documents?chat_id=${chatId}`);
+              const pending = docList.filter(
+                (d: any) => uploadedIds.has(d.id) && d.status === 'processing'
+              );
+              if (pending.length === 0) break; // all ready or failed
+            } catch { break; } // non-critical, proceed anyway
+          }
+        }
+
         if (chatId) fetchChatDocuments(chatId);
       } catch (err) {
         console.error('Document upload error:', err);
@@ -2668,7 +2687,7 @@ export default function ChatPage() {
 
       {/* ══════════ CONVERSATION SIDEBAR ══════════ */}
       <aside
-        className="flex flex-col border-r border-border/80 bg-surface flex-shrink-0 sidebar-transition hidden lg:flex select-none"
+        className="flex flex-col border-r border-border/80 bg-surface flex-shrink-0 sidebar-transition hidden lg:flex select-none relative z-[1]"
         style={{ width: convoOpen ? '280px' : '58px' }}
         aria-label="Conversations"
       >
@@ -2975,7 +2994,7 @@ export default function ChatPage() {
       </aside>
 
       {/* ══════════ MAIN CHAT ══════════ */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden relative bg-background">
+      <div className="flex-1 flex flex-col min-w-0 overflow-x-hidden relative bg-background">
 
         {/* Toolbar */}
         <header className="h-[var(--header-height)] px-4 flex items-center justify-between bg-background flex-shrink-0 z-10 relative">

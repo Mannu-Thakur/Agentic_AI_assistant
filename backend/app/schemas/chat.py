@@ -39,6 +39,8 @@ class MessageCreate(BaseModel):
   parent_message_id: Optional[str] = None
   images: Optional[List['ImageAttachment']] = []
   search_mode: Optional[str] = None
+  inline_doc_context: Optional[str] = None
+  telemetry: Optional[bool] = None
 
 class MessageOut(BaseModel):
   id: str

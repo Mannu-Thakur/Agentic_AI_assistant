@@ -460,14 +460,16 @@ async def upload_document(
 
         # CRIT-1 FIX: anchor the main ingestion task.
         ingest_task = _make_background_task(_ingest_and_extract())
-        # For small documents (< 2MB), await ingestion synchronously with a short timeout (up to 2.5s)
-        # so immediate downstream chat queries find the document ready immediately in ChromaDB.
-        if size_bytes < 2 * 1024 * 1024:
+        # For documents ≤ 10 MB, await ingestion synchronously for up to 15 seconds.
+        # This covers the SentenceTransformer cold-start time (~7s) so that when the
+        # user immediately asks about the uploaded file the chunks are already in ChromaDB.
+        if size_bytes <= 10 * 1024 * 1024:
             try:
-                await asyncio.wait_for(asyncio.shield(ingest_task), timeout=2.5)
+                await asyncio.wait_for(asyncio.shield(ingest_task), timeout=15.0)
                 await db.refresh(doc)
+                logger.info(f"[Upload] Synchronous ingestion completed for doc {doc.id} — status={doc.status}")
             except asyncio.TimeoutError:
-                logger.info(f"[Upload] Ingestion for doc {doc.id} continuing in background...")
+                logger.info(f"[Upload] Ingestion for doc {doc.id} still running in background (timeout=15s)")
             except Exception as _e:
                 logger.warning(f"[Upload] Synchronous ingestion check warning: {_e}")
 
