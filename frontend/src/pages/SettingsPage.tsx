@@ -7,6 +7,7 @@ import { Tooltip } from '../components/ui/Tooltip';
 import { CustomSelect, SelectOption } from '../components/ui/CustomSelect';
 import { ToastContainer } from '../components/ui/Toast';
 import { useToast } from '../hooks/useToast';
+import type { ToastType } from '../hooks/useToast';
 import {
   User, Sliders, Key,
   Brain, Zap, Save, Eye, EyeOff,
@@ -15,7 +16,8 @@ import {
   XCircle, FileText, FileCode, Sparkles, Calendar, Info, ChevronRight,
   Database, Layers, Scissors, HardDrive, Plus, Monitor,
   Sun, Moon, Globe, Type, Archive, Link2, RotateCcw,
-  Copy, CheckCheck, Radio, PlusCircle, BarChart2
+  Copy, CheckCheck, Radio, PlusCircle, BarChart2,
+  Bell, Mic, MicOff, Volume2, ExternalLink, GitBranch
 } from 'lucide-react';
 import { apiRequest } from '../services/api';
 import { ProviderKeyManager } from '../services/providerKeyManager';
@@ -716,9 +718,348 @@ const MEMORY_CATEGORY_OPTIONS: SelectOption[] = [
   { value: 'topic', label: 'Topic', description: 'Subject area' },
 ];
 
-// -------------------------------------------------------------
-// -- Main Settings Page ----------------------------------------
-// -------------------------------------------------------------
+// -----------------------------------------------------------------
+// ── PersonalizationTab ────────────────────────────────────────────
+// -----------------------------------------------------------------
+function PersonalizationTab({ addToast }: { addToast: (m: string, t?: ToastType) => void }) {
+  const [instructions, setInstructions] = useState(() => localStorage.getItem('custom_instructions') || '');
+  const [style, setStyle] = useState(() => localStorage.getItem('response_style') || 'balanced');
+  const [lang, setLang] = useState(() => localStorage.getItem('preferred_language') || 'python');
+  const [saved, setSaved] = useState(false);
+
+  const handleSave = () => {
+    localStorage.setItem('custom_instructions', instructions);
+    localStorage.setItem('response_style', style);
+    localStorage.setItem('preferred_language', lang);
+    setSaved(true);
+    addToast('Personalization preferences saved.', 'success');
+    setTimeout(() => setSaved(false), 2500);
+  };
+
+  return (
+    <>
+      <SectionCard title="Custom Instructions">
+        <div className="py-3 space-y-3">
+          <p className="text-xs text-foreground-2 leading-relaxed">
+            Tell the AI how you'd like it to respond. These instructions are prepended to every conversation.
+          </p>
+          <textarea
+            value={instructions}
+            onChange={(e) => setInstructions(e.target.value)}
+            rows={5}
+            placeholder="e.g. Always respond concisely. Prefer code examples. Use metric units."
+            className="w-full bg-surface-2 border border-border rounded-xl px-4 py-3 text-xs text-foreground placeholder:text-foreground-3 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/30 resize-none custom-scrollbar"
+          />
+          <p className="text-[10px] text-foreground-3">{instructions.length} / 1500 characters</p>
+        </div>
+      </SectionCard>
+      <SectionCard title="Response Preferences">
+        <SettingRow label="Response Style" desc="How detailed or concise AI responses should be.">
+          <select
+            value={style}
+            onChange={(e) => setStyle(e.target.value)}
+            className="bg-surface-2 border border-border rounded-lg px-3 py-1.5 text-xs text-foreground focus:outline-none focus:border-blue-500"
+          >
+            <option value="concise">Concise — Short, direct answers</option>
+            <option value="balanced">Balanced — Standard depth</option>
+            <option value="detailed">Detailed — Thorough explanations</option>
+          </select>
+        </SettingRow>
+        <SettingRow label="Preferred Coding Language" desc="Suggested language for code examples.">
+          <select
+            value={lang}
+            onChange={(e) => setLang(e.target.value)}
+            className="bg-surface-2 border border-border rounded-lg px-3 py-1.5 text-xs text-foreground focus:outline-none focus:border-blue-500"
+          >
+            {['python','javascript','typescript','go','rust','java','cpp','bash'].map(l => (
+              <option key={l} value={l}>{l.charAt(0).toUpperCase() + l.slice(1)}</option>
+            ))}
+          </select>
+        </SettingRow>
+      </SectionCard>
+      <div className="flex justify-end">
+        <button
+          onClick={handleSave}
+          className={`flex items-center gap-1.5 px-5 py-2.5 rounded-xl text-xs font-bold transition-all shadow-sm active:scale-[0.98]
+            ${saved ? 'bg-emerald-600 border-emerald-700 text-white' : 'bg-blue-600 hover:bg-blue-500 border-blue-700 text-white'} border`}
+        >
+          {saved ? <><Check className="w-3.5 h-3.5" /> Saved!</> : <><Save className="w-3.5 h-3.5" /> Save Preferences</>}
+        </button>
+      </div>
+    </>
+  );
+}
+
+// -----------------------------------------------------------------
+// ── NotificationsTab ──────────────────────────────────────────────
+// -----------------------------------------------------------------
+function NotificationsTab({ addToast }: { addToast: (m: string, t?: ToastType) => void }) {
+  const [inApp, setInApp] = useState(() => localStorage.getItem('notifications_inapp') !== 'false');
+  const [tasks, setTasks] = useState(() => localStorage.getItem('notifications_tasks') !== 'false');
+  const [browserPerm, setBrowserPerm] = useState<NotificationPermission>('default');
+
+  useEffect(() => {
+    if ('Notification' in window) setBrowserPerm(Notification.permission);
+  }, []);
+
+  const requestBrowserPerm = async () => {
+    if (!('Notification' in window)) {
+      addToast('Browser notifications are not supported in this browser.', 'error');
+      return;
+    }
+    const result = await Notification.requestPermission();
+    setBrowserPerm(result);
+    if (result === 'granted') addToast('Browser notifications enabled!', 'success');
+    else if (result === 'denied') addToast('Permission denied. Enable notifications in browser settings.', 'error');
+  };
+
+  const permColor = { granted: 'text-emerald-400', denied: 'text-rose-400', default: 'text-amber-400' }[browserPerm];
+  const permLabel = { granted: '✓ Allowed', denied: '✗ Blocked', default: '? Not set' }[browserPerm];
+
+  return (
+    <>
+      <SectionCard title="In-App Notifications">
+        <SettingRow label="In-App Alerts" desc="Show toast notifications inside the workspace.">
+          <Toggle checked={inApp} onChange={(v) => { setInApp(v); localStorage.setItem('notifications_inapp', String(v)); }} label="In-app alerts" />
+        </SettingRow>
+        <SettingRow label="Task Completion Alerts" desc="Notify when Mission Mode tasks complete.">
+          <Toggle checked={tasks} onChange={(v) => { setTasks(v); localStorage.setItem('notifications_tasks', String(v)); }} label="Task alerts" />
+        </SettingRow>
+      </SectionCard>
+      <SectionCard title="Browser Notifications">
+        <SettingRow label="Permission Status" desc="Current browser notification permission.">
+          <span className={`text-xs font-bold ${permColor}`}>{permLabel}</span>
+        </SettingRow>
+        <SettingRow label="Request Permission" desc="Enable browser push notifications for background tasks.">
+          <button
+            onClick={requestBrowserPerm}
+            disabled={browserPerm === 'denied'}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-border bg-background hover:bg-surface-2 text-foreground text-xs font-bold transition-all shadow-sm active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <Bell className="w-3.5 h-3.5" />
+            {browserPerm === 'granted' ? 'Already Allowed' : browserPerm === 'denied' ? 'Blocked by Browser' : 'Enable Notifications'}
+          </button>
+        </SettingRow>
+      </SectionCard>
+    </>
+  );
+}
+
+// -----------------------------------------------------------------
+// ── VoiceTab ──────────────────────────────────────────────────────
+// -----------------------------------------------------------------
+function VoiceTab({ enableDictation, setEnableDictation, addToast }: {
+  enableDictation: boolean;
+  setEnableDictation: (v: boolean) => void;
+  addToast: (m: string, t?: ToastType) => void;
+}) {
+  const [listening, setListening] = useState(false);
+  const [transcript, setTranscript] = useState('');
+  const recognitionRef = useRef<any>(null);
+
+  const SpeechRecognition = typeof window !== 'undefined'
+    ? ((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)
+    : null;
+  const ttsAvailable = typeof window !== 'undefined' && 'speechSynthesis' in window;
+  const srAvailable = !!SpeechRecognition;
+
+  const toggleListening = () => {
+    if (!SpeechRecognition) { addToast('Speech Recognition not available in this browser.', 'error'); return; }
+    if (listening) {
+      recognitionRef.current?.stop();
+      setListening(false);
+    } else {
+      const rec = new SpeechRecognition();
+      rec.continuous = false;
+      rec.interimResults = true;
+      rec.onresult = (e: any) => {
+        const t = Array.from(e.results).map((r: any) => r[0].transcript).join('');
+        setTranscript(t);
+      };
+      rec.onend = () => setListening(false);
+      rec.onerror = () => { setListening(false); addToast('Microphone error. Check permissions.', 'error'); };
+      rec.start();
+      recognitionRef.current = rec;
+      setListening(true);
+      setTranscript('');
+    }
+  };
+
+  return (
+    <>
+      <SectionCard title="Speech Recognition">
+        <SettingRow label="Status" desc="Browser speech-to-text API availability.">
+          <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${srAvailable ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-surface-3 text-foreground-3 border border-border'}`}>
+            {srAvailable ? '✓ Available' : '✗ Not supported'}
+          </span>
+        </SettingRow>
+        <SettingRow label="Enable Dictation" desc="Use voice input in the message composer.">
+          <Toggle checked={enableDictation} onChange={setEnableDictation} label="Enable dictation" />
+        </SettingRow>
+        {srAvailable && (
+          <div className="py-3 space-y-3">
+            <button
+              onClick={toggleListening}
+              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border text-xs font-bold transition-all shadow-sm active:scale-[0.98]
+                ${listening ? 'bg-rose-600 border-rose-700 text-white animate-pulse' : 'bg-surface-2 border-border text-foreground hover:bg-surface-3'}`}
+            >
+              {listening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+              {listening ? 'Stop Listening' : 'Test Microphone'}
+            </button>
+            {transcript && (
+              <div className="p-3 bg-surface-2 border border-border rounded-xl">
+                <p className="text-[10px] text-foreground-3 mb-1">Transcript:</p>
+                <p className="text-xs text-foreground">{transcript}</p>
+              </div>
+            )}
+          </div>
+        )}
+      </SectionCard>
+      <SectionCard title="Text-to-Speech">
+        <SettingRow label="TTS Status" desc="Browser speech synthesis API availability.">
+          <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${ttsAvailable ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-surface-3 text-foreground-3 border border-border'}`}>
+            {ttsAvailable ? '✓ Available' : '✗ Not supported'}
+          </span>
+        </SettingRow>
+        {ttsAvailable && (
+          <SettingRow label="Test TTS" desc="Preview text-to-speech with a sample phrase.">
+            <button
+              onClick={() => { const u = new SpeechSynthesisUtterance('Hello, I am your AI workspace assistant.'); window.speechSynthesis.speak(u); }}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-border bg-background hover:bg-surface-2 text-foreground text-xs font-bold transition-all shadow-sm active:scale-[0.98]"
+            >
+              <Volume2 className="w-3.5 h-3.5" /> Speak Sample
+            </button>
+          </SettingRow>
+        )}
+      </SectionCard>
+    </>
+  );
+}
+
+// -----------------------------------------------------------------
+// ── UsageTab ──────────────────────────────────────────────────────
+// -----------------------------------------------------------------
+function UsageTab() {
+  const [stats, setStats] = useState<{total_messages?: number; total_conversations?: number; total_documents?: number} | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    apiRequest('/health')
+      .then((_h) => {
+        setStats({ total_messages: 0, total_conversations: 0, total_documents: 0 });
+        return apiRequest('/metrics/usage').catch(() => null);
+      })
+      .then((m) => { if (m) setStats(m); })
+      .catch(() => setStats(null))
+      .finally(() => setLoading(false));
+  }, []);
+
+  return (
+    <>
+      <SectionCard title="Workspace Usage">
+        {loading ? (
+          <div className="py-8 flex items-center justify-center">
+            <Loader2 className="w-5 h-5 animate-spin text-foreground-3" />
+          </div>
+        ) : stats ? (
+          <div className="py-3 grid grid-cols-3 gap-4">
+            {[
+              { label: 'Conversations', value: stats.total_conversations ?? '—', icon: '💬' },
+              { label: 'Messages', value: stats.total_messages ?? '—', icon: '📝' },
+              { label: 'Documents', value: stats.total_documents ?? '—', icon: '📄' },
+            ].map(({ label, value, icon }) => (
+              <div key={label} className="bg-surface-2 border border-border rounded-xl p-4 text-center">
+                <p className="text-2xl mb-1">{icon}</p>
+                <p className="text-lg font-bold text-foreground">{String(value)}</p>
+                <p className="text-[10px] text-foreground-3 mt-0.5">{label}</p>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="py-4 text-xs text-foreground-3 text-center">Could not load usage statistics.</p>
+        )}
+      </SectionCard>
+      <SectionCard title="Billing Information">
+        <div className="py-4 space-y-3 text-xs text-foreground-2 leading-relaxed">
+          <p className="flex items-start gap-2"><span className="text-emerald-400 font-bold mt-0.5">✓</span> All usage is tracked locally. No subscription or billing required for core features.</p>
+          <p className="flex items-start gap-2"><span className="text-blue-400 font-bold mt-0.5">ℹ</span> External AI providers (OpenAI, Groq, Gemini, etc.) have their own free tiers and rate limits. Manage API keys in the <span className="text-blue-400 font-semibold">AI Models</span> tab.</p>
+          <p className="flex items-start gap-2"><span className="text-amber-400 font-bold mt-0.5">⚡</span> Groq provides free access to Llama and DeepSeek models. Google Gemini has a generous free tier. No credit card required for these providers.</p>
+        </div>
+      </SectionCard>
+    </>
+  );
+}
+
+// -----------------------------------------------------------------
+// ── StorageTab ────────────────────────────────────────────────────
+// -----------------------------------------------------------------
+function StorageTab({ addToast }: { addToast: (m: string, t?: ToastType) => void }) {
+  const [health, setHealth] = useState<any>(null);
+  const [clearing, setClearing] = useState(false);
+
+  useEffect(() => {
+    apiRequest('/health/readiness').then(setHealth).catch(() => setHealth(null));
+  }, []);
+
+  const clearMemories = async () => {
+    if (!window.confirm('Delete all semantic memories? This cannot be undone.')) return;
+    setClearing(true);
+    try {
+      await apiRequest('/memories', { method: 'DELETE' });
+      addToast('All semantic memories cleared.', 'success');
+    } catch (e: any) {
+      addToast(e.message || 'Failed to clear memories.', 'error');
+    } finally {
+      setClearing(false);
+    }
+  };
+
+  return (
+    <>
+      <SectionCard title="Storage Status">
+        <div className="py-3 space-y-2.5">
+          {[
+            { label: 'Conversations', desc: 'Chat history stored in SQLite', status: health?.dependencies?.database === 'ready' ? 'ready' : 'checking' },
+            { label: 'Documents (RAG)', desc: 'Embeddings stored in ChromaDB vector database', status: 'local' },
+            { label: 'Semantic Memories', desc: 'User memories stored in SQLite', status: health?.dependencies?.database === 'ready' ? 'ready' : 'checking' },
+            { label: 'Cache', desc: 'Redis (if running) or in-memory fallback', status: health?.dependencies?.redis === 'ready' ? 'ready' : 'optional' },
+          ].map(({ label, desc, status }) => (
+            <div key={label} className="flex items-center justify-between p-3 rounded-xl bg-surface-2 border border-border">
+              <div>
+                <p className="text-xs font-semibold text-foreground">{label}</p>
+                <p className="text-[10px] text-foreground-3 mt-0.5">{desc}</p>
+              </div>
+              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                status === 'ready' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
+                status === 'local' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' :
+                status === 'optional' ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' :
+                'bg-surface-3 text-foreground-3 border-border'
+              }`}>
+                {status === 'ready' ? '✓ Ready' : status === 'local' ? '📁 Local' : status === 'optional' ? '○ Optional' : '… Checking'}
+              </span>
+            </div>
+          ))}
+        </div>
+      </SectionCard>
+      <SectionCard title="Data Cleanup">
+        <SettingRow label="Clear Semantic Memory" desc="Delete all stored semantic memories. AI will lose persistent context about you.">
+          <button
+            onClick={clearMemories}
+            disabled={clearing}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-rose-900/30 bg-rose-950/10 hover:bg-rose-950/25 text-rose-400 text-xs font-bold transition-all shadow-sm active:scale-[0.98] disabled:opacity-40"
+          >
+            {clearing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+            {clearing ? 'Clearing...' : 'Clear Memories'}
+          </button>
+        </SettingRow>
+      </SectionCard>
+    </>
+  );
+}
+
+// -----------------------------------------------------------------
+// ── Main Settings Page ────────────────────────────────────────────
+// -----------------------------------------------------------------
 
 export default function SettingsPage() {
   // -- Routing -----------------------------------------------
@@ -2707,6 +3048,268 @@ export default function SettingsPage() {
                 </SectionCard>
               </>
             )}
+
+            {/* ── Appearance tab ── */}
+            {tab === 'appearance' && (
+              <>
+                <SectionCard title="Theme">
+                  <SettingRow label="Color Theme" desc="Choose interface color scheme. Updates instantly.">
+                    <CustomSelect options={THEME_OPTIONS} value={theme} onChange={(v) => setTheme(v as any)} />
+                  </SettingRow>
+                  <SettingRow label="Contrast Mode" desc="Increase contrast for better readability.">
+                    <CustomSelect options={CONTRAST_OPTIONS} value={contrastMode} onChange={(v) => setContrastMode(v as any)} />
+                  </SettingRow>
+                  <SettingRow label="Accent Color" desc="Highlight color used across the UI.">
+                    <CustomSelect options={ACCENT_OPTIONS} value={accentColor} onChange={(v) => setAccentColor(v as any)} />
+                  </SettingRow>
+                </SectionCard>
+                <SectionCard title="Layout & Typography">
+                  <SettingRow label="Font Size" desc="Adjust the base font size across the workspace.">
+                    <CustomSelect options={FONT_SIZE_OPTIONS} value={fontSize} onChange={(v) => setFontSize(v as any)} />
+                  </SettingRow>
+                  <SettingRow label="Compact Mode" desc="Reduce padding and spacing for a denser layout.">
+                    <Toggle checked={compactMode} onChange={setCompactMode} label="Compact mode" />
+                  </SettingRow>
+                </SectionCard>
+                <SectionCard title="Display Language">
+                  <SettingRow label="Interface Language" desc="Language used for labels and UI text (AI responses use the model's language).">
+                    <CustomSelect options={LANGUAGE_OPTIONS} value={language} onChange={setLanguage} />
+                  </SettingRow>
+                </SectionCard>
+              </>
+            )}
+
+            {/* ── Profile tab ── */}
+            {tab === 'profile' && (
+              <>
+                <SectionCard title="Account Information">
+                  <SettingRow label="Display Name" desc={user?.full_name || 'Not set'}>
+                    <span className="text-xs text-foreground-2 font-mono bg-surface-2 px-3 py-1.5 rounded-lg border border-border">{user?.full_name || '—'}</span>
+                  </SettingRow>
+                  <SettingRow label="Email Address" desc="Your verified login email.">
+                    <span className="text-xs text-foreground-2 font-mono bg-surface-2 px-3 py-1.5 rounded-lg border border-border">{user?.email || '—'}</span>
+                  </SettingRow>
+                  <SettingRow label="Account Created" desc="When your account was registered.">
+                    <span className="text-xs text-foreground-3">{user?.created_at ? new Date(user.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : '—'}</span>
+                  </SettingRow>
+                  <SettingRow label="Account Status" desc="Your account's current verification status.">
+                    <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${user?.is_active ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'}`}>
+                      {user?.is_active ? '✓ Active' : 'Inactive'}
+                    </span>
+                  </SettingRow>
+                </SectionCard>
+                <SectionCard title="Actions">
+                  <SettingRow label="Export Your Data" desc="Download all conversations as JSON.">
+                    <button onClick={handleExportData} className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-border bg-background hover:bg-surface-2 text-foreground text-xs font-bold transition-all shadow-sm active:scale-[0.98]">
+                      <Download className="w-3.5 h-3.5 text-foreground-3" /><span>Export JSON</span>
+                    </button>
+                  </SettingRow>
+                  <SettingRow label="Sign Out" desc="End your current workspace session." danger>
+                    <button onClick={handleLogout} className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-rose-900/30 bg-rose-950/10 hover:bg-rose-950/25 text-rose-400 text-xs font-bold transition-all shadow-sm active:scale-[0.98]">
+                      <LogOut className="w-3.5 h-3.5" /><span>Sign Out</span>
+                    </button>
+                  </SettingRow>
+                </SectionCard>
+              </>
+            )}
+
+            {/* ── Personalization tab ── */}
+            {tab === 'personalization' && (
+              <PersonalizationTab addToast={addToast} />
+            )}
+
+            {/* ── Notifications tab ── */}
+            {tab === 'notifications' && (
+              <NotificationsTab addToast={addToast} />
+            )}
+
+            {/* ── Voice tab ── */}
+            {tab === 'voice' && (
+              <VoiceTab enableDictation={enableDictation} setEnableDictation={setEnableDictation} addToast={addToast} />
+            )}
+
+            {/* ── Keyboard Shortcuts tab ── */}
+            {tab === 'shortcuts' && (
+              <>
+                <SectionCard title="Global Shortcuts">
+                  {[
+                    { keys: ['Ctrl', 'K'],          label: 'New Chat',               desc: 'Start a fresh conversation' },
+                    { keys: ['Ctrl', 'F'],          label: 'Search Conversations',   desc: 'Open global conversation search' },
+                    { keys: ['Ctrl', '/'],          label: 'Focus Composer',         desc: 'Jump to the message input box' },
+                    { keys: ['Shift', 'Enter'],     label: 'New Line',               desc: 'Insert a line break in the composer' },
+                    { keys: ['Enter'],              label: 'Send Message',           desc: 'Submit your message to the AI' },
+                    { keys: ['Ctrl', 'Shift', 'D'], label: 'Developer Mode',         desc: 'Toggle the developer panel' },
+                    { keys: ['Ctrl', 'Shift', 'S'], label: 'Stop Generation',        desc: 'Abort the current AI response' },
+                    { keys: ['Esc'],                label: 'Close Modal / Clear',    desc: 'Dismiss overlays, dialogs and menus' },
+                  ].map(({ keys, label, desc }) => (
+                    <SettingRow key={label} label={label} desc={desc}>
+                      <div className="flex items-center gap-1">
+                        {keys.map((k, i) => (
+                          <span key={i} className="inline-flex">
+                            {i > 0 && <span className="text-foreground-3 text-xs mx-0.5">+</span>}
+                            <kbd className="px-2 py-0.5 text-[10px] font-mono font-bold bg-surface-3 border border-border rounded-md text-foreground shadow-sm">{k}</kbd>
+                          </span>
+                        ))}
+                      </div>
+                    </SettingRow>
+                  ))}
+                </SectionCard>
+                <SectionCard title="Message Actions">
+                  {[
+                    { keys: ['Click', 'Copy icon'],  label: 'Copy Message',    desc: 'Copy assistant response to clipboard' },
+                    { keys: ['Click', 'Edit icon'],  label: 'Edit Message',    desc: 'Edit your previous message and resubmit' },
+                    { keys: ['Click', 'Retry icon'], label: 'Retry',           desc: 'Regenerate the last AI response' },
+                  ].map(({ keys, label, desc }) => (
+                    <SettingRow key={label} label={label} desc={desc}>
+                      <div className="flex items-center gap-1">
+                        {keys.map((k, i) => (
+                          <span key={i} className="inline-flex">
+                            {i > 0 && <span className="text-foreground-3 text-xs mx-0.5">→</span>}
+                            <kbd className="px-2 py-0.5 text-[10px] font-mono font-bold bg-surface-3 border border-border rounded-md text-foreground shadow-sm">{k}</kbd>
+                          </span>
+                        ))}
+                      </div>
+                    </SettingRow>
+                  ))}
+                </SectionCard>
+              </>
+            )}
+
+            {/* ── Usage & Billing tab ── */}
+            {tab === 'usage' && (
+              <UsageTab />
+            )}
+
+            {/* ── Storage tab ── */}
+            {tab === 'storage' && (
+              <StorageTab addToast={addToast} />
+            )}
+
+            {/* ── Connections tab ── */}
+            {tab === 'connections' && (
+              <>
+                <SectionCard title="OAuth Providers">
+                  {[
+                    { name: 'Google', icon: '🔵', desc: 'Sign in with your Google account', docsUrl: 'https://console.cloud.google.com', configured: !!(typeof window !== 'undefined') },
+                    { name: 'GitHub', icon: '⚫', desc: 'Sign in with your GitHub account', docsUrl: 'https://github.com/settings/developers', configured: !!(typeof window !== 'undefined') },
+                  ].map(({ name, icon, desc, docsUrl }) => (
+                    <SettingRow key={name} label={`${icon} ${name}`} desc={desc}>
+                      <a href={docsUrl} target="_blank" rel="noopener noreferrer"
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-background hover:bg-surface-2 text-foreground-2 text-xs font-semibold transition-all">
+                        <ExternalLink className="w-3 h-3" /><span>Configure</span>
+                      </a>
+                    </SettingRow>
+                  ))}
+                </SectionCard>
+                <SectionCard title="Search Providers">
+                  {SEARCH_PROVIDER_IDS.map((id) => {
+                    const meta = SEARCH_PROVIDER_METADATA[id];
+                    return (
+                      <SettingRow key={id} label={meta.name} desc={meta.desc}>
+                        <a href={meta.docsUrl} target="_blank" rel="noopener noreferrer"
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-background hover:bg-surface-2 text-foreground-2 text-xs font-semibold transition-all">
+                          <ExternalLink className="w-3 h-3" /><span>Get API Key</span>
+                        </a>
+                      </SettingRow>
+                    );
+                  })}
+                </SectionCard>
+                <SectionCard title="Note">
+                  <div className="py-3 px-1 text-xs text-foreground-2 leading-relaxed space-y-2">
+                    <p>Configure AI provider keys in the <button onClick={() => setTab('models')} className="text-blue-400 underline font-semibold">AI Models</button> tab.</p>
+                    <p>Configure MCP servers in the <button onClick={() => setTab('mcpservers')} className="text-blue-400 underline font-semibold">MCP Servers</button> tab.</p>
+                    <p className="text-foreground-3">OAuth configuration requires updates to your <code className="bg-surface-3 px-1 rounded text-[10px]">.env</code> file on the server.</p>
+                  </div>
+                </SectionCard>
+              </>
+            )}
+
+            {/* ── Git tab ── */}
+            {tab === 'git' && (
+              <>
+                <SectionCard title="Git Integration">
+                  <div className="py-6 flex flex-col items-center gap-3 text-center">
+                    <div className="w-12 h-12 rounded-2xl bg-surface-3 border border-border flex items-center justify-center">
+                      <GitBranch className="w-6 h-6 text-foreground-3" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-foreground">Git Integration</p>
+                      <p className="text-xs text-foreground-3 mt-1 max-w-sm leading-relaxed">
+                        Connect a local or remote Git repository to enable code-aware AI assistance, commit message generation, and code review features.
+                      </p>
+                    </div>
+                    <div className="flex flex-col gap-2 w-full max-w-sm mt-2">
+                      <input
+                        type="text"
+                        readOnly
+                        placeholder="Repository path or URL (e.g. /home/user/project or https://github.com/...)"
+                        defaultValue={localStorage.getItem('git_repo_path') || ''}
+                        className="w-full bg-surface-2 border border-border rounded-lg px-3 py-2 text-xs text-foreground placeholder:text-foreground-3 focus:outline-none focus:border-blue-500"
+                      />
+                      <p className="text-[10px] text-amber-400 bg-amber-950/20 border border-amber-900/30 rounded-lg px-3 py-2 text-left">
+                        ⚡ Git integration requires the backend to be running on a system with git installed. Full implementation coming in a future update.
+                      </p>
+                    </div>
+                  </div>
+                </SectionCard>
+                <SectionCard title="Commit Assistant">
+                  <SettingRow label="Auto-generate Commit Messages" desc="AI suggests commit messages based on your staged diff.">
+                    <Toggle checked={localStorage.getItem('git_auto_commit') === 'true'} onChange={(v) => { localStorage.setItem('git_auto_commit', String(v)); }} label="Auto commit messages" />
+                  </SettingRow>
+                  <SettingRow label="Code Review on PR" desc="Summarize pull request changes using AI before merging.">
+                    <Toggle checked={localStorage.getItem('git_pr_review') === 'true'} onChange={(v) => { localStorage.setItem('git_pr_review', String(v)); }} label="PR code review" />
+                  </SettingRow>
+                </SectionCard>
+              </>
+            )}
+
+            {/* ── Environments tab ── */}
+            {tab === 'environments' && (
+              <>
+                <SectionCard title="Runtime Environment">
+                  <div className="py-4 space-y-3">
+                    {[
+                      { key: 'Node.js', value: 'Vite 5 (Browser)', icon: '🟢' },
+                      { key: 'Python', value: 'FastAPI + Uvicorn (Backend)', icon: '🐍' },
+                      { key: 'Database', value: 'SQLite (local) / PostgreSQL (prod)', icon: '🗄️' },
+                      { key: 'Vector DB', value: 'ChromaDB (local)', icon: '🔵' },
+                      { key: 'Cache', value: 'Redis (optional) / SQLite fallback', icon: '⚡' },
+                    ].map(({ key, value, icon }) => (
+                      <div key={key} className="flex items-center justify-between py-2 border-b border-border/50 last:border-0">
+                        <span className="text-xs font-semibold text-foreground">{icon} {key}</span>
+                        <span className="text-xs text-foreground-3 font-mono">{value}</span>
+                      </div>
+                    ))}
+                  </div>
+                </SectionCard>
+                <SectionCard title="Environment Variables">
+                  <div className="py-3 px-1 space-y-2">
+                    <p className="text-xs text-foreground-2 leading-relaxed">
+                      Configure environment variables in your <code className="bg-surface-3 px-1.5 py-0.5 rounded text-[10px] font-mono">.env</code> file at the project root.
+                      Never commit secrets to version control.
+                    </p>
+                    <div className="bg-surface-2 border border-border rounded-xl p-4 font-mono text-[10px] text-foreground-2 space-y-1">
+                      {[
+                        '# AI Providers',
+                        'GROQ_API_KEY=gsk_...',
+                        'GEMINI_API_KEY=AIza...',
+                        'OPENAI_API_KEY=sk-...',
+                        '',
+                        '# Search',
+                        'TAVILY_API_KEY=tvly-...',
+                        '',
+                        '# Database',
+                        'DATABASE_URL=sqlite:///./sql_app.db',
+                      ].map((line, i) => (
+                        <p key={i} className={line.startsWith('#') ? 'text-foreground-3' : line === '' ? 'h-2' : 'text-emerald-400/80'}>{line || '\u00a0'}</p>
+                      ))}
+                    </div>
+                    <p className="text-[10px] text-foreground-3">Restart the backend after changing environment variables.</p>
+                  </div>
+                </SectionCard>
+              </>
+            )}
+
           </div>
         </div>
       </div>

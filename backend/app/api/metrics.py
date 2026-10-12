@@ -27,3 +27,25 @@ async def provider_metrics_summary(current_user=Depends(get_current_user)):
             "recent_circuit_events": [],
             "error": str(exc),
         }
+
+
+@router.get("/metrics/usage")
+async def workspace_usage(current_user=Depends(get_current_user)):
+    """Return workspace usage counts: messages, conversations, and documents."""
+    try:
+        from app.database import AsyncSessionLocal
+        from sqlalchemy import text
+        async with AsyncSessionLocal() as session:
+            conv_result = await session.execute(text("SELECT COUNT(*) FROM chats WHERE user_id = :uid"), {"uid": current_user.id})
+            msg_result  = await session.execute(text(
+                "SELECT COUNT(*) FROM messages m JOIN chats c ON m.chat_id = c.id WHERE c.user_id = :uid"
+            ), {"uid": current_user.id})
+            doc_result  = await session.execute(text("SELECT COUNT(*) FROM documents WHERE user_id = :uid"), {"uid": current_user.id})
+            return {
+                "total_conversations": conv_result.scalar() or 0,
+                "total_messages":      msg_result.scalar()  or 0,
+                "total_documents":     doc_result.scalar()  or 0,
+            }
+    except Exception as exc:
+        return {"total_conversations": 0, "total_messages": 0, "total_documents": 0, "error": str(exc)}
+

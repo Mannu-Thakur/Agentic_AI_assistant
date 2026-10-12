@@ -392,6 +392,58 @@ function autoLinkBareUrls(text: string): string {
 }
 
 // ─────────────────────────────────────────────────────────────
+//  Mermaid diagram renderer (graceful fallback if not installed)
+// ─────────────────────────────────────────────────────────────
+function MermaidBlock({ code }: { code: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [svgContent, setSvgContent] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const render = async () => {
+      try {
+        // Dynamic import — requires mermaid package (npm install mermaid)
+        const mermaidModule = await import('mermaid');
+        const mermaid = mermaidModule.default;
+        mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'loose' });
+        const id = `mermaid-${Math.random().toString(36).slice(2, 9)}`;
+        const { svg } = await mermaid.render(id, code);
+        if (!cancelled) setSvgContent(svg);
+      } catch {
+        if (!cancelled) setError('mermaid');
+      }
+    };
+    render();
+    return () => { cancelled = true; };
+  }, [code]);
+
+  if (error) {
+    return (
+      <div className="rounded-xl border border-border bg-surface-2 overflow-hidden my-2">
+        <div className="flex items-center gap-2 px-4 py-2 bg-surface-3 border-b border-border">
+          <span className="text-[10px] font-bold text-amber-400">Mermaid Diagram</span>
+          <span className="text-[10px] text-foreground-3">— install mermaid to render: <code className="font-mono">npm install mermaid</code></span>
+        </div>
+        <pre className="px-4 py-3 text-xs text-foreground-2 font-mono overflow-x-auto">{code}</pre>
+      </div>
+    );
+  }
+
+  if (!svgContent) {
+    return <div className="animate-pulse rounded-xl bg-surface-2 h-40 my-2 border border-border" />;
+  }
+
+  return (
+    <div
+      ref={ref}
+      className="mermaid-diagram overflow-x-auto p-4 bg-surface-2 rounded-xl border border-border my-2"
+      dangerouslySetInnerHTML={{ __html: svgContent }}
+    />
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
 //  Base Markdown renderer — full component override
 // ─────────────────────────────────────────────────────────────
 function MarkdownContent({ content, isStreaming }: { content: string; isStreaming?: boolean }) {
@@ -405,6 +457,10 @@ function MarkdownContent({ content, isStreaming }: { content: string; isStreamin
             {children}
           </code>
         );
+      }
+      // Mermaid diagram rendering
+      if (match[1] === 'mermaid') {
+        return <MermaidBlock code={String(children).replace(/\n$/, '')} />;
       }
       return <CodeBlock language={match[1]} code={String(children).replace(/\n$/, '')} />;
     },
@@ -1040,6 +1096,9 @@ export default function ChatPage() {
     setCanvasOpen(false);
     setCanvasMsgId(null);
   }, [updateMessage]);
+
+  // ── Search Mode ───────────────────────────────────────────────
+  const [searchMode, setSearchMode] = useState<'auto' | 'web' | 'kb' | 'cache' | 'deep_research' | 'hybrid'>('auto');
 
   // ── More Dropdowns & Archiving ───────────────────────────────
   const [menuOpen, setMenuOpen]               = useState(false);
@@ -1713,6 +1772,7 @@ export default function ChatPage() {
           parent_message_id: userMsg.parent_id,
           images: imagesToSend,
           telemetry: isTelemetryOn,
+          search_mode: searchMode !== 'auto' ? searchMode : undefined,
         }),
         signal: controller.signal,
       });
@@ -3216,12 +3276,58 @@ export default function ChatPage() {
             {/* Ambient glow orbs */}
             <div className="welcome-orb welcome-orb-1" aria-hidden />
             <div className="welcome-orb welcome-orb-2" aria-hidden />
-            <div className="w-full max-w-chat flex flex-col items-center gap-10 relative z-10">
+            <div className="w-full max-w-chat flex flex-col items-center gap-8 relative z-10">
               <div className="welcome-content flex flex-col items-center mb-1">
                 <h2 className="welcome-headline">{greeting}</h2>
+                <p className="text-sm text-foreground-3 mt-2">Your AI workspace — ask anything, search everywhere, build anything.</p>
+              </div>
+
+              {/* Example prompt cards */}
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3 w-full">
+                {[
+                  { icon: '🔍', label: 'Deep Research',   prompt: 'Research the latest advances in quantum computing and summarize key breakthroughs from the past year.',  category: 'web' },
+                  { icon: '💻', label: 'Write Code',       prompt: 'Write a Python FastAPI endpoint that accepts a CSV file, validates it, and returns summary statistics as JSON.', category: 'code' },
+                  { icon: '📄', label: 'Analyze Document', prompt: 'Analyze the uploaded document and extract the key points, main arguments, and any action items.',           category: 'kb' },
+                  { icon: '📊', label: 'Data Analysis',    prompt: 'Explain how to build a real-time analytics dashboard using Python, Streamlit and DuckDB.',                   category: 'data' },
+                  { icon: '✍️', label: 'Write & Edit',     prompt: 'Help me write a compelling technical blog post about building a RAG system with LangChain and ChromaDB.',     category: 'write' },
+                  { icon: '🧮', label: 'Math & Science',   prompt: 'Explain the backpropagation algorithm step by step with mathematical notation and a simple Python example.', category: 'math' },
+                ].map(({ icon, label, prompt }) => (
+                  <button
+                    key={label}
+                    onClick={() => handleSendMessage(prompt)}
+                    className="group text-left p-3.5 rounded-xl border border-border bg-surface-2/60 hover:bg-surface-2 hover:border-border-2 transition-all duration-150 active:scale-[0.98]"
+                  >
+                    <div className="text-xl mb-2">{icon}</div>
+                    <p className="text-xs font-semibold text-foreground">{label}</p>
+                    <p className="text-[10px] text-foreground-3 mt-0.5 line-clamp-2 leading-relaxed">{prompt.slice(0, 80)}…</p>
+                  </button>
+                ))}
               </div>
 
               {/* Centered input form */}
+              {/* Search mode pills for welcome screen */}
+              <div className="flex items-center gap-1.5 flex-wrap justify-center w-full">
+                {([
+                  { id: 'auto',          label: 'Auto',           icon: '✨' },
+                  { id: 'web',           label: 'Web Search',     icon: '🌐' },
+                  { id: 'kb',            label: 'Knowledge Base', icon: '📚' },
+                  { id: 'deep_research', label: 'Deep Research',  icon: '🔬' },
+                  { id: 'hybrid',        label: 'Hybrid',         icon: '🔀' },
+                ] as const).map(({ id, label, icon }) => (
+                  <button
+                    key={id}
+                    onClick={() => setSearchMode(id)}
+                    className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-semibold border transition-all duration-150 active:scale-95
+                      ${searchMode === id
+                        ? 'bg-blue-600/20 border-blue-500/40 text-blue-300'
+                        : 'bg-surface-2 border-border text-foreground-3 hover:text-foreground'
+                      }`}
+                  >
+                    <span>{icon}</span><span>{label}</span>
+                  </button>
+                ))}
+              </div>
+
               <ChatInput
                 key={activeChatId ?? 'new'}
                 onSend={(text, images, attachedFiles) => handleSendMessage(text, images, attachedFiles ?? [])}
@@ -3229,7 +3335,7 @@ export default function ChatPage() {
                 isStreaming={isStreaming}
                 onStop={handleStopGeneration}
                 activeModel={activeModel}
-                placeholder="Ask anything"
+                placeholder="Ask anything — web, docs, code, analysis..."
                 className="w-full"
                 chats={chats}
                 connectedChat={connectedChat}
@@ -3647,6 +3753,32 @@ export default function ChatPage() {
                   onReject={handleMissionReject}
                   onDismiss={() => { resetMission(); setMissionModeEnabled(false); }}
                 />
+
+                {/* ── Search Mode Selector ── */}
+                <div className="flex items-center gap-1.5 flex-wrap px-1">
+                  {([
+                    { id: 'auto',          label: 'Auto',           icon: '✨', desc: 'AI picks the best search strategy' },
+                    { id: 'web',           label: 'Web',            icon: '🌐', desc: 'Live web search via Tavily/SerpAPI' },
+                    { id: 'kb',            label: 'Knowledge Base', icon: '📚', desc: 'Search your uploaded documents (RAG)' },
+                    { id: 'cache',         label: 'Cache',          icon: '⚡', desc: 'Use cached results for faster responses' },
+                    { id: 'deep_research', label: 'Deep Research',  icon: '🔬', desc: 'Multi-step agentic research (slower, thorough)' },
+                    { id: 'hybrid',        label: 'Hybrid',         icon: '🔀', desc: 'Combine web + knowledge base results' },
+                  ] as const).map(({ id, label, icon, desc }) => (
+                    <button
+                      key={id}
+                      title={desc}
+                      onClick={() => setSearchMode(id)}
+                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-semibold border transition-all duration-150 active:scale-95
+                        ${searchMode === id
+                          ? 'bg-blue-600/20 border-blue-500/40 text-blue-300'
+                          : 'bg-surface-2 border-border text-foreground-3 hover:text-foreground hover:border-border-2'
+                        }`}
+                    >
+                      <span>{icon}</span>
+                      <span>{label}</span>
+                    </button>
+                  ))}
+                </div>
 
                 <ChatInput
                   key={activeChatId ?? 'new'}

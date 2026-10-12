@@ -294,6 +294,7 @@ BRAVE_API_KEY=your-brave-key
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
+| `GET` | `/api/v1/metrics/usage` | Workspace totals: conversations, messages, documents |
 | `GET` | `/api/v1/metrics/providers` | Per-provider latency, tokens, cost, health |
 | `GET` | `/api/v1/metrics` | Prometheus text format |
 | `GET` | `/health` | Health check |
@@ -346,7 +347,19 @@ AI Assistan Chatbot/
 
 ## 📅 Changelog
 
-### v3.0.0 — Multi-Agent Workspace (Current)
+### v3.1.0 — Workspace UI & Settings Center Overhaul (Current)
+- **NEW** — **20-Tab Categorized Settings Center**: Reorganized with grouped sidebar navigation (Personal, Integrations, Coding):
+  - *Personal*: General, Profile, Appearance, Personalization (custom instructions & coding preferences), Notifications (in-app & browser permission), Voice (speech recognition & TTS synthesis test), Keyboard Shortcuts, Usage & Billing, Storage (health monitors & semantic memory management), Data Controls, Semantic Memory, Account & Security.
+  - *Integrations*: AI Models, Generation, AI Features, Remote MCP Servers, Connections (search APIs & OAuth), Documents & RAG.
+  - *Coding*: Git integration & commit assistant configuration, Runtime Environments & `.env` configuration guide.
+- **NEW** — **Interactive Mermaid Diagrams**: Inline rendering for `mermaid` diagrams with dynamic loading, dark theme styling, and fallback.
+- **NEW** — **6 Unified Search Modes**: Search strategy picker (✨ Auto, 🌐 Web, 📚 Knowledge Base, ⚡ Cache, 🔬 Deep Research, 🔀 Hybrid) with API payload forwarding.
+- **NEW** — **Interactive Welcome Workspace**: Quick-start prompt cards across Deep Research, Code, Document Analysis, Data, Writing, and Math, with search mode selectors.
+- **NEW** — **Full-Workspace Theme & Accent Sync**: `AppLayout` dynamically synchronizes dark/light/system modes, typography scale (`font-sm`, `font-lg`), compact density, and CSS `--accent` variables across the entire viewport.
+- **NEW** — **Workspace Usage Metrics API**: `GET /api/v1/metrics/usage` endpoint returning live counts of user conversations, messages, and ingested documents.
+- **FIX** — Fixed `.env` Docker-to-local filesystem path configurations (`VECTOR_DB_DIR`, `UPLOAD_DIR`).
+
+### v3.0.0 — Multi-Agent Workspace
 - **NEW** — LangGraph Supervisor Orchestrator with parallel agent dispatch
 - **NEW** — 7 specialized agents: code, web_research, rag, vision, document, data_analysis, critic
 - **NEW** — Critic quality loop: auto-retries with feedback injection (max 2 cycles, threshold 0.65)
