@@ -1058,6 +1058,152 @@ function StorageTab({ addToast }: { addToast: (m: string, t?: ToastType) => void
 }
 
 // -----------------------------------------------------------------
+// ── GitTab ────────────────────────────────────────────────────────
+// -----------------------------------------------------------------
+function GitTab({ addToast }: { addToast: (m: string, t?: ToastType) => void }) {
+  const [gitStatus, setGitStatus] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [suggestion, setSuggestion] = useState<string>('');
+  const [suggesting, setSuggesting] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [autoCommit, setAutoCommit] = useState(() => localStorage.getItem('git_auto_commit') === 'true');
+  const [prReview, setPrReview] = useState(() => localStorage.getItem('git_pr_review') === 'true');
+
+  useEffect(() => {
+    apiRequest('/git/status')
+      .then((data) => setGitStatus(data))
+      .catch((err) => console.warn('Could not load git status:', err))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const handleGenerateCommit = async () => {
+    setSuggesting(true);
+    try {
+      const res = await apiRequest('/git/commit-suggestion', { method: 'POST' });
+      if (res?.suggested_message) {
+        setSuggestion(res.suggested_message);
+        addToast('Commit message suggested from workspace changes!', 'success');
+      }
+    } catch (err: any) {
+      addToast(err?.message || 'Failed to generate commit suggestion.', 'error');
+    } finally {
+      setSuggesting(false);
+    }
+  };
+
+  const handleCopySuggestion = () => {
+    if (!suggestion) return;
+    navigator.clipboard.writeText(suggestion).then(() => {
+      setCopied(true);
+      addToast('Copied commit message to clipboard!', 'success');
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
+  return (
+    <>
+      <SectionCard title="Repository Status">
+        {loading ? (
+          <div className="py-8 flex items-center justify-center">
+            <Loader2 className="w-5 h-5 animate-spin text-foreground-3" />
+          </div>
+        ) : gitStatus?.is_repo ? (
+          <div className="py-3 space-y-3">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="bg-surface-2 border border-border rounded-xl p-3">
+                <span className="text-[10px] text-foreground-3 block">Branch</span>
+                <span className="text-xs font-mono font-bold text-foreground flex items-center gap-1 mt-0.5">
+                  <GitBranch className="w-3.5 h-3.5 text-blue-400" />
+                  {gitStatus.branch}
+                </span>
+              </div>
+              <div className="bg-surface-2 border border-border rounded-xl p-3">
+                <span className="text-[10px] text-foreground-3 block">Latest Commit</span>
+                <span className="text-xs font-mono text-foreground-2 mt-0.5 truncate block" title={gitStatus.latest_commit}>
+                  {gitStatus.latest_commit?.split(' ')[0] || '—'}
+                </span>
+              </div>
+              <div className="bg-surface-2 border border-border rounded-xl p-3">
+                <span className="text-[10px] text-foreground-3 block">Modified Files</span>
+                <span className="text-xs font-bold text-foreground mt-0.5 block">
+                  {gitStatus.modified_files} files
+                </span>
+              </div>
+              <div className="bg-surface-2 border border-border rounded-xl p-3">
+                <span className="text-[10px] text-foreground-3 block">Working Tree</span>
+                <span className={`text-[11px] font-bold mt-0.5 block ${gitStatus.is_clean ? 'text-emerald-400' : 'text-amber-400'}`}>
+                  {gitStatus.is_clean ? '✓ Clean' : '● Changes Pending'}
+                </span>
+              </div>
+            </div>
+
+            {gitStatus.remote_url && (
+              <div className="p-3 bg-surface-2 border border-border rounded-xl flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] text-foreground-3 block">Remote Origin</span>
+                  <span className="text-xs font-mono text-foreground-2 mt-0.5 truncate block max-w-md">
+                    {gitStatus.remote_url}
+                  </span>
+                </div>
+                <span className="text-[10px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full font-bold">
+                  Connected
+                </span>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="py-4 text-center">
+            <p className="text-xs text-foreground-3">
+              {gitStatus?.git_installed ? 'Current directory is not a Git repository.' : 'Git is not installed or not in PATH.'}
+            </p>
+          </div>
+        )}
+      </SectionCard>
+
+      <SectionCard title="Commit Assistant">
+        <div className="py-3 space-y-3">
+          <p className="text-xs text-foreground-2 leading-relaxed">
+            Generate conventional commit messages automatically based on your current staged changes and workspace modifications.
+          </p>
+          <div className="flex gap-2">
+            <button
+              onClick={handleGenerateCommit}
+              disabled={suggesting}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white transition-all shadow-sm active:scale-[0.98] disabled:opacity-50"
+            >
+              {suggesting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+              <span>{suggesting ? 'Analyzing Diffs...' : 'Suggest Commit Message'}</span>
+            </button>
+          </div>
+
+          {suggestion && (
+            <div className="p-3.5 bg-surface-2 border border-border rounded-xl flex items-center justify-between gap-3 animate-fade-in">
+              <span className="text-xs font-mono text-foreground font-semibold flex-1">
+                {suggestion}
+              </span>
+              <button
+                onClick={handleCopySuggestion}
+                className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-border bg-surface-3 hover:bg-surface text-foreground text-xs font-semibold transition-all active:scale-95"
+              >
+                {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-foreground-3" />}
+                <span>{copied ? 'Copied' : 'Copy'}</span>
+              </button>
+            </div>
+          )}
+        </div>
+
+        <SettingRow label="Auto-suggest Commit Messages" desc="AI automatically suggests commit messages when committing via workspace terminal.">
+          <Toggle checked={autoCommit} onChange={(v) => { setAutoCommit(v); localStorage.setItem('git_auto_commit', String(v)); }} label="Auto commit suggestion" />
+        </SettingRow>
+        <SettingRow label="PR Code Review Assistant" desc="Summarize pull request changes and generate review notes before pushing.">
+          <Toggle checked={prReview} onChange={(v) => { setPrReview(v); localStorage.setItem('git_pr_review', String(v)); }} label="PR review assistant" />
+        </SettingRow>
+      </SectionCard>
+    </>
+  );
+}
+
+// -----------------------------------------------------------------
 // ── Main Settings Page ────────────────────────────────────────────
 // -----------------------------------------------------------------
 
@@ -3226,41 +3372,7 @@ export default function SettingsPage() {
 
             {/* ── Git tab ── */}
             {tab === 'git' && (
-              <>
-                <SectionCard title="Git Integration">
-                  <div className="py-6 flex flex-col items-center gap-3 text-center">
-                    <div className="w-12 h-12 rounded-2xl bg-surface-3 border border-border flex items-center justify-center">
-                      <GitBranch className="w-6 h-6 text-foreground-3" />
-                    </div>
-                    <div>
-                      <p className="text-sm font-semibold text-foreground">Git Integration</p>
-                      <p className="text-xs text-foreground-3 mt-1 max-w-sm leading-relaxed">
-                        Connect a local or remote Git repository to enable code-aware AI assistance, commit message generation, and code review features.
-                      </p>
-                    </div>
-                    <div className="flex flex-col gap-2 w-full max-w-sm mt-2">
-                      <input
-                        type="text"
-                        readOnly
-                        placeholder="Repository path or URL (e.g. /home/user/project or https://github.com/...)"
-                        defaultValue={localStorage.getItem('git_repo_path') || ''}
-                        className="w-full bg-surface-2 border border-border rounded-lg px-3 py-2 text-xs text-foreground placeholder:text-foreground-3 focus:outline-none focus:border-blue-500"
-                      />
-                      <p className="text-[10px] text-amber-400 bg-amber-950/20 border border-amber-900/30 rounded-lg px-3 py-2 text-left">
-                        ⚡ Git integration requires the backend to be running on a system with git installed. Full implementation coming in a future update.
-                      </p>
-                    </div>
-                  </div>
-                </SectionCard>
-                <SectionCard title="Commit Assistant">
-                  <SettingRow label="Auto-generate Commit Messages" desc="AI suggests commit messages based on your staged diff.">
-                    <Toggle checked={localStorage.getItem('git_auto_commit') === 'true'} onChange={(v) => { localStorage.setItem('git_auto_commit', String(v)); }} label="Auto commit messages" />
-                  </SettingRow>
-                  <SettingRow label="Code Review on PR" desc="Summarize pull request changes using AI before merging.">
-                    <Toggle checked={localStorage.getItem('git_pr_review') === 'true'} onChange={(v) => { localStorage.setItem('git_pr_review', String(v)); }} label="PR code review" />
-                  </SettingRow>
-                </SectionCard>
-              </>
+              <GitTab addToast={addToast} />
             )}
 
             {/* ── Environments tab ── */}

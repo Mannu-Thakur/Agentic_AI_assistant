@@ -38,6 +38,7 @@ class MessageCreate(BaseModel):
   model: str
   parent_message_id: Optional[str] = None
   images: Optional[List['ImageAttachment']] = []
+  search_mode: Optional[str] = None
 
 class MessageOut(BaseModel):
   id: str

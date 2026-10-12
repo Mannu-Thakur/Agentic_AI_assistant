@@ -290,13 +290,15 @@ BRAVE_API_KEY=your-brave-key
 | `mission_delegated` | `{reason}` | Simple query — use chat endpoint |
 | `error` | `{error}` | Job failed |
 
-### Observability
+### Observability & Developer Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/api/v1/metrics/usage` | Workspace totals: conversations, messages, documents |
 | `GET` | `/api/v1/metrics/providers` | Per-provider latency, tokens, cost, health |
 | `GET` | `/api/v1/metrics` | Prometheus text format |
+| `GET` | `/api/v1/git/status` | Real-time Git repo status, active branch, modified files |
+| `POST` | `/api/v1/git/commit-suggestion` | Conventional commit message suggestion from diffs |
 | `GET` | `/health` | Health check |
 
 ---

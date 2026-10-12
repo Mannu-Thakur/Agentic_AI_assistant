@@ -356,6 +356,9 @@ app.include_router(hitl_router,            prefix=settings.API_V1_STR)
 app.include_router(mission_router,         prefix=settings.API_V1_STR)
 app.include_router(mission_persist_router, prefix=settings.API_V1_STR)
 
+from app.api import git as git_router
+app.include_router(git_router.router,      prefix=settings.API_V1_STR)
+
 
 
 

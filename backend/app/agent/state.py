@@ -58,6 +58,9 @@ class AgentState(TypedDict):
     # Index into `plan` currently being executed (0-based).
     current_plan_step: int
 
+    # ── Search Mode (Mode 1-6 selector) ──────────────────────────
+    search_mode: Optional[str]
+
     # ── Self-RAG: retrieval necessity check ──────────────────────
     # True  → retrieve context from vector store before generating.
     # False → skip retrieval (simple/conversational queries).

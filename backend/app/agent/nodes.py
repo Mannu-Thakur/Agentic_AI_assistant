@@ -1547,6 +1547,29 @@ async def classify_intent_node(
     if images_present and intent == INTENT_NORMAL_CHAT and not last_query.strip():
         intent = INTENT_VISION
 
+    # ── Search Mode Orchestration (Modes 1-6 Override) ────────────────────────
+    explicit_search_mode = state.get("search_mode")
+    if explicit_search_mode and explicit_search_mode != "auto":
+        logger.info(f"[SearchMode] Applying explicit user search mode override: '{explicit_search_mode}'")
+        if explicit_search_mode == "web":
+            intent = INTENT_WEB_SEARCH
+            is_private_doc_query = False
+            state["needs_retrieval"] = False
+        elif explicit_search_mode == "kb":
+            intent = INTENT_DOCUMENT_QA
+            is_private_doc_query = True
+            state["needs_retrieval"] = True
+        elif explicit_search_mode == "hybrid":
+            intent = INTENT_COMPLEX
+            is_private_doc_query = True
+            state["needs_retrieval"] = True
+        elif explicit_search_mode in ("deep_research", "deep"):
+            intent = INTENT_COMPLEX
+            state["needs_retrieval"] = True
+        elif explicit_search_mode == "cache":
+            state["needs_retrieval"] = False
+
+
     # ── Compound query detection (LLM-based, for queries ≥ 6 words) ──────────
     sub_questions: List[str] = []
     _cq_word_count = len(last_query_clean.split()) if last_query_clean else 0

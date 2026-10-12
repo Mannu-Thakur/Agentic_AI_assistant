@@ -12,7 +12,7 @@ def test_agent_graph_compilation():
   # Original nodes still present
   assert "retrieve_context"   in agent_graph.nodes
   assert "generate_response"  in agent_graph.nodes
-  assert "plan"               in agent_graph.nodes
+  assert "planner"            in agent_graph.nodes
   assert "check_retrieval"    in agent_graph.nodes
   assert "grade_documents"    in agent_graph.nodes
   assert "execute_tools"      in agent_graph.nodes
