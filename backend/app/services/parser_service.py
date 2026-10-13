@@ -865,7 +865,7 @@ class ParserService:
             return cls.extract_text_xlsx(file_path)
         elif ext in (".pptx", ".ppt"):
             return cls.extract_text_pptx(file_path)
-        elif ext in (".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tiff", ".webp"):
+        elif ext in (".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tiff", ".webp", ".heic", ".heif"):
             return cls.extract_text_image(file_path).text
         else:
             try:

@@ -206,21 +206,42 @@ async def test_mcp_client_error_handling():
 async def test_tool_registry_remote_server_registration():
     """
     Verify ToolRegistry registers remote MCP tools and routes calls cleanly.
+
+    ROOT CAUSE (Windows IOCP): httpx.AsyncClient registers IOCP completion handles the
+    moment it is instantiated. On Windows, the event-loop proactor hangs in
+    GetQueuedCompletionStatus waiting for those handles to drain — even if all
+    requests are mocked at the `post()` level. The only reliable fix is to mock
+    McpHttpClient itself so no real httpx client is ever created.
     """
     registry = ToolRegistry()
-    registry.is_initialized = False
+    server_key = "remote_expenseserver"
 
-    async def mock_post(url, json=None, headers=None):
-        method = json.get("method")
-        req_id = json.get("id")
-        req_obj = httpx.Request("POST", str(url))
-        if method == "tools/list":
-            return Response(status_code=200, json={"jsonrpc": "2.0", "id": req_id, "result": {"tools": MOCK_DISCOVERED_TOOLS}}, request=req_obj)
-        elif method == "tools/call":
-            return Response(status_code=200, json={"jsonrpc": "2.0", "id": req_id, "result": {"content": [{"type": "text", "text": "Execution Success"}]}}, request=req_obj)
-        return Response(status_code=200, json={"jsonrpc": "2.0", "id": req_id, "result": {}}, request=req_obj)
+    # Build a fully async mock McpHttpClient — no real sockets, no I/O.
+    mock_client = MagicMock()
+    mock_client.connect = AsyncMock(return_value=None)
+    mock_client.list_tools = AsyncMock(return_value=MOCK_DISCOVERED_TOOLS)
+    mock_client.call_tool = AsyncMock(return_value="Execution Success")
+    mock_client.close = AsyncMock(return_value=None)
 
-    with patch("httpx.AsyncClient.post", side_effect=mock_post):
+    # Proper async context manager mock for AsyncSessionLocal()
+    mock_db_session = MagicMock()
+    mock_db_cm = AsyncMock()
+    mock_db_cm.__aenter__ = AsyncMock(return_value=mock_db_session)
+    mock_db_cm.__aexit__ = AsyncMock(return_value=False)
+    mock_async_session_local = MagicMock(return_value=mock_db_cm)
+
+    with patch.object(registry, "_init_local_mcp_servers", new=AsyncMock(return_value=None)), \
+         patch.object(registry, "sync_remote_servers", new=AsyncMock(return_value=None)), \
+         patch("app.tools.registry.McpHttpClient", return_value=mock_client), \
+         patch("app.tools.mcp_client.McpHttpClient", return_value=mock_client), \
+         patch("app.tools.registry.AsyncSessionLocal", mock_async_session_local), \
+         patch("app.tools.registry.AuditService") as mock_audit, \
+         patch("app.tools.registry.metrics_collector"):
+
+        mock_audit.log_event = AsyncMock(return_value=None)
+        # Pre-initialize so call_tool skips sync_remote_servers entirely
+        registry.is_initialized = True
+
         reg_tools = await registry.register_remote_server("ExpenseServer", "https://mock-expense.com/mcp")
         assert len(reg_tools) == 8
 
@@ -229,11 +250,16 @@ async def test_tool_registry_remote_server_registration():
         assert "list_expenses" in all_names
         assert "top_merchants" in all_names
 
-        # Call tool through registry
+        # Call tool through registry — routes to mock_client.call_tool, no real I/O
         res = await registry.call_tool("list_expenses", {})
         assert res == "Execution Success"
 
-    await registry.shutdown()
+        # Clean up inside the patch context so mock_client.close() handles unregister
+        await registry.unregister_remote_server(server_key)
+
+
+
+
 
 
 @pytest.mark.anyio
@@ -262,28 +288,36 @@ async def test_acceptance_criteria_prompts_intent_and_whitelisting():
 
     registry = ToolRegistry()
 
-    # Pre-register mock expense server
-    async def mock_post(url, json=None, headers=None):
-        method = json.get("method")
-        req_id = json.get("id")
-        req_obj = httpx.Request("POST", str(url))
-        if method == "tools/list":
-            return Response(status_code=200, json={"jsonrpc": "2.0", "id": req_id, "result": {"tools": MOCK_DISCOVERED_TOOLS}}, request=req_obj)
-        return Response(status_code=200, json={"jsonrpc": "2.0", "id": req_id, "result": {}}, request=req_obj)
+    # Build a fully async mock McpHttpClient — no real sockets, no IOCP handles.
+    mock_client = MagicMock()
+    mock_client.connect = AsyncMock(return_value=None)
+    mock_client.list_tools = AsyncMock(return_value=MOCK_DISCOVERED_TOOLS)
+    mock_client.call_tool = AsyncMock(return_value="OK")
+    mock_client.close = AsyncMock(return_value=None)
 
-    with patch("httpx.AsyncClient.post", side_effect=mock_post):
-        with patch("app.agent.nodes._call_llm_judge", new=AsyncMock(return_value={"intent": "MCP_TOOL"})):
-            await registry.register_remote_server("ExpenseServer", "https://mock-expense.com/mcp")
+    with patch.object(registry, "_init_local_mcp_servers", new=AsyncMock(return_value=None)), \
+         patch.object(registry, "sync_remote_servers", new=AsyncMock(return_value=None)), \
+         patch("app.tools.registry.McpHttpClient", return_value=mock_client), \
+         patch("app.tools.mcp_client.McpHttpClient", return_value=mock_client), \
+         patch("app.agent.nodes._call_llm_judge", new=AsyncMock(return_value={"intent": "MCP_TOOL"})):
 
-            for user_prompt, expected_tool in prompts:
-                state = {
-                    "messages": [HumanMessage(content=user_prompt)],
-                    "images": [],
-                    "uploaded_file_paths": [],
-                    "is_ambiguous": False,
-                }
-                res = await classify_intent_node(state)
-                assert res["intent"] == INTENT_MCP_TOOL, f"Failed intent classification for prompt: {user_prompt}"
-                assert expected_tool in res["allowed_tools"], f"Expected {expected_tool} in allowed_tools for prompt: {user_prompt}"
+        registry.is_initialized = True
+        await registry.register_remote_server("ExpenseServer", "https://mock-expense.com/mcp")
 
-    await registry.shutdown()
+        for user_prompt, expected_tool in prompts:
+            state = {
+                "messages": [HumanMessage(content=user_prompt)],
+                "images": [],
+                "uploaded_file_paths": [],
+                "is_ambiguous": False,
+            }
+            res = await classify_intent_node(state)
+            assert res["intent"] == INTENT_MCP_TOOL, f"Failed intent classification for prompt: {user_prompt}"
+            assert expected_tool in res["allowed_tools"], f"Expected {expected_tool} in allowed_tools for prompt: {user_prompt}"
+
+        # Clean up inside the patch context so mock_client.close() handles unregister
+        await registry.unregister_remote_server("remote_expenseserver")
+
+
+
+

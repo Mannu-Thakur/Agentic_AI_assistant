@@ -8,6 +8,17 @@ from app.tools.mcp_client import McpStdioClient, McpHttpClient
 
 import threading
 
+# Module-level imports for DB/audit/metrics — kept here (not inline) so that
+# unit tests can patch them via `app.tools.registry.AsyncSessionLocal`, etc.
+try:
+    from app.core.database import AsyncSessionLocal
+    from app.services.audit_service import AuditService
+    from app.core.metrics import metrics_collector
+except ImportError:  # pragma: no cover — tolerate missing deps in isolated envs
+    AsyncSessionLocal = None  # type: ignore[assignment,misc]
+    AuditService = None       # type: ignore[assignment]
+    metrics_collector = None  # type: ignore[assignment]
+
 logger = logging.getLogger(__name__)
 
 _singleton_cls_lock = threading.Lock()
@@ -193,7 +204,6 @@ class ToolRegistry:
             await self._init_local_mcp_servers()
 
             try:
-                from app.core.database import AsyncSessionLocal
                 from app.models.mcp_server import RemoteMcpServer
                 from sqlalchemy import select
 
@@ -372,10 +382,6 @@ class ToolRegistry:
                 await self.initialize()
 
 
-        from app.core.metrics import metrics_collector
-        from app.core.database import AsyncSessionLocal
-        from app.services.audit_service import AuditService
-
         status_label = "success"
         err_msg = None
         result_str = ""
@@ -448,19 +454,25 @@ class ToolRegistry:
             logger.error(f"Tool '{name}' is not registered.")
             result_str = f"Tool execution failed. Server returned: Tool '{name}' is not registered."
 
-        # Record metrics and log audit events
+        # Record metrics and log audit events (best-effort, 5s timeout to prevent
+        # indefinite hang when DB pool is unavailable, e.g. during tests)
         metrics_collector.record_tool_call(name, status_label)
         try:
-            async with AsyncSessionLocal() as db:
-                event_type = "mcp_call" if name in self.mcp_tools_map else "tool_execution"
-                await AuditService.log_event(
-                    db,
-                    None,
-                    event_type,
-                    {"tool": name, "arguments": arguments, "status": status_label, "error": err_msg}
-                )
+            async def _do_audit():
+                async with AsyncSessionLocal() as db:
+                    event_type = "mcp_call" if name in self.mcp_tools_map else "tool_execution"
+                    await AuditService.log_event(
+                        db,
+                        None,
+                        event_type,
+                        {"tool": name, "arguments": arguments, "status": status_label, "error": err_msg}
+                    )
+            await asyncio.wait_for(_do_audit(), timeout=5.0)
+        except asyncio.TimeoutError:
+            logger.warning(f"Audit log for tool '{name}' timed out after 5s — skipping")
         except Exception as exc:
             logger.error(f"Failed to log tool execution audit event: {exc}")
+
 
         return result_str
 

@@ -1510,7 +1510,11 @@ async def classify_intent_node(
                 last_query_clean,
                 images_present=images_present,
                 is_private_doc_query=is_private_doc_query,
-                has_active_docs=bool(state.get("active_documents")),
+                has_active_docs=bool(
+                    state.get("active_documents")
+                    or state.get("uploaded_file_paths")
+                    or state.get("inline_doc_context")
+                ),
             )
             intent = fb_intent
             if fb_priv:
@@ -1542,6 +1546,21 @@ async def classify_intent_node(
                     pass
                 elif intent not in (INTENT_PROGRAMMING, INTENT_MATH, INTENT_FINANCE, INTENT_REASONING, INTENT_MULTI_STEP):
                     intent = INTENT_DOCUMENT_QA
+
+    # ── Uploaded-file fast-path: if the user attached a document (chat.py sets
+    # uploaded_file_paths or inline_doc_context in the state) and the LLM/signal
+    # check still returned INTENT_NORMAL_CHAT, force INTENT_DOCUMENT_QA so the
+    # agent reads the document instead of answering from parametric knowledge.
+    _has_uploaded = bool(
+        state.get("uploaded_file_paths") or state.get("inline_doc_context")
+    )
+    if _has_uploaded and intent == INTENT_NORMAL_CHAT:
+        intent = INTENT_DOCUMENT_QA
+        is_private_doc_query = True
+        logger.info(
+            "classify_intent_node: uploaded_file_paths/inline_doc_context detected "
+            "— overriding NORMAL_CHAT → DOCUMENT_QA"
+        )
 
     # ── Final image guard: if image attached but user typed nothing, force VISION
     if images_present and intent == INTENT_NORMAL_CHAT and not last_query.strip():
@@ -2282,9 +2301,9 @@ async def check_retrieval_node(
     ) and not is_private_doc:
         needs_retrieval = False
         reason = f"Intent {intent} does not require vector retrieval"
-    elif intent in (INTENT_DOCUMENT_QA, INTENT_COMPLEX, INTENT_PDF_QA, INTENT_LONG_CONTEXT) or is_private_doc or (uploaded_paths and is_private_doc):
+    elif intent in (INTENT_DOCUMENT_QA, INTENT_COMPLEX, INTENT_PDF_QA, INTENT_LONG_CONTEXT) or is_private_doc or uploaded_paths:
         needs_retrieval = True
-        reason = f"Intent {intent} or private document query requires vector retrieval"
+        reason = f"Intent {intent} or private/uploaded document query requires vector retrieval"
     elif intent in (INTENT_NORMAL_CHAT,):
         last_q_temp = state.get("resolved_query") or ""
         if not last_q_temp:

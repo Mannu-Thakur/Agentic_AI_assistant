@@ -465,10 +465,14 @@ async def stream_agent_message(
                 _sub_conds.append(_DocModel.filename.in_(list(_candidate_names)))
             if chat_id:
                 _sub_conds.append(_DocModel.chat_id == chat_id)
-            # Time-window fallback: any doc uploaded in the last 10 minutes for this user
-            # catches sanitization mismatches (e.g. "My Report.pdf" stored as "My_Report.pdf")
+            # Time-window fallback: catch sanitization mismatches (e.g. "My Report.pdf"
+            # stored as "My_Report.pdf"). Only applies when combined with filename/chat_id
+            # to avoid injecting completely unrelated recently-uploaded docs.
             _ten_min_ago = datetime.now(timezone.utc) - _td(minutes=10)
-            _sub_conds.append(_DocModel.uploaded_at >= _ten_min_ago)
+            if _candidate_names or chat_id:
+                # Add time-window as an extra OR so that near-miss filename variants
+                # within the last 10 min are also caught. Still scoped to user_id above.
+                _sub_conds.append(_DocModel.uploaded_at >= _ten_min_ago)
 
             if _sub_conds:
                 _filters.append(_sql_or(*_sub_conds))
