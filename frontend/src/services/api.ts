@@ -35,8 +35,8 @@ export async function wakeUpBackend(
   if (!isRemoteBackend()) return true;
 
   const HEALTH_URL = `${BASE_URL}/health`;
-  const MAX_ATTEMPTS = 8;   // ≈ 60 s total (8 × ~7-8 s per attempt)
-  const RETRY_DELAY_MS = 7_000;
+  const MAX_ATTEMPTS = 15;       // ≈ 2.5 min total — handles slow Render cold starts
+  const RETRY_DELAY_MS = 5_000;  // 5 s between pings (faster feedback loop)
   const ATTEMPT_TIMEOUT_MS = 8_000;
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
@@ -64,8 +64,14 @@ export async function wakeUpBackend(
 
 /**
  * Wraps `apiRequest` with an automatic cold-start wake-up phase.
- * If the backend is unreachable on the first attempt, it pings the health
- * endpoint (with retries) before re-trying the real request.
+ *
+ * For file uploads (FormData body) on remote backends, we ALWAYS probe the
+ * health endpoint first before sending the upload — this prevents the large
+ * upload request itself from timing out during a cold start and showing a
+ * misleading "Unable to reach backend" error to the user.
+ *
+ * For non-upload requests, an optimistic first attempt fires immediately;
+ * wake-up only triggers if that attempt fails with a network-level error.
  *
  * @param endpoint   Same as `apiRequest`
  * @param options    Same as `apiRequest`
@@ -77,8 +83,39 @@ export async function apiRequestWithWakeup<T = any>(
   options: RequestOptions = {},
   onWaking?: (attempt: number, max: number) => void,
 ): Promise<T> {
+  const isUpload = options.body instanceof FormData;
+
+  // ── For uploads on remote backends: confirm server is awake BEFORE uploading ──
+  // Without this, the 120s upload timeout fires during cold start, which produces
+  // an abort/network error → cleanErrorMessage shows a misleading CORS/Render msg.
+  if (isUpload && isRemoteBackend()) {
+    // Quick 2s optimistic probe — skip full wake-up if server is already warm
+    let alreadyWarm = false;
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 2_000);
+      const probe = await fetch(`${BASE_URL}/health`, {
+        signal: ctrl.signal, cache: 'no-store',
+      }).finally(() => clearTimeout(t));
+      alreadyWarm = probe.ok;
+    } catch { /* cold — fall through */ }
+
+    if (!alreadyWarm) {
+      onWaking?.(0, 15);
+      const alive = await wakeUpBackend(onWaking);
+      if (!alive) {
+        throw new Error(
+          `Unable to reach the backend server (${BASE_URL}). ` +
+          `It may still be waking up from sleep. Please wait a moment and try again.`,
+        );
+      }
+    }
+    // Server confirmed awake — now upload with full 120s timeout
+    return apiRequest<T>(endpoint, options);
+  }
+
+  // ── For non-upload requests: optimistic first attempt ──
   try {
-    // Optimistic first attempt — works fine when the backend is already warm.
     return await apiRequest<T>(endpoint, options);
   } catch (err: any) {
     // Only trigger the wake-up flow for network-level failures on remote hosts.
@@ -90,7 +127,7 @@ export async function apiRequestWithWakeup<T = any>(
 
     if (!isNetworkError || !isRemoteBackend()) throw err;
 
-    // Backend seems cold — try to wake it up before retrying.
+    // Backend seems cold — wake it up, then retry once.
     const alive = await wakeUpBackend(onWaking);
     if (!alive) {
       throw new Error(
@@ -99,7 +136,6 @@ export async function apiRequestWithWakeup<T = any>(
       );
     }
 
-    // One final retry now that the backend is confirmed alive.
     return await apiRequest<T>(endpoint, options);
   }
 }

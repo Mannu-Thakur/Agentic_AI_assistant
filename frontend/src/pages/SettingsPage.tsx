@@ -250,14 +250,24 @@ const SectionCard = memo(function SectionCard({
 
 const cleanErrorMessage = (raw: string): string => {
   if (!raw) return 'An unexpected error occurred during ingestion.';
+
   if (raw.includes('PERMISSION_DENIED') || raw.includes('denied access')) {
     return 'Google AI Studio denied project access for the configured Gemini key. The backend automatically switches to local neural embeddings on retry.';
   }
+
+  // Distinguish a request timeout (the server was awake but processing took too long)
+  // from a cold-start network failure (server was asleep / unreachable).
+  // Timeouts show as AbortError AFTER the wake-up guard has already confirmed the
+  // server is alive, so they are a different class of error.
+  if (raw.toLowerCase().includes('abort') && !raw.toLowerCase().includes('reach')) {
+    return 'The upload timed out — the server is running but the document is large or the connection is slow. Please try again; ingestion usually succeeds on the second attempt.';
+  }
+
   if (
     raw.includes('Failed to fetch') ||
     raw.includes('NetworkError') ||
     raw.includes('Load failed') ||
-    raw.toLowerCase().includes('abort')
+    raw.includes('Unable to reach')
   ) {
     const isLocal =
       typeof window !== 'undefined' &&
@@ -270,6 +280,7 @@ const cleanErrorMessage = (raw: string): string => {
     const target = BASE_URL ? `(${BASE_URL})` : '';
     return `Unable to reach the backend server ${target}. If your backend is hosted on a free cloud platform (like Render), it may be waking up from sleep (cold start — please wait 30–60s and retry). Also check if your frontend domain is allowed in BACKEND_CORS_ORIGINS.`;
   }
+
   const jsonMatch = raw.match(/\{.*"message"\s*:\s*"([^"]+)".*\}/s);
   if (jsonMatch && jsonMatch[1]) {
     return jsonMatch[1];
@@ -1974,7 +1985,7 @@ export default function SettingsPage() {
 
       const doc: DocumentFile = await apiRequestWithWakeup(
         '/documents/upload',
-        { method: 'POST', body: formData },
+        { method: 'POST', body: formData, timeoutMs: 180_000 },  // 3 min — covers parse+embed on cold Render
         (_attempt, _max) => {
           // Keep the waking step active during each retry tick — UI already shows it.
           setIngestStep(0);
