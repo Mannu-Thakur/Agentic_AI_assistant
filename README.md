@@ -25,6 +25,7 @@
 - [Environment Variables](#-environment-variables)
 - [API Reference](#-api-reference)
 - [Changelog](#-changelog)
+- [v3.2.0 — Advanced Tools & Verification](#v320--advanced-tools-smart-llm-fallback--full-verification)
 
 ---
 
@@ -301,6 +302,17 @@ BRAVE_API_KEY=your-brave-key
 | `POST` | `/api/v1/git/commit-suggestion` | Conventional commit message suggestion from diffs |
 | `GET` | `/health` | Health check |
 
+### Advanced Tool Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/v1/translate` | Translate text to any language (deep-translator → LLM fallback) |
+| `POST` | `/api/v1/summarize` | Summarize in `tldr`, `bullet`, `detailed`, or `executive` style |
+| `GET` | `/api/v1/database/tables` | List all database tables |
+| `GET` | `/api/v1/database/tables/{name}` | Describe schema of a specific table |
+| `POST` | `/api/v1/database/query` | Execute read-only SQL (SELECT / PRAGMA / EXPLAIN / WITH only) |
+
+
 ---
 
 ## 📋 Project Structure
@@ -326,8 +338,17 @@ AI Assistan Chatbot/
 │       │   ├── mission.py             ← Mission job queue API + SSE (NEW)
 │       │   ├── mission_persist.py     ← Save mission to DB (NEW)
 │       │   ├── artifacts.py           ← Artifact CRUD + HITL (NEW)
-│       │   └── metrics.py             ← Provider metrics endpoint (NEW)
-│       ├── agent/                     ← Single-agent LangGraph (original)
+│       │   ├── metrics.py             ← Provider metrics endpoint
+│       │   ├── translate.py           ← POST /translate (v3.2.0)
+│       │   ├── summarize.py           ← POST /summarize (v3.2.0)
+│       │   └── database_query.py      ← DB introspection + read-only SQL (v3.2.0)
+│       ├── tools/
+│       │   ├── advanced_tools.py      ← 7 async tools + smart LLM fallback (v3.2.0)
+│       │   ├── local_tools.py         ← Tavily search, Python sandbox
+│       │   └── registry.py            ← ToolRegistry (9 tools registered)
+│       ├── agent/
+│       │   └── prompts.py             ← INTENT_TOOL_WHITELIST (all 20 intents covered)
+│       ├── agent_original/                     ← Single-agent LangGraph (original)
 │       ├── retrieval/                 ← ChromaDB, BM25, reranker
 │       ├── services/                  ← Web search, chat, memory
 │       └── providers/                 ← Multi-provider LLM routing
@@ -349,7 +370,27 @@ AI Assistan Chatbot/
 
 ## 📅 Changelog
 
-### v3.1.0 — Workspace UI & Settings Center Overhaul (Current)
+### v3.2.0 — Advanced Tools, Smart LLM Fallback & Full Verification
+
+- **NEW** — `app/tools/advanced_tools.py`: 7 production-ready async tools:
+  - `translate_text` — deep-translator (Google) with LLM fallback chain
+  - `summarize_text` — tldr / bullet / detailed / executive styles + extraction fallback
+  - `list_tables` / `describe_table` / `execute_sql` — read-only DB introspection
+  - `search_documents` — ChromaDB vector search over ingested documents
+  - `chunk_and_analyze` — long-context chunking and synthesis
+- **NEW** — Smart `_llm_complete` fallback: Gemini → OpenAI → Groq → OpenRouter
+  - Transient errors (429, 5xx, timeout) → try next provider transparently
+  - Permanent errors (401, 400, quota) → stop immediately, clean user message
+  - All exhausted → *"All AI providers are currently unavailable. Please wait..."*
+- **NEW** — `_LLMResult` class with `.ok`, `.content`, `.provider`, `.fallback_used`, `.error`
+- **NEW** — `POST /api/v1/translate` — translation with multi-tier fallback
+- **NEW** — `POST /api/v1/summarize` — summarization with 4 output styles
+- **NEW** — `GET/POST /api/v1/database/*` — table listing, schema introspection, read-only SQL
+- **FIX** — `INTENT_TOOL_WHITELIST` fully populated: all 20 intents have tool lists (was 6 empty)
+- **FIX** — `ToolRegistry` now registers all 9 tools (was 2)
+- **VERIFIED** — Backend: **93/93 PASS** (0 fail). Frontend: **34/40 PASS** (0 fail, 6 false-positive warns)
+
+### v3.1.0 — Workspace UI & Settings Center Overhaul
 - **NEW** — **20-Tab Categorized Settings Center**: Reorganized with grouped sidebar navigation (Personal, Integrations, Coding):
   - *Personal*: General, Profile, Appearance, Personalization (custom instructions & coding preferences), Notifications (in-app & browser permission), Voice (speech recognition & TTS synthesis test), Keyboard Shortcuts, Usage & Free Limits, Storage (health monitors & semantic memory management), Data Controls, Semantic Memory, Account & Security.
   - *Integrations*: AI Models, Generation, AI Features, Remote MCP Servers, Connections (search APIs & OAuth), Documents & RAG.

@@ -289,11 +289,14 @@ async def search_exa(query: str, api_key: str, max_results: int = 8) -> List[Sea
 async def search_duckduckgo(query: str, max_results: int = 8) -> List[SearchResult]:
     """Free fallback search using DuckDuckGo (SDK or direct HTML scraping)."""
     # 1. Try DuckDuckGo python SDK if available
+    #    Prefer `ddgs` (the current canonical package); fall back to the legacy
+    #    `duckduckgo_search` package which emits a RuntimeWarning in v8+ asking
+    #    users to switch to `ddgs`.
     try:
         try:
-            from duckduckgo_search import DDGS
-        except ImportError:
             from ddgs import DDGS
+        except ImportError:
+            from duckduckgo_search import DDGS
 
         def _sync_search():
             with DDGS() as ddgs:

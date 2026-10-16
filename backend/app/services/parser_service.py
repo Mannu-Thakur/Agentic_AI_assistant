@@ -143,7 +143,10 @@ class ParserService:
              without mid-sentence raw line breaks.
         """
         try:
-            import fitz  # PyMuPDF
+            try:
+                import pymupdf as fitz  # PyMuPDF >= 1.24 preferred import (no deprecation warning)
+            except ImportError:
+                import fitz  # PyMuPDF legacy package name (< 1.24)
         except ImportError:
             logger.info("[PyMuPDFParser] PyMuPDF (fitz) module not available; falling back to pypdf.")
             return ParserService.extract_text_pdf(file_path)

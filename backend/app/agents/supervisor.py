@@ -57,7 +57,9 @@ import uuid
 from typing import Any, Dict, List, Optional, Annotated
 from typing_extensions import TypedDict
 
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import StateGraph, END
+
 from langgraph.checkpoint.sqlite import SqliteSaver
 
 from app.agents.registry import agent_registry, AgentTask, AgentResult
@@ -194,7 +196,7 @@ Respond ONLY with valid JSON (no markdown fences):
 #  Node: Supervisor Classify
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def supervisor_classify_node(state: MissionState, config: Dict) -> Dict:
+async def supervisor_classify_node(state: MissionState, config: RunnableConfig) -> Dict:
     """Classify whether the query needs Mission Mode or simple pass-through."""
     t0 = time.perf_counter()
     query       = state.get("query", "")
@@ -288,7 +290,7 @@ async def supervisor_classify_node(state: MissionState, config: Dict) -> Dict:
 #  Node: Parallel Dispatch
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def parallel_dispatch_node(state: MissionState, config: Dict) -> Dict:
+async def parallel_dispatch_node(state: MissionState, config: RunnableConfig) -> Dict:
     """Fan-out: run all agent tasks concurrently."""
     t0 = time.perf_counter()
     agent_tasks = state.get("agent_tasks", [])
@@ -347,7 +349,7 @@ async def parallel_dispatch_node(state: MissionState, config: Dict) -> Dict:
 #  Node: Result Collector + Merger
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def result_collector_node(state: MissionState, config: Dict) -> Dict:
+async def result_collector_node(state: MissionState, config: RunnableConfig) -> Dict:
     """Merge outputs from all agents into a unified context block."""
     t0 = time.perf_counter()
     agent_results = state.get("agent_results", {})
@@ -397,7 +399,7 @@ async def result_collector_node(state: MissionState, config: Dict) -> Dict:
 #  Node: Critic Verification
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def critic_verification_node(state: MissionState, config: Dict) -> Dict:
+async def critic_verification_node(state: MissionState, config: RunnableConfig) -> Dict:
     """Run CriticAgent on the merged output."""
     t0 = time.perf_counter()
     merged  = state.get("merged_content", "")
@@ -451,7 +453,7 @@ async def critic_verification_node(state: MissionState, config: Dict) -> Dict:
 #  Node: Synthesizer (Final Response)
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def synthesizer_node(state: MissionState, config: Dict) -> Dict:
+async def synthesizer_node(state: MissionState, config: RunnableConfig) -> Dict:
     """Synthesize the final unified response from all agent outputs."""
     t0 = time.perf_counter()
     merged   = state.get("merged_content", "")
@@ -506,7 +508,7 @@ async def synthesizer_node(state: MissionState, config: Dict) -> Dict:
 #  Node: Delegate to existing Agent Graph (simple path)
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def delegate_to_agent_graph_node(state: MissionState, config: Dict) -> Dict:
+async def delegate_to_agent_graph_node(state: MissionState, config: RunnableConfig) -> Dict:
     """
     Pass-through to the existing Phase 3 agent graph for simple queries.
     This preserves full backward compatibility with all existing functionality.

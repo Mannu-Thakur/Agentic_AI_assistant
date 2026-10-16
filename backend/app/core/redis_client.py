@@ -132,6 +132,7 @@ _FAIL_COOLDOWN_SECONDS = 15.0
 _redis_available: Optional[bool] = None  # None = untested, True/False = known state
 # B-H5 FIX: Lock prevents concurrent startup requests from creating multiple pools.
 _redis_init_lock: Optional[asyncio.Lock] = None
+_using_fakeredis: bool = False  # tracks whether we're on fakeredis
 
 
 def _get_redis_init_lock() -> asyncio.Lock:
@@ -141,19 +142,51 @@ def _get_redis_init_lock() -> asyncio.Lock:
     return _redis_init_lock
 
 
+async def _try_fakeredis():
+    """
+    Spin up a fakeredis async server in-process as a dev substitute when real
+    Redis is unreachable.  fakeredis is fully compatible with the redis-py async
+    API so all cache helpers, rate limiting, and web search caching work without
+    a separate Redis process.
+
+    Returns a connected fakeredis client, or None if fakeredis is not installed.
+    """
+    global _using_fakeredis
+    try:
+        import fakeredis
+        import fakeredis.aioredis as faioredis  # type: ignore[import]
+        client = faioredis.FakeRedis(decode_responses=True)
+        await client.ping()
+        _using_fakeredis = True
+        logger.info(
+            "[Redis] Real Redis unavailable — using fakeredis in-process cache "
+            "(fully functional for dev; install Redis for production)."
+        )
+        return client
+    except Exception as fke:
+        logger.debug(f"[Redis] fakeredis unavailable ({fke}); using in-memory LRU fallback.")
+        return None
+
+
 async def get_redis():
     """
     Return a singleton async Redis client, or None if Redis is unavailable.
 
+    Priority:
+    1. Real Redis (REDIS_URL from settings) — best for production.
+    2. fakeredis in-process server (if `fakeredis` package is installed) — great
+       for development; gives a shared, TTL-aware cache without a separate process.
+    3. In-memory LRU fallback — always available, per-worker only.
+
     Behaviour:
     - Caches a successful connection for the process lifetime.
-    - Failed attempts are retried after a 15s cooldown (avoids log-spam on
-      every request when Redis is not running).
+    - Failed real-Redis attempts are retried after a 15s cooldown (avoids
+      log-spam on every request when Redis is not running).
     - Never raises — callers must handle None gracefully.
     """
     global _redis_client, _last_failed_time
 
-    # Fast path — already connected
+    # Fast path — already connected (real Redis or fakeredis)
     if _redis_client is not None:
         return _redis_client
 
@@ -196,17 +229,28 @@ async def get_redis():
         except Exception as e:
             logger.warning(
                 f"[Redis] Unavailable ({e.__class__.__name__}: {e}) — "
-                "falling back to in-memory TTL cache."
+                "trying fakeredis in-process cache..."
             )
-            _redis_client = None
-            _last_failed_time = time.monotonic()
             if _client is not None:
                 try:
                     await _client.aclose()
                 except Exception:
                     pass
 
+            # Try fakeredis before falling back to in-memory LRU
+            fake_client = await _try_fakeredis()
+            if fake_client is not None:
+                _redis_client = fake_client
+            else:
+                _redis_client = None
+                _last_failed_time = time.monotonic()
+                logger.warning(
+                    "[Redis] fakeredis not available. Falling back to in-memory TTL cache. "
+                    "Install fakeredis (`pip install fakeredis`) for a better dev experience."
+                )
+
     return _redis_client
+
 
 
 

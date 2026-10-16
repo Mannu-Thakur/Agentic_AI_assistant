@@ -16,6 +16,13 @@ INTERNAL_TOOL_NAMES: List[str] = [
     "get_expenses",
     "create_reminder",
     "send_email",
+    "translate_text",
+    "summarize_text",
+    "list_tables",
+    "describe_table",
+    "execute_sql",
+    "search_documents",
+    "chunk_and_analyze",
 ]
 
 
@@ -57,26 +64,28 @@ INTENT_TOOL_WHITELIST: Dict[str, List[str]] = {
         "monthly_summary", "category_summary", "top_merchants",
         "summarize_expenses", "create_reminder", "send_email"
     ],
-    INTENT_DOCUMENT_QA:    [],                           # RAG-only, no tools
-    INTENT_VISION:         [],                           # Vision-only, no tools
+    INTENT_DOCUMENT_QA:    ["search_documents"],
+    INTENT_VISION:         ["search_documents"],         # Vision + doc search for context
     INTENT_COMPLEX:        [
         "tavily_search", "web_search", "web_fetch", "web_extract",
         "python_sandbox", "calculate", "add_expense",
         "get_expenses", "list_expenses", "update_expense", "delete_expense",
         "search_expenses", "monthly_summary", "category_summary",
-        "top_merchants", "summarize_expenses", "create_reminder", "send_email"
+        "top_merchants", "summarize_expenses", "create_reminder", "send_email",
+        "search_documents", "summarize_text", "translate_text",
+        "execute_sql", "list_tables", "describe_table", "chunk_and_analyze"
     ],
     INTENT_PROGRAMMING:    ["python_sandbox"],
     INTENT_MATH:           ["calculate", "python_sandbox"],
     INTENT_FINANCE:        ["tavily_search", "calculate", "add_expense", "list_expenses", "get_expenses", "monthly_summary", "category_summary", "top_merchants", "summarize_expenses"],
     INTENT_NEWS:           ["tavily_search"],
     INTENT_CURRENT_EVENTS: ["tavily_search"],
-    INTENT_PDF_QA:         [],
-    INTENT_DATABASE:       [],
-    INTENT_SUMMARIZATION:  [],
-    INTENT_TRANSLATION:    [],
+    INTENT_PDF_QA:         ["search_documents"],
+    INTENT_DATABASE:       ["execute_sql", "list_tables", "describe_table"],
+    INTENT_SUMMARIZATION:  ["summarize_text"],
+    INTENT_TRANSLATION:    ["translate_text"],
     INTENT_REASONING:      ["tavily_search", "python_sandbox", "calculate"],
-    INTENT_LONG_CONTEXT:   [],
+    INTENT_LONG_CONTEXT:   ["chunk_and_analyze", "summarize_text"],
     INTENT_MULTI_STEP:     ["tavily_search", "python_sandbox", "calculate"],
 }
 

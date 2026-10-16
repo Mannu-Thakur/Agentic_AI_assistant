@@ -359,6 +359,16 @@ app.include_router(mission_persist_router, prefix=settings.API_V1_STR)
 from app.api import git as git_router
 app.include_router(git_router.router,      prefix=settings.API_V1_STR)
 
+# ── Advanced Tools API Routes ─────────────────────────────────────────────────
+from app.api import translate as translate_router
+from app.api import summarize as summarize_router
+from app.api import database_query as database_query_router
+
+app.include_router(translate_router.router,      prefix=settings.API_V1_STR)
+app.include_router(summarize_router.router,       prefix=settings.API_V1_STR)
+app.include_router(database_query_router.router,  prefix=settings.API_V1_STR)
+
+
 
 
 

@@ -4,6 +4,15 @@ import asyncio
 import logging
 from typing import Dict, Any, List, Optional
 from app.tools.local_tools import tavily_search, python_sandbox
+from app.tools.advanced_tools import (
+    translate_text,
+    summarize_text,
+    list_tables,
+    describe_table,
+    execute_sql,
+    search_documents,
+    chunk_and_analyze,
+)
 from app.tools.mcp_client import McpStdioClient, McpHttpClient
 
 import threading
@@ -64,6 +73,94 @@ class ToolRegistry:
                         }
                     },
                     "required": ["code"]
+                }
+            },
+            "translate_text": {
+                "func": translate_text,
+                "description": "Translate text from one language to another using Google Translate or LLM fallback.",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string", "description": "The text to translate"},
+                        "target_language": {"type": "string", "description": "Target language name or ISO 639-1 code (e.g. 'French', 'fr')"},
+                        "source_language": {"type": "string", "description": "Source language or 'auto' for auto-detection", "default": "auto"}
+                    },
+                    "required": ["text", "target_language"]
+                }
+            },
+            "summarize_text": {
+                "func": summarize_text,
+                "description": "Summarize text in bullet, paragraph, or tldr style using an LLM.",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string", "description": "The text to summarize"},
+                        "style": {"type": "string", "description": "Summary style: 'bullet', 'paragraph', or 'tldr'", "default": "bullet"},
+                        "max_length": {"type": "integer", "description": "Approximate max words in summary", "default": 500}
+                    },
+                    "required": ["text"]
+                }
+            },
+            "list_tables": {
+                "func": list_tables,
+                "description": "List all tables in the application SQLite database.",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "db_path": {"type": "string", "description": "Optional path to SQLite database file"}
+                    },
+                    "required": []
+                }
+            },
+            "describe_table": {
+                "func": describe_table,
+                "description": "Describe the schema (columns, types, nullability) of a specific database table.",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "table_name": {"type": "string", "description": "Name of the table to describe"},
+                        "db_path": {"type": "string", "description": "Optional path to SQLite database file"}
+                    },
+                    "required": ["table_name"]
+                }
+            },
+            "execute_sql": {
+                "func": execute_sql,
+                "description": "Execute a read-only SQL SELECT query against the application database and return results as a markdown table.",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "SQL SELECT query to execute (read-only, no INSERT/UPDATE/DELETE)"},
+                        "max_rows": {"type": "integer", "description": "Maximum rows to return (default 50, max 200)", "default": 50}
+                    },
+                    "required": ["query"]
+                }
+            },
+            "search_documents": {
+                "func": search_documents,
+                "description": "Search the user's uploaded documents using vector similarity (RAG). Returns the most relevant document chunks.",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Search query to find relevant document chunks"},
+                        "user_id": {"type": "string", "description": "Optional user ID to scope the search"},
+                        "file_type": {"type": "string", "description": "Optional filter by file type (e.g. 'pdf', 'docx')"},
+                        "k": {"type": "integer", "description": "Number of top chunks to retrieve (default 5)", "default": 5}
+                    },
+                    "required": ["query"]
+                }
+            },
+            "chunk_and_analyze": {
+                "func": chunk_and_analyze,
+                "description": "Analyze a long text relative to a specific question by splitting it into chunks and synthesizing a comprehensive answer.",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string", "description": "The long text to analyze"},
+                        "question": {"type": "string", "description": "The question or task to answer from the text"},
+                        "chunk_size": {"type": "integer", "description": "Approximate character count per chunk (default 2000)", "default": 2000}
+                    },
+                    "required": ["text", "question"]
                 }
             }
         }
