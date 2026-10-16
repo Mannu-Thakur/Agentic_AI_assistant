@@ -31,3 +31,21 @@ task.md
 render_*.txt
 *_report.json
 
+# ===== Generated / Artifact output =====
+backend/artifacts/
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+venv/
+.venv/
+
+# ===== Node =====
+node_modules/
+frontend/dist/
+frontend/.vite/
