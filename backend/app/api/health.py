@@ -49,6 +49,18 @@ async def _check_groq(api_key: str) -> dict:
         return {"status": "unreachable", "error": str(e)}
 
 
+async def _check_openai(api_key: str) -> dict:
+    """Check OpenAI key reachability without consuming completion tokens."""
+    url = "https://api.openai.com/v1/models"
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            r = await client.get(url, headers={"Authorization": f"Bearer {api_key}"})
+        ok = r.status_code == 200
+        return {"status": "healthy" if ok else "degraded", "http_status": r.status_code}
+    except Exception as e:
+        return {"status": "unreachable", "error": str(e)}
+
+
 async def _check_openrouter(api_key: str) -> dict:
     url = "https://openrouter.ai/api/v1/auth/key"
     try:
@@ -104,6 +116,7 @@ async def provider_health():
     await asyncio.gather(
         check("gemini",      settings.GEMINI_API_KEY,      _check_gemini),
         check("groq",        settings.GROQ_API_KEY,        _check_groq),
+        check("openai",      settings.OPENAI_API_KEY,      _check_openai),
         check("openrouter",  settings.OPENROUTER_API_KEY,  _check_openrouter),
     )
 

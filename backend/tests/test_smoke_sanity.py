@@ -23,6 +23,48 @@ async def test_smoke_health_and_readiness():
         readiness_resp = await client.get("/api/v1/health/readiness")
         assert readiness_resp.status_code in (200, 503)  # 200 ready, or 503 if redis optional down
 
+
+@pytest.mark.anyio
+async def test_provider_health_checks_configured_openai(monkeypatch):
+    """The provider health matrix must include OpenAI and surface degraded status."""
+    from app.api import health as health_api
+
+    class RateLimitedResponse:
+        status_code = 429
+
+    class MockAsyncClient:
+        def __init__(self, timeout):
+            assert timeout == health_api._TIMEOUT
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url, headers):
+            assert url == "https://api.openai.com/v1/models"
+            assert headers == {"Authorization": "Bearer configured-test-key"}
+            return RateLimitedResponse()
+
+    monkeypatch.setattr(health_api.settings, "GEMINI_API_KEY", None)
+    monkeypatch.setattr(health_api.settings, "GROQ_API_KEY", None)
+    monkeypatch.setattr(health_api.settings, "OPENAI_API_KEY", "configured-test-key")
+    monkeypatch.setattr(health_api.settings, "OPENROUTER_API_KEY", None)
+    monkeypatch.setattr(health_api.httpx, "AsyncClient", MockAsyncClient)
+    monkeypatch.setattr(
+        health_api,
+        "_check_redis",
+        AsyncMock(return_value={"status": "unconfigured"}),
+    )
+
+    result = await health_api.provider_health()
+
+    assert result["providers"]["openai"]["status"] == "degraded"
+    assert result["providers"]["openai"]["http_status"] == 429
+    assert result["overall"] == "degraded"
+
+
 @pytest.mark.anyio
 async def test_smoke_workspace_usage_metrics(auth_user):
     """Verify workspace usage metrics return valid counts."""
