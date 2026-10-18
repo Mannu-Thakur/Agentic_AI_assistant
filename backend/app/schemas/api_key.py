@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from datetime import datetime
 from typing import List, Optional
 
@@ -42,7 +42,11 @@ class ProviderOut(BaseModel):
     verified: bool
     enabled: bool
     lastChecked: Optional[datetime] = None
-    availableModels: List[str] = []
+    availableModels: List[str] = Field(default_factory=list)
     lastError: Optional[str] = None
+    # Deployment-owned credentials and model IDs are safe to advertise, but
+    # key material must never be returned or conflated with a user's saved key.
+    serverConfigured: bool = False
+    serverModels: List[str] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)

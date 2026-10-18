@@ -13,6 +13,7 @@ Changes vs original:
 import time
 import uuid
 import json
+import re
 import logging
 import logging.config
 from contextlib import asynccontextmanager
@@ -53,6 +54,15 @@ class _JsonFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:  # noqa: A003
         msg = record.getMessage()
+        # HTTP clients log full request URLs at INFO level. Provider APIs that
+        # require credentials in query parameters (for example, search and
+        # health endpoints) would otherwise write those credentials to logs.
+        # Remove URL query strings before they reach any configured handler.
+        msg = re.sub(
+            r"(?i)(https?://[^\s\"'<>?]+)\?[^\s\"'<>]*",
+            r"\1?[query redacted]",
+            msg,
+        )
         payload = {
             "timestamp": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
             "level":     record.levelname,

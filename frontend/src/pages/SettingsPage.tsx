@@ -2355,6 +2355,14 @@ export default function SettingsPage() {
                                 <div className="flex items-center justify-between">
                                   <div className="flex items-center gap-2.5 min-w-0">
                                     <p className="text-sm font-semibold text-foreground">{meta.name}</p>
+                                    {prov.serverConfigured && (
+                                      <span
+                                        title={`Deployment model: ${(prov.serverModels || []).join(', ') || 'configured'}`}
+                                        className="bg-violet-500/10 text-violet-300 border border-violet-500/20 px-2 py-0.5 rounded-full text-[10px] font-bold"
+                                      >
+                                        Server configured
+                                      </span>
+                                    )}
                                     {isVerified && (
                                       <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full text-[10px] font-bold">
                                         Verified

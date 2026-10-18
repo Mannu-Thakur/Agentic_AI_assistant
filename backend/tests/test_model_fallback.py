@@ -224,11 +224,101 @@ async def test_all_providers_failed_generates_detailed_diagnostic(monkeypatch):
 
     result = await generate_response_node(state, config)
     text = result["response_text"]
-    assert "Service Temporarily Busy" in text or "Rate Limit" in text
+    assert "Provider Limits Reached" in text
     assert "Google Gemini" in text or "Gemini" in text
     assert "Groq" in text
-    assert "Rate limit or quota" in text or "Rate limit" in text
-    assert "Quick fix:" in text or "How to resolve:" in text
+    assert "Account usage or billing quota reached" in text
+    assert "Temporary request rate limit reached" in text
+    assert "Check usage and billing" in text
+    assert "temporary rate limit, wait 30 seconds" in text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider_error", "expected_message", "forbidden_message"),
+    [
+        (
+            "429 insufficient_quota: You exceeded your current quota; check billing.",
+            "Provider Quota Exhausted",
+            "wait 30 seconds",
+        ),
+        (
+            "429 Rate limit reached for model on TPM. Please wait a moment.",
+            "Service Temporarily Busy",
+            "billing limits",
+        ),
+    ],
+)
+async def test_provider_failure_advice_matches_quota_or_rate_limit(
+    monkeypatch, provider_error, expected_message, forbidden_message
+):
+    async def mock_openai_fail(*args, **kwargs):
+        if False:
+            yield {}
+        raise Exception(provider_error)
+
+    monkeypatch.setattr(openai_provider, "generate_stream", mock_openai_fail)
+    for setting in ("GEMINI_API_KEY", "GROQ_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY"):
+        monkeypatch.setattr(settings, setting, None)
+
+    state = {
+        "messages": [{"role": "user", "content": "Give a short response."}],
+        "active_model": "gpt-4o-mini",
+        "intent": "NORMAL_CHAT",
+        "allowed_tools": [],
+        "source_documents": [],
+        "retrieved_documents": [],
+        "steps": [],
+    }
+    config = {
+        "configurable": {
+            "api_keys": {"openai": "sk-regression-test-key"},
+            "openai_api_key": "sk-regression-test-key",
+        }
+    }
+
+    result = await generate_response_node(state, config)
+    assert expected_message in result["response_text"]
+    assert forbidden_message not in result["response_text"]
+
+
+@pytest.mark.asyncio
+async def test_list_providers_advertises_server_models_without_returning_keys(monkeypatch):
+    from types import SimpleNamespace
+    from app.api.api_keys import list_providers
+
+    class EmptyResult:
+        def scalars(self):
+            return self
+
+        def all(self):
+            return []
+
+    class EmptyDatabase:
+        async def execute(self, _statement):
+            return EmptyResult()
+
+    server_key = "deployment-test-key-never-return"
+    monkeypatch.setattr(settings, "GEMINI_API_KEY", None)
+    monkeypatch.setattr(settings, "OPENAI_API_KEY", server_key)
+    monkeypatch.setattr(settings, "GROQ_API_KEY", "mock_server_key")
+    monkeypatch.setattr(settings, "OPENROUTER_API_KEY", None)
+
+    response = await list_providers(
+        current_user=SimpleNamespace(id="server-model-test-user"),
+        db=EmptyDatabase(),
+    )
+    providers = {provider.id: provider for provider in response}
+
+    assert providers["openai"].serverConfigured is True
+    assert providers["openai"].serverModels == [settings.OPENAI_MODEL]
+    assert providers["openai"].saved is False
+    assert providers["openai"].verified is False
+    assert providers["groq"].serverConfigured is False
+    assert providers["groq"].serverModels == []
+    assert server_key not in response[0].model_dump_json() + "".join(
+        provider.model_dump_json() for provider in response
+    )
 
 
 @pytest.mark.asyncio

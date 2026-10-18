@@ -1078,14 +1078,17 @@ export default function ChatPage() {
       return `Invalid model provider - The resolved provider "${providerId}" is not supported.`;
     }
     const matchingProv = providers.find((p) => p.id === providerId);
+    const serverModelAvailable = Boolean(
+      matchingProv?.serverConfigured && matchingProv.serverModels?.includes(modelId)
+    );
     if (!matchingProv || matchingProv.status !== 'VERIFIED') {
-      if (!ProviderKeyManager.hasKey(providerId)) {
+      if (!ProviderKeyManager.hasKey(providerId) && !serverModelAvailable) {
         return `Authentication failed - Missing or unconfigured API key for provider ${providerId.toUpperCase()}. Update it in Settings.`;
       }
     }
     const hasLocal = ProviderKeyManager.hasKey(providerId);
     const backendSaved = matchingProv?.saved;
-    if (!hasLocal && !backendSaved) {
+    if (!hasLocal && !backendSaved && !serverModelAvailable) {
       return `Authentication failed - Missing or empty API key for provider ${providerId.toUpperCase()}. Update it in Settings.`;
     }
     // ── Real-time provider/model validation using live API data ──────────────
@@ -1096,7 +1099,8 @@ export default function ChatPage() {
       if (!matchingProv.availableModels.includes(modelId)) {
         // Model not in provider's live list — check all other verified providers
         const ownerProv = providers.find(
-          (p) => p.status === 'VERIFIED' && p.availableModels.includes(modelId)
+          (p) => (p.status === 'VERIFIED' && p.availableModels.includes(modelId))
+            || (p.serverConfigured && Boolean(p.serverModels?.includes(modelId)))
         );
         if (ownerProv && ownerProv.id !== providerId) {
           return `Provider mismatch - Model "${modelId}" belongs to provider ${ownerProv.id.toUpperCase()}, not ${providerId.toUpperCase()}. Please select the correct provider.`;
@@ -1259,13 +1263,37 @@ export default function ChatPage() {
 
 
 
-  // Show only models whose provider key is verified. Keeping this list and the
-  // selected model stable avoids rebuilding streaming callbacks every render.
+  // Show curated models for verified user keys and the exact deployment models
+  // advertised by the server. Server key material never reaches the browser.
   const models = useMemo(() => {
     const verifiedProviderSet = new Set(
       providers.filter((p) => p.status === 'VERIFIED').map((p) => p.id)
     );
-    return CURATED_MODELS.filter((model) => verifiedProviderSet.has(model.apiProvider));
+    const serverModelSet = new Set(
+      providers.flatMap((provider) => provider.serverConfigured ? (provider.serverModels || []) : [])
+    );
+    const curated = CURATED_MODELS.filter((model) =>
+      verifiedProviderSet.has(model.apiProvider) || serverModelSet.has(model.id)
+    );
+    const knownIds = new Set(CURATED_MODELS.map((model) => model.id));
+    const providerLabels: Record<string, string> = {
+      google: 'Google Gemini', openai: 'OpenAI', groq: 'Groq', openrouter: 'OpenRouter',
+    };
+    const serverSpecific = providers.flatMap((provider) => {
+      if (!provider.serverConfigured) return [];
+      return (provider.serverModels || [])
+        .filter((modelId) => modelId && !knownIds.has(modelId))
+        .map((modelId) => ({
+          id: modelId,
+          name: modelId,
+          provider: providerLabels[provider.id] || provider.id,
+          apiProvider: provider.id,
+          icon: Cpu,
+          badge: 'Workspace',
+          desc: 'Configured for this deployment',
+        }));
+    });
+    return [...curated, ...serverSpecific];
   }, [providers]);
 
   const currentModel = useMemo(

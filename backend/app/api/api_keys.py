@@ -13,9 +13,33 @@ from app.schemas.api_key import ApiKeyCreate, ApiKeyOut, ProviderOut
 from app.models.user import ApiKey
 from app.core.security import encrypt_api_key, decrypt_api_key
 from app.core.redis_client import cache_get, cache_set, cache_delete
+from app.core.config import settings
 
 router = APIRouter(prefix="/api-keys", tags=["API Keys"])
 providers_router = APIRouter(prefix="/providers", tags=["Providers"])
+
+_SERVER_PROVIDER_SETTINGS = {
+    "google": ("GEMINI_API_KEY", "GEMINI_MODEL"),
+    "openai": ("OPENAI_API_KEY", "OPENAI_MODEL"),
+    "groq": ("GROQ_API_KEY", "GROQ_MODEL"),
+    "openrouter": ("OPENROUTER_API_KEY", "OPENROUTER_MODEL"),
+}
+_SERVER_KEY_PLACEHOLDERS = ("mock_", "fake_", "your_", "placeholder", "changeme", "replace_me")
+
+
+def _server_provider_configuration(provider_id: str) -> tuple[bool, List[str]]:
+    """Return safe server-key availability metadata without exposing credentials."""
+    configured = _SERVER_PROVIDER_SETTINGS.get(provider_id)
+    if not configured:
+        return False, []
+
+    key_setting, model_setting = configured
+    api_key = str(getattr(settings, key_setting, "") or "").strip()
+    if not api_key or api_key.lower().startswith(_SERVER_KEY_PLACEHOLDERS):
+        return False, []
+
+    model = str(getattr(settings, model_setting, "") or "").strip()
+    return True, [model] if model else []
 
 class ApiKeyAuthError(Exception):
     """Raised when an API key is explicitly rejected by the provider due to invalid credentials."""
@@ -519,6 +543,7 @@ async def list_providers(
                            "tavily", "serpapi", "exa"]
     out = []
     for pid in supported_providers:
+        server_configured, server_models = _server_provider_configuration(pid)
         db_record = keys_map.get(pid)
         if db_record:
             status_str = db_record.status
@@ -545,7 +570,9 @@ async def list_providers(
             enabled=enabled,
             lastChecked=last_checked,
             availableModels=available_models,
-            lastError=last_error
+            lastError=last_error,
+            serverConfigured=server_configured,
+            serverModels=server_models,
         ))
     return out
 

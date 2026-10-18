@@ -38,6 +38,8 @@ export interface Provider {
   lastChecked: string | null;
   availableModels: string[];
   lastError?: string | null;
+  serverConfigured?: boolean;
+  serverModels?: string[];
 }
 
 interface ChatState {

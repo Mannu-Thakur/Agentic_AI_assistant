@@ -11,6 +11,8 @@ export interface ProviderState {
   lastChecked: string | null;
   availableModels: string[];
   lastError?: string | null;
+  serverConfigured?: boolean;
+  serverModels?: string[];
 }
 
 const STORAGE_KEY = 'x_api_keys';

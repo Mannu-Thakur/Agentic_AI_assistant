@@ -4421,11 +4421,25 @@ async def generate_response_node(
 
         provider_summaries = []
         has_rate_limit = False
+        has_quota_exhaustion = False
         has_auth_error = False
 
         for p_key, atts in provider_attempts.items():
             label = provider_labels.get(p_key, p_key.title())
-            if any(a.get("is_quota_exhausted") or a.get("is_rate_limit") for a in atts):
+            provider_has_quota = any(a.get("is_quota_exhausted") for a in atts)
+            provider_has_rate_limit = any(
+                a.get("is_rate_limit") and not a.get("is_quota_exhausted") for a in atts
+            )
+            has_quota_exhaustion = has_quota_exhaustion or provider_has_quota
+            has_rate_limit = has_rate_limit or provider_has_rate_limit
+            if provider_has_quota and provider_has_rate_limit:
+                status_text = "Account quota and temporary rate limits reached"
+            elif provider_has_quota:
+                status_text = "Account usage or billing quota reached"
+            elif provider_has_rate_limit:
+                status_text = "Temporary request rate limit reached"
+            elif any(a.get("is_rate_limit") for a in atts):
+                # Defensive fallback for legacy attempts missing quota metadata.
                 has_rate_limit = True
                 status_text = "Rate limit or quota reached"
             elif any(any(w in a.get("error", "").lower() for w in ["invalid api key", "missing api key", "api_key_invalid", "unauthorized", "401", "403"]) for a in atts):
@@ -4442,10 +4456,24 @@ async def generate_response_node(
 
         provider_lines = "\n".join(provider_summaries) if provider_summaries else "• Configured providers are currently unresponsive"
 
-        if has_rate_limit:
+        if has_quota_exhaustion and has_rate_limit:
+            friendly_msg = (
+                "⚠️ **Provider Limits Reached**\n\n"
+                "Some active AI providers reached an account quota, while others returned temporary rate limits:\n"
+                f"{provider_lines}\n\n"
+                "**Quick fix:** Check usage and billing for quota errors. For a temporary rate limit, wait 30 seconds or switch to another configured model."
+            )
+        elif has_quota_exhaustion:
+            friendly_msg = (
+                "⚠️ **Provider Quota Exhausted**\n\n"
+                "The active AI provider reached an account or billing limit:\n"
+                f"{provider_lines}\n\n"
+                "**Quick fix:** Check the provider's usage, plan, or billing limits, then retry or switch to another configured model."
+            )
+        elif has_rate_limit:
             friendly_msg = (
                 "⚠️ **Service Temporarily Busy**\n\n"
-                "The active AI providers reached their request limits:\n"
+                "The active AI providers reached temporary request rate limits:\n"
                 f"{provider_lines}\n\n"
                 "**Quick fix:** Wait 30 seconds to retry, or switch to another model in the header."
             )
