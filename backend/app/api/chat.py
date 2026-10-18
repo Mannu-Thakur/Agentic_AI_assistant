@@ -413,9 +413,9 @@ async def stream_agent_message(
     # status (broken: auto-heal marks new docs 'failed' immediately).
     #
     # New approach: detect the [Uploaded Document:] tag, open a FRESH DB session,
-    # find any doc with a matching filename uploaded in the last 5 minutes
-    # (regardless of status), and extract its text directly from disk so the LLM
-    # can answer immediately without waiting for vectorisation.
+    # find only the files attached to this message (regardless of status), and
+    # extract their text directly from disk so the LLM can answer immediately
+    # without waiting for vectorisation. Never inject unrelated recent files.
     import re as _chat_re
     import unicodedata as _unicodedata
     import pathlib as _pathlib
@@ -433,7 +433,7 @@ async def stream_agent_message(
     _recent_docs: list = []
 
     from app.models.document import Document as _DocModel
-    from sqlalchemy import desc as _desc, or_ as _sql_or
+    from sqlalchemy import desc as _desc
     from app.core.database import AsyncSessionLocal as _FreshSession
     from app.services.parser_service import ParserService as _PS
 
@@ -457,25 +457,17 @@ async def stream_agent_message(
         _candidate_names.add(_n.replace("_", " "))
 
     try:
-        from datetime import timedelta as _td
         async with _FreshSession() as _fresh_db:
             _filters = [_DocModel.user_id == current_user.id]
-            _sub_conds = []
             if _candidate_names:
-                _sub_conds.append(_DocModel.filename.in_(list(_candidate_names)))
-            if chat_id:
-                _sub_conds.append(_DocModel.chat_id == chat_id)
-            # Time-window fallback: catch sanitization mismatches (e.g. "My Report.pdf"
-            # stored as "My_Report.pdf"). Only applies when combined with filename/chat_id
-            # to avoid injecting completely unrelated recently-uploaded docs.
-            _ten_min_ago = datetime.now(timezone.utc) - _td(minutes=10)
-            if _candidate_names or chat_id:
-                # Add time-window as an extra OR so that near-miss filename variants
-                # within the last 10 min are also caught. Still scoped to user_id above.
-                _sub_conds.append(_DocModel.uploaded_at >= _ten_min_ago)
+                # Primary match is the explicit attachment list. Keep the chat
+                # scope whenever it is known so a duplicate filename in another
+                # conversation cannot be pulled into this request.
+                _name_match = _DocModel.filename.in_(list(_candidate_names))
+                if chat_id:
+                    _name_match = _name_match & (_DocModel.chat_id == chat_id)
 
-            if _sub_conds:
-                _filters.append(_sql_or(*_sub_conds))
+                _filters.append(_name_match)
                 _fresh_result = await _fresh_db.execute(
                     select(_DocModel).where(*_filters).order_by(_desc(_DocModel.uploaded_at))
                 )
@@ -564,6 +556,7 @@ async def stream_agent_message(
         "images": [{"base64": img.base64, "mimeType": img.mimeType} for img in (schema.images or [])],
         "intent":               INTENT_NORMAL_CHAT,
         "allowed_tools":        [],
+        "routing_next_step":    None,
         "is_private_doc_query": False,
         "no_doc_answer":        False,
         "memory_write_content":  None,
@@ -663,6 +656,10 @@ async def stream_agent_message(
         metrics_store.update(metrics)
         await queue.put({"event": "metrics", "metrics": metrics})
 
+      async def on_routing_callback(routing: dict):
+        """Forward the graph's safe routing summary as a live SSE event."""
+        await queue.put({"event": "routing", **routing})
+
       # BUG-5d FIX: Instantiate RequestTelemetry per-request and pass it through
       # config so graph nodes can call record_routing / record_llm / record_evidence.
       # finalize() is called after graph completion and emits a structured JSON log.
@@ -686,6 +683,7 @@ async def stream_agent_message(
               "memories": memories,
               "on_token": on_token_callback,
               "on_step": on_step_callback,
+               "on_routing": on_routing_callback,
               "on_metrics": on_metrics_callback,
               "telemetry": _telemetry,  # BUG-5d: nodes read this via config["configurable"]["telemetry"]
               # Always pass the primary resolved key for google/gemini (they share a key)
@@ -943,6 +941,9 @@ async def stream_agent_message(
             "retrieved_context": final_state.get("retrieved_documents", []),
             "steps": final_state.get("steps", []),
             "generation_mode": final_state.get("generation_mode"),
+            "intent": final_state.get("intent"),
+            "routing_next_step": final_state.get("routing_next_step"),
+            "is_private_doc_query": final_state.get("is_private_doc_query", False),
         })
 
       # Yield runtime telemetry metrics payload to frontend right before DB save

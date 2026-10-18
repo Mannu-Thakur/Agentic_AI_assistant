@@ -30,7 +30,18 @@ export interface DeveloperMetrics {
   search_queries?: string[];
   chunks_used?: number;
   steps?: string[];
-  generation_mode?: 'normal_rag' | 'model_knowledge' | 'crag_rejected' | 'web_fallback';
+  // Safe routing summary emitted by the server. This intentionally describes
+  // executed stages, not hidden model chain-of-thought.
+  intent?: string;
+  routing_next_step?: string;
+  is_private_doc_query?: boolean;
+  generation_mode?:
+    | 'normal_rag'
+    | 'model_knowledge'
+    | 'crag_rejected'
+    | 'web_fallback'
+    | 'error_fallback'
+    | 'extractive_document_fallback';
   execution_trace?: Array<{
     name: string;
     status: 'EXECUTED' | 'BYPASSED' | 'FAILED';

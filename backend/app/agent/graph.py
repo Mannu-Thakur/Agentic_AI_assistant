@@ -108,6 +108,14 @@ def route_after_classify(state: AgentState) -> str:
       NORMAL_CHAT | DOCUMENT_QA | VISION → check_retrieval (bypasses tool planning for fast single-turn path)
       Everything else (COMPLEX, MCP_TOOL, CODE_EXECUTION, etc.) → planner
     """
+    # classify_intent_node records the selected stage in state and emits the
+    # same safe routing summary to the client.  Prefer it so the UI and graph
+    # cannot diverge; retain the explicit logic below as a backward-compatible
+    # fallback for callers that construct state by hand.
+    announced_stage = state.get("routing_next_step")
+    if announced_stage in {"clarification", "memory_write", "execute_web_search", "check_retrieval", "planner"}:
+        return announced_stage
+
     if state.get("is_ambiguous", False):
         return "clarification"
     intent = state.get("intent", INTENT_NORMAL_CHAT)

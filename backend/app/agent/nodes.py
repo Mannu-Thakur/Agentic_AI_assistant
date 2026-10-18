@@ -129,6 +129,66 @@ async def _notify_step(config: Optional[RunnableConfig], step_message: str) -> N
             logger.debug(f"_notify_step error (non-fatal): {err}")
 
 
+async def _notify_routing(
+    config: Optional[RunnableConfig],
+    *,
+    intent: str,
+    next_step: str,
+    reason: str,
+    is_private_doc_query: bool = False,
+) -> None:
+    """Stream a concise routing summary without exposing model reasoning."""
+    if not config:
+        return
+    on_routing = config.get("configurable", {}).get("on_routing")
+    if not on_routing or not callable(on_routing):
+        return
+    payload = {
+        "intent": intent,
+        "next_step": next_step,
+        "reason": reason,
+        "is_private_doc_query": is_private_doc_query,
+    }
+    try:
+        result = on_routing(payload)
+        if inspect.isawaitable(result):
+            await result
+    except Exception as err:
+        logger.debug(f"_notify_routing error (non-fatal): {err}")
+
+
+def _initial_pipeline_stage(
+    intent: str,
+    *,
+    is_private_doc_query: bool,
+    has_images: bool,
+    is_ambiguous: bool = False,
+) -> str:
+    """Return the exact first graph stage selected after intent classification."""
+    if is_ambiguous:
+        return "clarification"
+    if intent == INTENT_MEMORY_WRITE:
+        return "memory_write"
+    if (
+        intent in (INTENT_WEB_SEARCH, INTENT_NEWS, INTENT_CURRENT_EVENTS)
+        and not is_private_doc_query
+        and not has_images
+    ):
+        return "execute_web_search"
+    if intent in (
+        INTENT_NORMAL_CHAT,
+        INTENT_DOCUMENT_QA,
+        INTENT_VISION,
+        INTENT_PDF_QA,
+        INTENT_SUMMARIZATION,
+        INTENT_TRANSLATION,
+        INTENT_DATABASE,
+        INTENT_LONG_CONTEXT,
+    ) or (has_images and intent in (INTENT_WEB_SEARCH, INTENT_NEWS, INTENT_CURRENT_EVENTS)):
+        return "check_retrieval"
+    return "planner"
+
+
 # ── Singleton provider instances ──────────────────────────────────────────────
 gemini_provider     = GeminiProvider()
 groq_provider       = GroqProvider()
@@ -1456,6 +1516,12 @@ async def classify_intent_node(
                 f"Query classified as ambiguous: {reason}",
                 metadata={"is_ambiguous": True}, duration_ms=dur
             )
+            await _notify_routing(
+                config,
+                intent=INTENT_NORMAL_CHAT,
+                next_step="clarification",
+                reason="The request needs one clarification before processing.",
+            )
             return {
                 "is_ambiguous": True,
                 "original_query": last_query,
@@ -1463,6 +1529,7 @@ async def classify_intent_node(
                 "resolved_query": None,
                 "intent": INTENT_NORMAL_CHAT,
                 "allowed_tools": [],
+                "routing_next_step": "clarification",
                 "steps": steps,
                 "language_mode": language_mode,
                 "detected_language": detected_language,
@@ -1658,6 +1725,46 @@ async def classify_intent_node(
 
     logger.info(f"classify_intent_node: intent={intent} → exposing {len(allowed_tools)} tools: {allowed_tools}")
 
+    # ── Entity Search Task: force WEB_SEARCH if follow-up detected ───────────
+    # Also initialise entity_search_task on a fresh WEB_SEARCH so subsequent
+    # follow-up turns can find it and merge constraints.
+    if _entity_followup_detected and entity_search_task:
+        # Force WEB_SEARCH so the pipeline runs real-time search, not chat
+        intent = INTENT_WEB_SEARCH
+        # Ensure tavily_search is in the allowed tools
+        from app.agent.prompts import INTENT_TOOL_WHITELIST as _IW
+        allowed_tools = list(set(allowed_tools) | set(_IW.get(INTENT_WEB_SEARCH, [])))
+        logger.info(f"[EntitySearch] Intent forced to WEB_SEARCH for entity follow-up")
+    elif intent == INTENT_WEB_SEARCH and not entity_search_task:
+        # First turn of a person/entity search — initialise the task state
+        # so subsequent turns can detect it as a follow-up.
+        # We store entity=None here; execute_web_search_node will fill it from query.
+        entity_search_task = {
+            "entity": None,
+            "platform": None,
+            "constraints": [],
+            "rejected_description": None,
+            "last_query": None,
+        }
+
+    routing_next_step = _initial_pipeline_stage(
+        intent,
+        is_private_doc_query=is_private_doc_query,
+        has_images=images_present,
+        is_ambiguous=False,
+    )
+    routing_reason = {
+        "clarification": "The request needs one clarification before processing.",
+        "memory_write": "A durable preference or fact was detected for memory storage.",
+        "execute_web_search": "The request needs current public information, so web search is selected.",
+        "check_retrieval": (
+            "The request will be evaluated for relevant private-document context."
+            if is_private_doc_query
+            else "The request will be checked for relevant saved context before answering."
+        ),
+        "planner": "The request needs a multi-step plan before tools or generation run.",
+    }.get(routing_next_step, "The request was routed to the selected execution stage.")
+
     # ── Telemetry ─────────────────────────────────────────────────────────────
     _telemetry = config.get("configurable", {}).get("telemetry")
     if _telemetry is not None:
@@ -1688,35 +1795,22 @@ async def classify_intent_node(
             "allowed_tools": allowed_tools,
             "is_private_doc_query": is_private_doc_query,
             "freshness_required": freshness_required,
+            "routing_next_step": routing_next_step,
         },
         duration_ms=dur
     )
-
-    # ── Entity Search Task: force WEB_SEARCH if follow-up detected ───────────
-    # Also initialise entity_search_task on a fresh WEB_SEARCH so subsequent
-    # follow-up turns can find it and merge constraints.
-    if _entity_followup_detected and entity_search_task:
-        # Force WEB_SEARCH so the pipeline runs real-time search, not chat
-        intent = INTENT_WEB_SEARCH
-        # Ensure tavily_search is in the allowed tools
-        from app.agent.prompts import INTENT_TOOL_WHITELIST as _IW
-        allowed_tools = list(set(allowed_tools) | set(_IW.get(INTENT_WEB_SEARCH, [])))
-        logger.info(f"[EntitySearch] Intent forced to WEB_SEARCH for entity follow-up")
-    elif intent == INTENT_WEB_SEARCH and not entity_search_task:
-        # First turn of a person/entity search — initialise the task state
-        # so subsequent turns can detect it as a follow-up.
-        # We store entity=None here; execute_web_search_node will fill it from query.
-        entity_search_task = {
-            "entity": None,
-            "platform": None,
-            "constraints": [],
-            "rejected_description": None,
-            "last_query": None,
-        }
+    await _notify_routing(
+        config,
+        intent=intent,
+        next_step=routing_next_step,
+        reason=routing_reason,
+        is_private_doc_query=is_private_doc_query,
+    )
 
     return {
         "intent":                intent,
         "allowed_tools":         allowed_tools,
+        "routing_next_step":     routing_next_step,
         "is_private_doc_query":  is_private_doc_query,
         "needs_retrieval":       state.get("needs_retrieval", False),
         "no_doc_answer":         False,
@@ -2352,6 +2446,18 @@ async def check_retrieval_node(
         record_node_execution(state, "retrieve_context", "BYPASSED", "Retrieval evaluated as unnecessary by Self-RAG")
         record_node_execution(state, "grade_documents", "BYPASSED", "Retrieval bypassed — no documents retrieved to grade")
         state["semantic_status"]["retrieval_status"] = "RETRIEVAL NOT NEEDED"
+
+    await _notify_routing(
+        config,
+        intent=intent,
+        next_step="retrieve_context" if needs_retrieval else "generate_response",
+        reason=(
+            "Relevant private-document context will be retrieved before answering."
+            if needs_retrieval
+            else "Retrieval was not needed, so the response will be generated directly."
+        ),
+        is_private_doc_query=is_private_doc,
+    )
 
     return {
         "needs_retrieval": needs_retrieval,
@@ -4100,6 +4206,41 @@ async def generate_response_node(
                 f"Response provided by fallback model **{model_used_final}**.* \n\n"
             )
             full_response = fallback_notice + full_response
+
+    # If document retrieval completed but every generation provider is unavailable,
+    # return a bounded, clearly-labelled extract of the already-authorized document
+    # context. This is intentionally extractive rather than an attempted local
+    # interpretation: it keeps document questions useful without presenting a
+    # fabricated answer as if a model had generated it.
+    if not success and not full_response and intent == INTENT_DOCUMENT_QA:
+        document_chunks = [
+            item for item in (state.get("retrieved_documents") or [])
+            if item.get("type") == "chunk" and str(item.get("content") or "").strip()
+        ]
+        if document_chunks:
+            excerpts: list[str] = []
+            for item in document_chunks[:2]:
+                filename = str(item.get("filename") or "Uploaded document")
+                content = str(item.get("content") or "").strip()
+                if len(content) > 1_200:
+                    content = content[:1_200].rstrip() + "…"
+                excerpts.append(f"**{filename}**\n> " + content.replace("\n", "\n> "))
+
+            full_response = (
+                "⚠️ **Model generation is temporarily unavailable.**\n\n"
+                "To avoid inventing an answer, here is the relevant text retrieved from "
+                "your uploaded document:\n\n"
+                + "\n\n".join(excerpts)
+                + "\n\n*This is a direct document extract, not a generated interpretation.*"
+            )
+            model_used_final = "local-document-extract"
+            state["generation_mode"] = "extractive_document_fallback"
+            if on_token:
+                try:
+                    await on_token(full_response)
+                except Exception:
+                    pass
+            success = True
 
     # Track whether the final response is a transient error (should NOT be saved to history)
     _is_error_response = False

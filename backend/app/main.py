@@ -196,7 +196,6 @@ async def lifespan(app: FastAPI):
     try:
         # Import the ORM model so it registers with Base.metadata on startup
         from app.proactive.db_models import ProactiveAlertRecord  # noqa: F401
-        from app.core.database import run_schema_migrations
         run_schema_migrations()   # adds proactive_alerts table if it doesn't exist
         logger.info("[Proactive] DB table ensured.")
     except Exception as _pie_err:

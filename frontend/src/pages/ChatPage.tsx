@@ -704,9 +704,21 @@ interface TypingIndicatorProps {
   userPrompt?: string;
   hasFiles?: boolean;
   serverStep?: string;
+  routing?: {
+    intent: string;
+    next_step: string;
+    reason: string;
+    is_private_doc_query?: boolean;
+  } | null;
 }
 
-function TypingIndicator({ hasFiles, serverStep }: TypingIndicatorProps) {
+function humanizeRoutingLabel(value: string) {
+  return value
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function TypingIndicator({ hasFiles, serverStep, routing }: TypingIndicatorProps) {
   // Build dynamic process steps strictly from backend SSE serverStep events
   const steps = useMemo(() => {
     if (serverStep) {
@@ -739,33 +751,51 @@ function TypingIndicator({ hasFiles, serverStep }: TypingIndicatorProps) {
   const StepIcon = activeStep.icon || Sparkles;
 
   return (
-    <div className="inline-flex items-center gap-2 px-1 py-1">
-      {/* Pulsing step icon */}
-      <StepIcon className="w-3.5 h-3.5 text-[#BDBDBD] animate-pulse flex-shrink-0" />
+    <div className="flex flex-col items-start gap-1.5 px-1 py-1">
+      <div className="inline-flex items-center gap-2">
+        {/* Pulsing step icon */}
+        <StepIcon className="w-3.5 h-3.5 text-[#BDBDBD] animate-pulse flex-shrink-0" />
 
-      {/* Process label with shimmer text effect */}
-      <div className="flex items-center gap-2 min-w-0">
-        <span
-          key={activeStep.label}
-          className="text-xs font-medium tracking-wide animate-fadeIn"
-          style={{
-            background: 'linear-gradient(90deg, hsl(var(--foreground-3)) 0%, hsl(var(--foreground)) 40%, hsl(var(--foreground-3)) 80%)',
-            backgroundSize: '200% auto',
-            WebkitBackgroundClip: 'text',
-            WebkitTextFillColor: 'transparent',
-            backgroundClip: 'text',
-            animation: 'thinking-shimmer 2.5s linear infinite',
-          }}
-        >
-          {activeStep.label}
-        </span>
+        {/* Process label with shimmer text effect */}
+        <div className="flex items-center gap-2 min-w-0">
+          <span
+            key={activeStep.label}
+            className="text-xs font-medium tracking-wide animate-fadeIn"
+            style={{
+              background: 'linear-gradient(90deg, hsl(var(--foreground-3)) 0%, hsl(var(--foreground)) 40%, hsl(var(--foreground-3)) 80%)',
+              backgroundSize: '200% auto',
+              WebkitBackgroundClip: 'text',
+              WebkitTextFillColor: 'transparent',
+              backgroundClip: 'text',
+              animation: 'thinking-shimmer 2.5s linear infinite',
+            }}
+          >
+            {activeStep.label}
+          </span>
+        </div>
+
+        {/* Step counter pill */}
+        {!serverStep && steps.length > 1 && (
+          <span className="text-[10px] font-mono font-medium text-[#888888] ml-0.5 opacity-80">
+            ({currentStepIdx + 1}/{steps.length})
+          </span>
+        )}
       </div>
 
-      {/* Step counter pill */}
-      {!serverStep && steps.length > 1 && (
-        <span className="text-[10px] font-mono font-medium text-[#888888] ml-0.5 opacity-80">
-          ({currentStepIdx + 1}/{steps.length})
-        </span>
+      {routing && (
+        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[10px] leading-relaxed text-foreground-3 animate-fadeIn">
+          <span className="rounded bg-accent/10 px-1.5 py-0.5 font-semibold text-accent">
+            Intent: {humanizeRoutingLabel(routing.intent)}
+          </span>
+          <span aria-hidden="true">→</span>
+          <span className="rounded bg-surface-3 px-1.5 py-0.5 font-medium text-foreground-2">
+            {humanizeRoutingLabel(routing.next_step)}
+          </span>
+          {routing.is_private_doc_query && (
+            <span className="rounded bg-blue-500/10 px-1.5 py-0.5 font-medium text-blue-400">Private docs</span>
+          )}
+          <span className="basis-full text-[9px] text-foreground-3">{routing.reason}</span>
+        </div>
       )}
     </div>
   );
@@ -1077,6 +1107,12 @@ export default function ChatPage() {
   const [chatDocuments, setChatDocuments]       = useState<any[]>([]);
   // ── Server-driven process step tracking ───────────────────────
   const [currentServerStep, setCurrentServerStep] = useState<string | null>(null);
+  const [currentRouting, setCurrentRouting] = useState<{
+    intent: string;
+    next_step: string;
+    reason: string;
+    is_private_doc_query?: boolean;
+  } | null>(null);
 
   // ── Modals & Overlays ────────────────────────────────────────
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -1169,6 +1205,9 @@ export default function ChatPage() {
     { id: 'meta-llama/llama-4-scout-17b-16e-instruct', name: 'Llama 4 Scout 17B', provider: 'Groq', apiProvider: 'groq', icon: Cpu, badge: 'Fast & Free', desc: 'Multimodal Llama 4 Scout on Groq LPU' },
     { id: 'llama-3.1-8b-instant',  name: 'Llama 3.1 8B',          provider: 'Groq',          apiProvider: 'groq',   icon: Cpu,      badge: 'Fastest Free', desc: 'Ultra-fast low-latency model on Groq' },
     { id: 'openai/gpt-oss-120b',   name: 'GPT-OSS 120B (Groq)',   provider: 'Groq',          apiProvider: 'groq',   icon: Cpu,      badge: 'Powerful',     desc: 'Large open-source GPT model on Groq' },
+    // OpenAI — exposed when a server or user OpenAI key is verified. Without
+    // this entry a valid OpenAI-only installation leaves the chat locked.
+    { id: 'gpt-4o-mini',           name: 'GPT-4o mini',           provider: 'OpenAI',        apiProvider: 'openai', icon: Sparkles, badge: 'Reliable',     desc: 'Fast general-purpose model with document support' },
   ];
 
   const verifiedProviderSet = new Set(
@@ -1687,6 +1726,8 @@ export default function ChatPage() {
       isNewChat = true;
     }
 
+    setCurrentServerStep(null);
+    setCurrentRouting(null);
     setIsStreaming(true);
 
     if (!isNewChat && chatId) {
@@ -1762,6 +1803,7 @@ export default function ChatPage() {
           uploads.push(apiRequestWithWakeup('/documents/upload', { method: 'POST', body: fd }));
         }
         const uploadedDocs: any[] = await Promise.all(uploads);
+        let resolvedDocs = uploadedDocs;
 
         // Poll until all docs are 'ready' (or 'failed') — max 20 seconds
         const uploadedIds = new Set(uploadedDocs.map((d: any) => d?.id).filter(Boolean));
@@ -1772,7 +1814,8 @@ export default function ChatPage() {
             await new Promise((r) => setTimeout(r, POLL_INTERVAL));
             try {
               const docList: any[] = await apiRequest(`/documents?chat_id=${chatId}`);
-              const pending = docList.filter(
+              resolvedDocs = docList.filter((d: any) => uploadedIds.has(d.id));
+              const pending = resolvedDocs.filter(
                 (d: any) => uploadedIds.has(d.id) && d.status === 'processing'
               );
               if (pending.length === 0) break; // all ready or failed
@@ -1780,9 +1823,23 @@ export default function ChatPage() {
           }
         }
 
-        if (chatId) fetchChatDocuments(chatId);
+        const failedDocs = resolvedDocs.filter((d: any) => d?.status === 'failed');
+        if (failedDocs.length > 0) {
+          const names = failedDocs.map((d: any) => d?.filename || 'the selected file').join(', ');
+          const details = failedDocs
+            .map((d: any) => d?.error_message)
+            .filter(Boolean)
+            .join(' ');
+          throw new Error(`Could not process ${names}.${details ? ` ${details}` : ''}`);
+        }
+
+        if (chatId) void fetchChatDocuments(chatId);
       } catch (err) {
         console.error('Document upload error:', err);
+        const detail = err instanceof Error ? err.message : 'The selected document could not be uploaded.';
+        updateMessage(asstMsgId, { content: `*[Document upload failed — ${detail}]*` });
+        setIsStreaming(false);
+        return;
       }
     }
 
@@ -1912,6 +1969,13 @@ export default function ChatPage() {
               scheduleTokenRender(asstText);
             } else if (parsed.event === 'step') {
               setCurrentServerStep(parsed.step);
+            } else if (parsed.event === 'routing') {
+              setCurrentRouting({
+                intent: parsed.intent || 'NORMAL_CHAT',
+                next_step: parsed.next_step || 'generate_response',
+                reason: parsed.reason || 'The request was routed for processing.',
+                is_private_doc_query: Boolean(parsed.is_private_doc_query),
+              });
             } else if (parsed.event === 'metrics') {
               updateMessage(asstMsgId, { developer_metrics: parsed.metrics });
             } else if (parsed.event === 'title') {
@@ -1940,6 +2004,7 @@ export default function ChatPage() {
       }
     } finally {
       setCurrentServerStep(null);
+      setCurrentRouting(null);
       if (animFrameId !== null) {
         cancelAnimationFrame(animFrameId);
         animFrameId = null;
@@ -2177,6 +2242,8 @@ export default function ChatPage() {
     // Atomic update: replace everything from editIdx onward in one setMessages call
     // This avoids the race condition between setMessages and addMessage
     setMessages([...trimmedMessages, newUserMsg, newAsstMsg]);
+    setCurrentServerStep(null);
+    setCurrentRouting(null);
     setIsStreaming(true);
 
     // Bump the chat's updated_at in the store so the sidebar re-groups it under "Today"
@@ -2261,6 +2328,13 @@ export default function ChatPage() {
               updateMessage(asstId, { content: asstText });
             } else if (parsed.event === 'step') {
               setCurrentServerStep(parsed.step);
+            } else if (parsed.event === 'routing') {
+              setCurrentRouting({
+                intent: parsed.intent || 'NORMAL_CHAT',
+                next_step: parsed.next_step || 'generate_response',
+                reason: parsed.reason || 'The request was routed for processing.',
+                is_private_doc_query: Boolean(parsed.is_private_doc_query),
+              });
             } else if (parsed.event === 'metrics') {
               updateMessage(asstId, { developer_metrics: parsed.metrics });
             } else if (parsed.event === 'error') {
@@ -2280,6 +2354,7 @@ export default function ChatPage() {
       }
     } finally {
       setCurrentServerStep(null);
+      setCurrentRouting(null);
       setIsStreaming(false);
     }
   };
@@ -2318,6 +2393,8 @@ export default function ChatPage() {
 
     // Atomic: replace from userMsgIdx onward — no race condition
     setMessages([...trimmedMsgs, newUserMsg, newAsstMsg]);
+    setCurrentServerStep(null);
+    setCurrentRouting(null);
     setIsStreaming(true);
 
     // Bump the chat's updated_at in the store so the sidebar re-groups it under "Today"
@@ -2387,6 +2464,15 @@ export default function ChatPage() {
             if (p.event === 'chunk') {
               retryAsstText += p.text;
               updateMessage(retryAsstId, { content: retryAsstText });
+            } else if (p.event === 'step') {
+              setCurrentServerStep(p.step);
+            } else if (p.event === 'routing') {
+              setCurrentRouting({
+                intent: p.intent || 'NORMAL_CHAT',
+                next_step: p.next_step || 'generate_response',
+                reason: p.reason || 'The request was routed for processing.',
+                is_private_doc_query: Boolean(p.is_private_doc_query),
+              });
             } else if (p.event === 'metrics') {
               updateMessage(retryAsstId, { developer_metrics: p.metrics });
             } else if (p.event === 'error') {
@@ -2405,6 +2491,8 @@ export default function ChatPage() {
         updateMessage(retryAsstId, { content: retryAsstText + `\n\n*[${formattedErr}]*` });
       }
     } finally {
+      setCurrentServerStep(null);
+      setCurrentRouting(null);
       setIsStreaming(false);
     }
   };
@@ -3705,7 +3793,7 @@ export default function ChatPage() {
                           if (isStreamingThis) {
                             const userPromptText = prevUserMsgObj?.content || '';
                             const hasFiles = (prevUserMsgObj?.files?.length > 0) || (prevUserMsgObj?.attachedFiles?.length > 0) || (chatDocuments?.length > 0);
-                            return <TypingIndicator userPrompt={userPromptText} hasFiles={hasFiles} serverStep={currentServerStep || undefined} />;
+                            return <TypingIndicator userPrompt={userPromptText} hasFiles={hasFiles} serverStep={currentServerStep || undefined} routing={currentRouting} />;
                           }
                           const { clean, error } = parseErrorFromContent(m.content);
                           const displayContent = sanitizeAssistantContent(clean || (error ? '' : m.content));
@@ -4044,6 +4132,8 @@ export default function ChatPage() {
                             { label: 'Tokens Out', val: mx.tokens_output?.toLocaleString(), color: '' },
                             { label: 'Mem Hits',   val: String(mx.memory_hits ?? 0), color: '' },
                             { label: 'RAG Chunks', val: String(mx.chunks_used ?? 0), color: '' },
+                            { label: 'Intent',     val: mx.intent ? humanizeRoutingLabel(mx.intent) : '—', color: 'text-accent' },
+                            { label: 'Pipeline',   val: mx.routing_next_step ? humanizeRoutingLabel(mx.routing_next_step) : '—', color: 'text-blue-400' },
                           ];
                         })().map(({ label, val, color }) => (
                           <div key={label} className="p-2.5 rounded-xl border border-border bg-surface-2 space-y-1">
@@ -4125,16 +4215,17 @@ export default function ChatPage() {
                             { node: 'execute_tools',      status: (hasTool || steps.includes('execute_web_search')) ? 'EXECUTED' : 'BYPASSED', reason: (hasTool || steps.includes('execute_web_search')) ? `${hasTool ? msg.tool_calls!.length : 1} tool call(s) executed` : 'Bypassed (No system tools required)' },
                             { node: 'reflect',            status: steps.includes('reflect') ? 'EXECUTED' : 'BYPASSED', reason: 'Self-reflection quality critique' },
                             { node: 'memory_write',       status: steps.includes('memory_write') ? 'EXECUTED' : 'BYPASSED', reason: 'Semantic memory indexing' },
-                          ]).map((tr: any) => {
+                          ]).map((tr: any, index: number) => {
                             const isExecuted = tr.status === 'EXECUTED';
                             const isFailed = tr.status === 'FAILED';
+                            const nodeName = tr.name || tr.node || 'unknown_node';
                             return (
-                              <div key={tr.node} className="relative">
+                              <div key={`${nodeName}-${tr.timestamp ?? index}`} className="relative">
                                 <div className={`absolute -left-5 w-4 h-4 rounded-full border flex items-center justify-center ${isExecuted ? 'border-emerald-500 bg-emerald-500/10 text-emerald-400' : isFailed ? 'border-red-500 bg-red-500/10 text-red-400' : 'border-border bg-surface text-foreground-3 opacity-40'}`}>
                                   {isExecuted ? <CheckCircle2 className="w-2.5 h-2.5" /> : isFailed ? <AlertCircle className="w-2.5 h-2.5" /> : <GitBranch className="w-2.5 h-2.5" />}
                                 </div>
                                 <div className="flex items-center justify-between gap-2">
-                                  <h4 className={`text-[10px] font-semibold font-mono ${isExecuted ? 'text-foreground font-bold' : isFailed ? 'text-red-400 font-bold' : 'text-foreground-3'}`}>{tr.node}</h4>
+                                  <h4 className={`text-[10px] font-semibold font-mono ${isExecuted ? 'text-foreground font-bold' : isFailed ? 'text-red-400 font-bold' : 'text-foreground-3'}`}>{nodeName}</h4>
                                   <div className="flex items-center gap-1.5">
                                     {tr.duration_ms != null && <span className="text-[8px] font-mono text-foreground-3">{tr.duration_ms.toFixed(1)}ms</span>}
                                     <span className={`text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${isExecuted ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30' : isFailed ? 'bg-red-500/10 text-red-400 border border-red-500/30' : 'bg-surface-3 text-foreground-3 border border-border'}`}>

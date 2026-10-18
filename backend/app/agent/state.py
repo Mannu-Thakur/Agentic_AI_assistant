@@ -25,6 +25,11 @@ class AgentState(TypedDict):
     # Populated by classify_intent_node using INTENT_TOOL_WHITELIST.
     allowed_tools: List[str]
 
+    # Safe, user-visible routing decision for this request.  This is a concise
+    # execution summary (not model reasoning) that the API streams to the chat
+    # while the rest of the graph is running.
+    routing_next_step: Optional[str]
+
     # True when the query is about the user's own private uploaded documents.
     # When True, grade_documents_node will NOT trigger the Tavily web fallback
     # (prevents private-intent leakage to external APIs).
