@@ -3552,7 +3552,7 @@ export default function ChatPage() {
           </div>
         ) : messages.length === 0 ? (
           /* ── EMPTY STATE: welcome + centered input ── */
-          <div className="flex-1 flex flex-col items-center justify-center px-4 py-8 overflow-y-auto relative">
+          <div className="flex-1 flex flex-col items-center justify-center px-4 py-8 overflow-x-hidden overflow-y-auto relative">
             {/* Ambient glow orbs */}
             <div className="welcome-orb welcome-orb-1" aria-hidden />
             <div className="welcome-orb welcome-orb-2" aria-hidden />
