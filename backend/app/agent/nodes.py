@@ -2133,10 +2133,21 @@ async def query_rewriter_node(
     P3-2 FIX: Skip rewriting for intents and query shapes that never benefit
     from it — avoids an extra LLM call per request for simple conversations.
     """
+    node_start = time.perf_counter()
     config = config or {}
     messages = state.get("messages", [])
     steps = list(state.get("steps") or [])
     intent = state.get("intent", INTENT_NORMAL_CHAT)
+
+    def record_rewrite(status: str, reason: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+        record_node_execution(
+            state,
+            "query_rewriter",
+            status,
+            reason,
+            metadata=metadata,
+            duration_ms=(time.perf_counter() - node_start) * 1000,
+        )
 
     last_query = state.get("resolved_query")
     if not last_query:
@@ -2147,7 +2158,8 @@ async def query_rewriter_node(
 
     if not last_query or state.get("is_ambiguous", False):
         steps.append("query_rewriter")
-        return {"steps": steps}
+        record_rewrite("BYPASSED", "The query still needs clarification before retrieval.")
+        return {"steps": steps, "execution_trace": state["execution_trace"]}
 
     # P3-2 FIX: Short-circuit for intents that never need rewriting:
     # NORMAL_CHAT / MEMORY_WRITE / VISION — no retrieval, so rewriting is useless.
@@ -2172,7 +2184,12 @@ async def query_rewriter_node(
             f"'{last_query[:60]}'"
         )
         steps.append("query_rewriter")
-        return {"steps": steps}
+        record_rewrite(
+            "BYPASSED",
+            "The request did not need contextual query rewriting.",
+            metadata={"intent": intent},
+        )
+        return {"steps": steps, "execution_trace": state["execution_trace"]}
 
     original_query = last_query
     rewritten_query = original_query
@@ -2201,10 +2218,16 @@ async def query_rewriter_node(
         logger.info(f"[QueryRewriter] Query preserved without rewrite: '{original_query}'")
 
     steps.append("query_rewriter")
+    record_rewrite(
+        "EXECUTED",
+        "Checked the query against recent conversation context.",
+        metadata={"rewritten": rewritten_query != original_query, "intent": intent},
+    )
     return {
         "resolved_query": rewritten_query,
         "original_query": original_query,
         "steps": steps,
+        "execution_trace": state["execution_trace"],
     }
 
 

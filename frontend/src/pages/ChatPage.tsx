@@ -4540,8 +4540,9 @@ type ExecutionTraceItem = NonNullable<DeveloperMetrics['execution_trace']>[numbe
 
 const EXECUTION_STEP_LABELS: Record<string, string> = {
   classify_intent: 'Classified the request and selected a route',
-  query_rewriter: 'Rewrote the query for context and retrieval',
+  query_rewriter: 'Checked whether the query needed rewriting',
   plan: 'Prepared an execution plan',
+  planner: 'Prepared an execution plan',
   tool_planner: 'Selected tools for the request',
   parallel_tool_execution: 'Ran selected tools',
   check_retrieval: 'Checked whether document retrieval was needed',
@@ -4601,7 +4602,11 @@ function ExecutionThoughtDisclosure({
               The server did not return an execution path for this response.
             </li>
           ) : trace.map((item: ExecutionTraceItem, index) => {
-            const label = EXECUTION_STEP_LABELS[item.name] || item.name.replaceAll('_', ' ');
+            const label = item.name === 'query_rewriter' && item.status === 'EXECUTED'
+              ? item.metadata?.rewritten
+                ? 'Resolved the follow-up using conversation context'
+                : 'Checked the query; original wording was retained'
+              : EXECUTION_STEP_LABELS[item.name] || item.name.replaceAll('_', ' ');
             const skipped = item.status === 'BYPASSED';
             const failed = item.status === 'FAILED';
             return (

@@ -50,6 +50,7 @@ MAX_ITERATIONS = 1 caps the reflection loop.
 """
 
 from langgraph.graph import StateGraph, END
+import time
 from app.agent.state import AgentState
 from app.agent.nodes import (
     classify_intent_node,
@@ -93,6 +94,47 @@ from app.agent.prompts import (
 )
 
 MAX_ITERATIONS = 1  # maximum reflection-driven regeneration passes
+
+
+def _trace_graph_node(node_name, node_fn):
+    """Record graph nodes that do not already emit a detailed trace entry."""
+    async def traced_node(state: AgentState, config=None):
+        started_at = time.perf_counter()
+        prior_trace = list(state.get("execution_trace") or [])
+        result = await node_fn(state, config)
+        updates = dict(result or {})
+        trace = updates.get("execution_trace")
+        if not isinstance(trace, list):
+            trace = state.get("execution_trace")
+        if not isinstance(trace, list):
+            trace = prior_trace
+
+        # Detailed nodes already record statuses such as BYPASSED or FAILED.
+        # Add a generic entry only when this graph invocation has no entry.
+        new_entries = trace[len(prior_trace):]
+        if not any(
+            isinstance(entry, dict) and entry.get("name") == node_name
+            for entry in new_entries
+        ):
+            updates["execution_trace"] = [
+                *trace,
+                {
+                    "name": node_name,
+                    "status": "EXECUTED",
+                    "timestamp": time.time(),
+                    "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                    "reason": "Graph stage completed",
+                    "metadata": {},
+                    "error": None,
+                },
+            ]
+        else:
+            # Some detailed nodes mutate state and return other fields only.
+            # Make their updated trace explicit in the LangGraph state update.
+            updates["execution_trace"] = trace
+        return updates
+
+    return traced_node
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -199,21 +241,21 @@ def route_after_reflection(state: AgentState) -> str:
 workflow = StateGraph(AgentState)
 
 # Register all nodes
-workflow.add_node("classify_intent",           classify_intent_node)
-workflow.add_node("memory_write",              memory_write_node)
-workflow.add_node("clarification",             clarification_node)
-workflow.add_node("planner",                    plan_node)
-workflow.add_node("tool_planner",              tool_planner_node)           # Phase 3
-workflow.add_node("parallel_tool_execution",   parallel_tool_execution_node)  # Phase 3
-workflow.add_node("query_rewriter",            query_rewriter_node)
-workflow.add_node("check_retrieval",           check_retrieval_node)
-workflow.add_node("retrieve_context",          retrieve_context_node)
-workflow.add_node("grade_documents",           grade_documents_node)
-workflow.add_node("execute_web_search",        execute_web_search_node)
-workflow.add_node("generate_response",         generate_response_node)
-workflow.add_node("execute_tools",             execute_tools_node)
-workflow.add_node("evidence_checker",          evidence_checker_node)       # Phase 3
-workflow.add_node("reflect",                   reflect_node)
+workflow.add_node("classify_intent", _trace_graph_node("classify_intent", classify_intent_node))
+workflow.add_node("memory_write", _trace_graph_node("memory_write", memory_write_node))
+workflow.add_node("clarification", _trace_graph_node("clarification", clarification_node))
+workflow.add_node("planner", _trace_graph_node("planner", plan_node))
+workflow.add_node("tool_planner", _trace_graph_node("tool_planner", tool_planner_node))
+workflow.add_node("parallel_tool_execution", _trace_graph_node("parallel_tool_execution", parallel_tool_execution_node))
+workflow.add_node("query_rewriter", _trace_graph_node("query_rewriter", query_rewriter_node))
+workflow.add_node("check_retrieval", _trace_graph_node("check_retrieval", check_retrieval_node))
+workflow.add_node("retrieve_context", _trace_graph_node("retrieve_context", retrieve_context_node))
+workflow.add_node("grade_documents", _trace_graph_node("grade_documents", grade_documents_node))
+workflow.add_node("execute_web_search", _trace_graph_node("execute_web_search", execute_web_search_node))
+workflow.add_node("generate_response", _trace_graph_node("generate_response", generate_response_node))
+workflow.add_node("execute_tools", _trace_graph_node("execute_tools", execute_tools_node))
+workflow.add_node("evidence_checker", _trace_graph_node("evidence_checker", evidence_checker_node))
+workflow.add_node("reflect", _trace_graph_node("reflect", reflect_node))
 
 # Entry point → intent classifier
 workflow.set_entry_point("classify_intent")
