@@ -1,5 +1,6 @@
 import os
 import logging
+from datetime import datetime, timezone
 from typing import List, Optional
 from sqlalchemy import select, delete, desc
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,7 +17,6 @@ class DocumentService:
         Retrieves all documents owned by a specific user, optionally filtered by chat_id.
         """
         from sqlalchemy import or_
-        from datetime import datetime, timezone
         query = select(Document).where(Document.user_id == user_id)
         if chat_id:
             query = query.where(or_(Document.chat_id == chat_id, Document.chat_id.is_(None)))
@@ -33,12 +33,14 @@ class DocumentService:
         now = datetime.now(timezone.utc)
         has_auto_healed = False
         for doc in docs:
-            if doc.status == "processing" and doc.uploaded_at:
-                up_time = doc.uploaded_at
+            processing_started_at = doc.processing_started_at or doc.uploaded_at
+            if doc.status == "processing" and processing_started_at:
+                up_time = processing_started_at
                 if up_time.tzinfo is None:
                     up_time = up_time.replace(tzinfo=timezone.utc)
                 if (now - up_time).total_seconds() > PROCESSING_TIMEOUT_SECONDS:
                     doc.status = "failed"
+                    doc.stage = "failed"
                     doc.error_message = "Indexing timed out on server. Click Retry to re-index."
                     has_auto_healed = True
 
@@ -70,7 +72,11 @@ class DocumentService:
             file_type=file_type,
             storage_path=storage_path,
             size_bytes=size_bytes,
-            status="processing"
+            status="processing",
+            stage="queued",
+            progress=0,
+            chunk_count=0,
+            processing_started_at=datetime.now(timezone.utc),
         )
         db.add(doc)
         await db.commit()

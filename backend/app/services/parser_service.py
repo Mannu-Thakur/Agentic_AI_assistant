@@ -16,6 +16,7 @@ import logging
 import os
 import re
 import traceback
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.models.document import Document
@@ -65,6 +66,37 @@ def _find_poppler() -> Optional[str]:
 
 
 class ParserService:
+
+    @staticmethod
+    async def _set_ingestion_progress(
+        document_id: str,
+        *,
+        stage: str,
+        progress: Optional[int],
+        chunk_count: Optional[int] = None,
+        status: str = "processing",
+        error_message: Optional[str] = None,
+    ) -> None:
+        """Persist ingestion progress so clients can follow real server work."""
+        from sqlalchemy import select
+
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(Document).where(Document.id == document_id)
+            )
+            doc = result.scalar_one_or_none()
+            if not doc:
+                return
+            doc.status = status
+            doc.stage = stage
+            if status == "processing" and stage in {"queued", "extracting"}:
+                doc.processing_started_at = datetime.now(timezone.utc)
+            if progress is not None:
+                doc.progress = max(0, min(100, int(progress)))
+            if chunk_count is not None:
+                doc.chunk_count = max(0, int(chunk_count))
+            doc.error_message = error_message
+            await db.commit()
 
     # ── PDF ──────────────────────────────────────────────────────────────────
 
@@ -989,6 +1021,9 @@ class ParserService:
         logger.info(f"[Parser] Starting ingestion for document {document_id} ({filename})")
         try:
             ext = os.path.splitext(file_path)[1].lower()
+            await cls._set_ingestion_progress(
+                document_id, stage="extracting", progress=10
+            )
 
             # ── FIX-10: Delete any existing chunks before re-indexing ──────────
             vector_store = VectorStore()
@@ -1044,6 +1079,9 @@ class ParserService:
             if not text or not text.strip():
                 raise ValueError(f"Document '{filename}' contains no extractable text content.")
 
+            await cls._set_ingestion_progress(
+                document_id, stage="chunking", progress=35
+            )
             chunk_dicts = cls.split_text(
                 text,
                 metadata={"document_id": document_id, "filename": filename, "user_id": user_id},
@@ -1062,6 +1100,12 @@ class ParserService:
                 for i, c in enumerate(valid_chunk_dicts)
             ]
 
+            await cls._set_ingestion_progress(
+                document_id,
+                stage="embedding",
+                progress=55,
+                chunk_count=len(chunk_texts),
+            )
             await vector_store.add_document_chunks(
                 document_id=document_id,
                 user_id=user_id,
@@ -1071,19 +1115,22 @@ class ParserService:
                 api_key=api_key,  # FIX-12: forward user key for real semantic embeddings
             )
 
+            await cls._set_ingestion_progress(
+                document_id,
+                stage="indexing",
+                progress=90,
+                chunk_count=len(chunk_texts),
+            )
             from app.core.cache_service import retrieval_cache
             await retrieval_cache.invalidate_user(user_id)
 
-            async with AsyncSessionLocal() as db:
-                from sqlalchemy import select
-                result = await db.execute(
-                    select(Document).where(Document.id == document_id)
-                )
-                doc = result.scalar_one_or_none()
-                if doc:
-                    doc.status = "ready"
-                    doc.error_message = None
-                    await db.commit()
+            await cls._set_ingestion_progress(
+                document_id,
+                stage="ready",
+                progress=100,
+                chunk_count=len(chunk_texts),
+                status="ready",
+            )
 
             logger.info(
                 f"[Parser] Successfully vectorized document {document_id} "
@@ -1092,29 +1139,23 @@ class ParserService:
 
         except asyncio.CancelledError:
             logger.warning(f"[Parser] Ingestion task cancelled for document {document_id}")
-            async with AsyncSessionLocal() as db:
-                from sqlalchemy import select
-                result = await db.execute(
-                    select(Document).where(Document.id == document_id)
-                )
-                doc = result.scalar_one_or_none()
-                if doc:
-                    doc.status = "failed"
-                    doc.error_message = "Indexing was interrupted by server reload or shutdown. Click Retry to re-index."
-                    await db.commit()
+            await cls._set_ingestion_progress(
+                document_id,
+                stage="failed",
+                progress=None,
+                status="failed",
+                error_message="Indexing was interrupted by server reload or shutdown. Click Retry to re-index.",
+            )
             raise
         except BaseException as exc:
             if isinstance(exc, (KeyboardInterrupt, SystemExit)):
                 raise
             logger.error(f"[Parser] Failed to ingest document {document_id}: {exc}")
             logger.error(traceback.format_exc())
-            async with AsyncSessionLocal() as db:
-                from sqlalchemy import select
-                result = await db.execute(
-                    select(Document).where(Document.id == document_id)
-                )
-                doc = result.scalar_one_or_none()
-                if doc:
-                    doc.status = "failed"
-                    doc.error_message = str(exc)[:900]
-                    await db.commit()
+            await cls._set_ingestion_progress(
+                document_id,
+                stage="failed",
+                progress=None,
+                status="failed",
+                error_message=str(exc)[:900],
+            )

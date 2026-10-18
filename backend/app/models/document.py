@@ -15,6 +15,10 @@ class Document(Base):
     storage_path = Column(String(500), nullable=False)
     size_bytes = Column(Integer, nullable=False)
     status = Column(String(50), default="processing")  # processing, ready, failed
+    stage = Column(String(40), nullable=False, default="queued", server_default="queued")
+    progress = Column(Integer, nullable=False, default=0, server_default="0")
+    chunk_count = Column(Integer, nullable=False, default=0, server_default="0")
+    processing_started_at = Column(DateTime(timezone=True), nullable=True)
     error_message = Column(Text, nullable=True)         # captures failure reasons (e.g. missing OCR binaries)
     uploaded_at = Column(DateTime(timezone=True), server_default=func.now())
 

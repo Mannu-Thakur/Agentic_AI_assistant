@@ -5,7 +5,8 @@ import {
   Trash2, RefreshCw, Layers, ShieldCheck, HardDrive,
   FileCode, CheckCircle2, Loader2, XCircle
 } from 'lucide-react';
-import { apiRequest, apiRequestWithWakeup } from '../../services/api';
+import { apiRequest } from '../../services/api';
+import { uploadAndIndexDocument } from '../../services/documentApi';
 
 interface WorkspaceDoc {
   id: string;
@@ -21,6 +22,7 @@ export function WorkspaceDashboard() {
   const [documents, setDocuments] = useState<WorkspaceDoc[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [uploading, setUploading] = useState<boolean>(false);
+  const [uploadStatus, setUploadStatus] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
 
   const fetchDocuments = async () => {
@@ -46,37 +48,36 @@ export function WorkspaceDashboard() {
     fetchDocuments();
   }, []);
 
-  const [waking, setWaking] = useState<boolean>(false);
+  const [queuedForIndexing, setQueuedForIndexing] = useState<boolean>(false);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
+    const selectedFiles = Array.from(files);
+    e.target.value = '';
 
     setUploading(true);
-    setWaking(false);
+    setQueuedForIndexing(false);
     setError(null);
-
-    const formData = new FormData();
-    for (let i = 0; i < files.length; i++) {
-      formData.append('files', files[i]);
-    }
+    setUploadStatus('Preparing upload…');
 
     try {
-      await apiRequestWithWakeup(
-        '/documents/upload',
-        { method: 'POST', body: formData },
-        (_attempt, _max) => {
-          // Show "Waking up server…" in the button while we wait for the cold start
-          setWaking(true);
-        },
-      );
-      setWaking(false);
+      for (const file of selectedFiles) {
+        setUploadStatus(`Uploading ${file.name}…`);
+        await uploadAndIndexDocument(file, undefined, (doc) => {
+          setUploadStatus(`${doc.filename}: ${doc.progress}% — ${doc.stage}`);
+          setQueuedForIndexing(doc.stage === 'queued');
+        });
+      }
+      setQueuedForIndexing(false);
+      setUploadStatus('All selected documents are indexed and ready for RAG.');
       await fetchDocuments();
     } catch (err: any) {
-      setWaking(false);
+      setQueuedForIndexing(false);
       setError(err?.message || 'Failed to upload document');
     } finally {
       setUploading(false);
+      setUploadStatus('');
     }
   };
 
@@ -123,17 +124,18 @@ export function WorkspaceDashboard() {
             </button>
             <label className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition cursor-pointer shadow-lg shadow-blue-500/20">
               <UploadCloud className="w-4 h-4" />
-              {waking ? 'Waking up server…' : uploading ? 'Uploading...' : 'Upload Files'}
+              {queuedForIndexing ? 'Queued for indexing…' : uploading ? 'Uploading...' : 'Upload Files'}
               <input
                 type="file"
                 multiple
                 accept=".pdf,.docx,.doc,.xlsx,.xls,.pptx,.ppt,.txt,.md,.json,.csv,.png,.jpg,.jpeg,.bmp,.gif,.tiff,.webp,.heic,.heif"
                 className="hidden"
                 onChange={handleFileUpload}
-                disabled={uploading || waking}
+                disabled={uploading || queuedForIndexing}
               />
             </label>
           </div>
+          {uploading && <p className="text-xs text-blue-300" role="status">{uploadStatus}</p>}
         </div>
 
         {/* Error Notification */}

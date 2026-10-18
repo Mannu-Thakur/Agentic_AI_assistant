@@ -9,7 +9,8 @@ import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { useChatStore, getChatTimestamp } from '../store/chatStore';
 import { useUIStore } from '../store/uiStore';
 import { useAuthStore } from '../store/authStore';
-import { apiRequest, apiRequestWithWakeup, BASE_URL } from '../services/api';
+import { apiRequest, BASE_URL } from '../services/api';
+import { uploadAndIndexDocument } from '../services/documentApi';
 import { ProviderKeyManager } from '../services/providerKeyManager';
 import Logo from '../components/ui/Logo';
 import { Tooltip } from '../components/ui/Tooltip';
@@ -42,7 +43,7 @@ import {
   BookOpen, Share2, Download, FileJson, FileText,
   MoreHorizontal, Archive, FolderClosed, ChevronDown, ChevronUp, Files,
   Settings, LogOut, GitBranch, Link, PenLine, Eye, ExternalLink, Globe,
-  SquarePen, Folder, SquareTerminal, BarChart2
+  SquarePen, Folder, SquareTerminal, BarChart2, Clock3
 } from 'lucide-react';
 
 
@@ -1790,7 +1791,9 @@ export default function ChatPage() {
       chat_id: chatId || 'temp-chat-id',
       parent_id: userMsg.id,
       role: 'assistant' as const,
-      content: '',
+      content: attachedFiles.length > 0
+        ? `Uploading ${attachedFiles.map((file) => file.name).join(', ')} and preparing it for document search…`
+        : '',
       tool_calls: null,
       developer_metrics: null,
       created_at: new Date().toISOString(),
@@ -1816,49 +1819,23 @@ export default function ChatPage() {
       }
     }
 
-    // ── Upload any attached document files to Documents API ─────────────
-    // Wait for ingestion to complete (up to 20s) before sending the message so
-    // ChromaDB has chunks indexed and the LLM never gets a false 'not found'.
+    // ── Upload and fully index attached documents before starting chat RAG ──
     if (attachedFiles.length > 0 && chatId) {
       try {
-        const uploads: Promise<any>[] = [];
-        for (const docFile of attachedFiles) {
-          const fd = new FormData();
-          fd.append('file', docFile);
-          fd.append('chat_id', chatId);
-          uploads.push(apiRequestWithWakeup('/documents/upload', { method: 'POST', body: fd }));
-        }
-        const uploadedDocs: any[] = await Promise.all(uploads);
-        let resolvedDocs = uploadedDocs;
+        const ingesting = new Map<string, { progress: number; stage: string }>();
+        await Promise.all(attachedFiles.map((docFile) =>
+          uploadAndIndexDocument(docFile, chatId, (doc) => {
+            ingesting.set(doc.filename, { progress: doc.progress, stage: doc.stage });
+            const summary = [...ingesting.entries()]
+              .map(([name, current]) => `${name}: ${current.progress}% (${current.stage})`)
+              .join('\n');
+            updateMessage(asstMsgId, {
+              content: `Uploading and indexing attached documents…\n\n${summary}`,
+            });
+          }),
+        ));
 
-        // Poll until all docs are 'ready' (or 'failed') — max 20 seconds
-        const uploadedIds = new Set(uploadedDocs.map((d: any) => d?.id).filter(Boolean));
-        if (uploadedIds.size > 0) {
-          const POLL_INTERVAL = 1000;
-          const MAX_POLLS = 20;
-          for (let i = 0; i < MAX_POLLS; i++) {
-            await new Promise((r) => setTimeout(r, POLL_INTERVAL));
-            try {
-              const docList: any[] = await apiRequest(`/documents?chat_id=${chatId}`);
-              resolvedDocs = docList.filter((d: any) => uploadedIds.has(d.id));
-              const pending = resolvedDocs.filter(
-                (d: any) => uploadedIds.has(d.id) && d.status === 'processing'
-              );
-              if (pending.length === 0) break; // all ready or failed
-            } catch { break; } // non-critical, proceed anyway
-          }
-        }
-
-        const failedDocs = resolvedDocs.filter((d: any) => d?.status === 'failed');
-        if (failedDocs.length > 0) {
-          const names = failedDocs.map((d: any) => d?.filename || 'the selected file').join(', ');
-          const details = failedDocs
-            .map((d: any) => d?.error_message)
-            .filter(Boolean)
-            .join(' ');
-          throw new Error(`Could not process ${names}.${details ? ` ${details}` : ''}`);
-        }
-
+        updateMessage(asstMsgId, { content: '' });
         if (chatId) void fetchChatDocuments(chatId);
       } catch (err) {
         console.error('Document upload error:', err);
@@ -3839,6 +3816,7 @@ export default function ChatPage() {
                             <div className={`assistant-bubble text-foreground rounded-2xl rounded-bl-sm px-4 py-3 text-sm w-full transition-all ${
                               developerMode && selectedMessageId === m.id ? 'ring-2 ring-accent/60 bg-accent/[0.03] shadow-sm' : ''
                             }`}>
+                              <ExecutionThoughtDisclosure metrics={m.developer_metrics} />
                               {/* Response meta bar — premium editorial style */}
                               {responseMeta?.isLong && !isStreaming && (
                                 <div className="response-meta-bar">
@@ -4555,6 +4533,90 @@ export default function ChatPage() {
   }
 }
 
+type ExecutionTraceItem = NonNullable<DeveloperMetrics['execution_trace']>[number];
+
+const EXECUTION_STEP_LABELS: Record<string, string> = {
+  classify_intent: 'Classified the request and selected a route',
+  query_rewriter: 'Rewrote the query for context and retrieval',
+  plan: 'Prepared an execution plan',
+  tool_planner: 'Selected tools for the request',
+  parallel_tool_execution: 'Ran selected tools',
+  check_retrieval: 'Checked whether document retrieval was needed',
+  retrieve_context: 'Searched saved documents and memory',
+  grade_documents: 'Checked retrieved evidence (CRAG)',
+  execute_web_search: 'Searched the web',
+  execute_tools: 'Executed tools',
+  generate_response: 'Generated the response',
+  evidence_checker: 'Checked the answer against available evidence',
+  reflect: 'Reviewed the answer quality',
+  memory_write: 'Saved a memory',
+  clarification: 'Prepared a clarification request',
+};
+
+function formatExecutionDuration(durationMs: number): string {
+  const totalSeconds = Math.max(0, Math.round(durationMs / 1000));
+  if (totalSeconds < 60) return `${totalSeconds} sec`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`;
+}
+
+/** Shows elapsed time and the backend's safe execution trace, never hidden chain-of-thought. */
+function ExecutionThoughtDisclosure({ metrics }: { metrics: DeveloperMetrics | null }) {
+  const [expanded, setExpanded] = useState(false);
+  const trace = (metrics?.execution_trace || []).filter((item) => item?.name);
+  if (!trace.length) return null;
+
+  const measuredDuration = metrics?.latency_ms || trace.reduce(
+    (total, item) => total + (Number(item.duration_ms) || 0),
+    0,
+  );
+
+  return (
+    <section className="mb-3 text-foreground-3">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((current) => !current)}
+        className="inline-flex items-center gap-1.5 rounded-md py-1 text-[13px] hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+      >
+        <span>Thought for {formatExecutionDuration(measuredDuration)}</span>
+        <ChevronRight className={`h-3.5 w-3.5 transition-transform ${expanded ? 'rotate-90' : ''}`} />
+      </button>
+
+      {expanded && (
+        <ol className="mt-2 ml-1 space-y-0.5" aria-label="Actual execution path">
+          {trace.map((item: ExecutionTraceItem, index) => {
+            const label = EXECUTION_STEP_LABELS[item.name] || item.name.replaceAll('_', ' ');
+            const skipped = item.status === 'BYPASSED';
+            const failed = item.status === 'FAILED';
+            const description = item.reason || item.error;
+            return (
+              <li key={`${item.name}-${index}`} className="relative flex gap-3 pb-3 last:pb-0">
+                {index < trace.length - 1 && (
+                  <span aria-hidden="true" className="absolute left-[8px] top-5 bottom-0 w-px bg-border/70" />
+                )}
+                <span className={`relative z-10 mt-0.5 flex h-[17px] w-[17px] shrink-0 items-center justify-center rounded-full bg-background ${failed ? 'text-rose-400' : skipped ? 'text-foreground-3/60' : 'text-foreground-3'}`}>
+                  <Clock3 className="h-3.5 w-3.5" />
+                </span>
+                <span className="min-w-0">
+                  <span className={`block text-[13px] leading-5 ${skipped ? 'text-foreground-3/70' : 'text-foreground-2'}`}>
+                    {label}{skipped ? ' · skipped' : failed ? ' · failed' : ''}
+                    {item.duration_ms ? <span className="ml-2 text-[11px] text-foreground-3">{Math.round(item.duration_ms)} ms</span> : null}
+                  </span>
+                  {description && (
+                    <span className="mt-0.5 block text-[11px] leading-4 text-foreground-3">{description}</span>
+                  )}
+                </span>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+    </section>
+  );
+}
+
 interface ChatFilesModalProps {
   onClose: () => void;
   documents: any[];
@@ -4567,6 +4629,7 @@ interface ChatFilesModalProps {
 
 function ChatFilesModal({ onClose, documents, onRefresh, token, chatId, onSuccess, onError }: ChatFilesModalProps) {
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState('');
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -4582,24 +4645,20 @@ function ChatFilesModal({ onClose, documents, onRefresh, token, chatId, onSucces
   const handleUpload = async (file: File) => {
     setUploading(true);
     setUploadError(null);
-    const formData = new FormData();
-    formData.append('file', file);
-    if (chatId) formData.append('chat_id', chatId);
-
     try {
-      await apiRequest('/documents/upload', {
-        method: 'POST',
-        body: formData,
+      const indexed = await uploadAndIndexDocument(file, chatId, (doc) => {
+        setUploadProgress(`${doc.progress}% — ${doc.stage}`);
       });
 
       await onRefresh();
-      onSuccess?.(`"${file.name}" uploaded successfully`);
+      onSuccess?.(`"${file.name}" uploaded and indexed (${indexed.chunk_count} searchable chunks)`);
     } catch (err: any) {
       const msg = err.message || 'Failed to upload document';
       setUploadError(msg);
       onError?.(msg);
     } finally {
       setUploading(false);
+      setUploadProgress('');
     }
   };
 
@@ -4693,7 +4752,7 @@ function ChatFilesModal({ onClose, documents, onRefresh, token, chatId, onSucces
               <RefreshCw className="w-8 h-8 text-accent animate-spin" />
               <div className="text-center">
                 <p className="text-xs font-semibold text-foreground">Uploading file...</p>
-                <p className="text-[10px] text-foreground-3 mt-1">openChat is running security scans and indexing contents</p>
+                <p className="text-[10px] text-foreground-3 mt-1">{uploadProgress || 'Scanning, extracting, embedding, and indexing contents'}</p>
               </div>
             </div>
           ) : (

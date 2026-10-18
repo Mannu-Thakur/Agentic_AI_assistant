@@ -11,6 +11,9 @@ class DocumentOut(BaseModel):
     storage_path: str
     size_bytes: int
     status: str
+    stage: str = "queued"
+    progress: int = 0
+    chunk_count: int = 0
     error_message: Optional[str] = None
     uploaded_at: datetime
 

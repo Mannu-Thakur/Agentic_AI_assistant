@@ -1356,6 +1356,46 @@ def _heuristic_fallback_intent(
     return INTENT_NORMAL_CHAT, False, None, None
 
 
+_CONTEXTUAL_QUERY_RE = re.compile(
+    r"\b(it|this|that|these|those|they|them|he|she|there|one|ones|same|former|latter|"
+    r"above|previous|again|more|continue|next|instead)\b|"
+    r"^\s*(and|also|what about|how about|why|which one|do that|explain more|tell me more)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_contextual_followup(query: str) -> bool:
+    """Return true when a query likely depends on prior conversation context."""
+    return bool(_CONTEXTUAL_QUERY_RE.search(query or ""))
+
+
+async def _rewrite_with_conversation_context(
+    query: str,
+    conversation_context: str,
+    config: dict,
+) -> Optional[str]:
+    """Resolve a referential follow-up into a standalone retrieval query."""
+    if not query or not conversation_context.strip() or not _is_contextual_followup(query):
+        return None
+
+    prompt = (
+        "Rewrite a context-dependent user follow-up as one self-contained query.\n"
+        "Use only entities and facts explicitly present in the conversation. Preserve the user's intent.\n"
+        "If the follow-up is already clear or the conversation does not resolve it, return it unchanged "
+        "with was_rewritten=false. Never answer the query.\n\n"
+        f"Conversation context:\n{conversation_context}\n\n"
+        f"Current user query:\n{query}\n\n"
+        'Return JSON only: {"rewritten_query":"...","was_rewritten":true|false}'
+    )
+    parsed = await _call_llm_judge(prompt, config or {})
+    if not isinstance(parsed, dict) or not parsed.get("was_rewritten"):
+        return None
+    rewritten = str(parsed.get("rewritten_query") or "").strip()
+    if not rewritten or len(rewritten) > 1200 or rewritten.casefold() == query.strip().casefold():
+        return None
+    return rewritten
+
+
 async def classify_intent_node(
     state: AgentState, config: RunnableConfig = None
 ) -> Dict[str, Any]:
@@ -1537,34 +1577,48 @@ async def classify_intent_node(
         parsed_ambiguity = await _call_llm_judge(ambiguity_prompt, config)
         if parsed_ambiguity and isinstance(parsed_ambiguity, dict) and parsed_ambiguity.get("is_ambiguous", False):
             reason = parsed_ambiguity.get("reason", "Query lacks context")
-            logger.info(f"Ambiguity detected: {reason}")
-            steps.append("classify_intent")
-            dur = (time.time() - node_start) * 1000
-            record_node_execution(
-                state, "classify_intent", "EXECUTED",
-                f"Query classified as ambiguous: {reason}",
-                metadata={"is_ambiguous": True}, duration_ms=dur
+            contextual_rewrite = await _rewrite_with_conversation_context(
+                last_query_clean, conversation_context, config
             )
-            await _notify_routing(
-                config,
-                intent=INTENT_NORMAL_CHAT,
-                next_step="clarification",
-                reason="The request needs one clarification before processing.",
-            )
-            return {
-                "is_ambiguous": True,
-                "original_query": last_query,
-                "clarification_question": None,
-                "resolved_query": None,
-                "intent": INTENT_NORMAL_CHAT,
-                "allowed_tools": [],
-                "routing_next_step": "clarification",
-                "steps": steps,
-                "language_mode": language_mode,
-                "detected_language": detected_language,
-                "execution_trace": state["execution_trace"],
-                "memory_status": state["memory_status"],
-            }
+            if contextual_rewrite:
+                original_query = last_query_clean
+                resolved_query = contextual_rewrite
+                last_query = contextual_rewrite
+                last_query_clean = contextual_rewrite
+                is_ambiguous = False
+                logger.info(
+                    "Ambiguous follow-up resolved from conversation context: "
+                    f"'{original_query}' → '{resolved_query}'"
+                )
+            else:
+                logger.info(f"Ambiguity detected: {reason}")
+                steps.append("classify_intent")
+                dur = (time.time() - node_start) * 1000
+                record_node_execution(
+                    state, "classify_intent", "EXECUTED",
+                    f"Query classified as ambiguous: {reason}",
+                    metadata={"is_ambiguous": True}, duration_ms=dur
+                )
+                await _notify_routing(
+                    config,
+                    intent=INTENT_NORMAL_CHAT,
+                    next_step="clarification",
+                    reason="The request needs one clarification before processing.",
+                )
+                return {
+                    "is_ambiguous": True,
+                    "original_query": last_query_clean,
+                    "clarification_question": None,
+                    "resolved_query": None,
+                    "intent": INTENT_NORMAL_CHAT,
+                    "allowed_tools": [],
+                    "routing_next_step": "clarification",
+                    "steps": steps,
+                    "language_mode": language_mode,
+                    "detected_language": detected_language,
+                    "execution_trace": state["execution_trace"],
+                    "memory_status": state["memory_status"],
+                }
 
     # ── Safe defaults ─────────────────────────────────────────────────────────
     intent                = INTENT_NORMAL_CHAT
@@ -2106,9 +2160,15 @@ async def query_rewriter_node(
         INTENT_WEB_SEARCH, INTENT_NEWS, INTENT_CURRENT_EVENTS,
     }
     _word_count_rw = len(last_query.split())
-    if intent in _skip_rewrite_intents or _word_count_rw <= 5:
+    conv_context = _build_conversation_context(messages, max_exchanges=3)
+    contextual_followup = bool(conv_context.strip()) and _is_contextual_followup(last_query)
+    should_attempt = contextual_followup or (
+        intent not in _skip_rewrite_intents and _word_count_rw > 5
+    )
+    if not should_attempt:
         logger.info(
-            f"[QueryRewriter] Skipping rewrite (intent={intent}, words={_word_count_rw}): "
+            f"[QueryRewriter] Skipping rewrite (intent={intent}, words={_word_count_rw}, "
+            f"contextual={contextual_followup}): "
             f"'{last_query[:60]}'"
         )
         steps.append("query_rewriter")
@@ -2117,22 +2177,25 @@ async def query_rewriter_node(
     original_query = last_query
     rewritten_query = original_query
 
-    # Evaluate if rewriting is beneficial
-    conv_context = _build_conversation_context(messages, max_exchanges=2)
-    REWRITE_PROMPT = (
-        "You are a query rewriting module for a search engine.\n"
-        "Given the conversation context and current user query, rewrite the query into a self-contained, "
-        "clear, entity-rich search query ONLY if it contains ambiguous pronouns (it, that, he, she), "
-        "abbreviations, or incomplete references to the prior conversation.\n"
-        "If the query is already clear and self-contained, return the query UNCHANGED.\n\n"
-        "Conversation Context:\n{context}\n\n"
-        "Current Query: {query}\n\n"
-        "Reply with ONLY a JSON object: {{\"rewritten_query\": \"<text>\", \"was_rewritten\": <true|false>}}"
-    )
-    prompt = REWRITE_PROMPT.format(context=conv_context, query=original_query)
-    parsed = await _call_llm_judge(prompt, config)
-    if parsed and isinstance(parsed, dict) and parsed.get("was_rewritten"):
-        rewritten_query = parsed.get("rewritten_query", original_query).strip()
+    rewritten = await _rewrite_with_conversation_context(
+        original_query, conv_context, config
+    ) if contextual_followup else None
+    if rewritten:
+        rewritten_query = rewritten
+    elif intent not in _skip_rewrite_intents and _word_count_rw > 5:
+        rewrite_prompt = (
+            "Rewrite the query as a clear, self-contained search query only when it has an unresolved "
+            "abbreviation or incomplete reference. Preserve all constraints. Do not answer it.\n\n"
+            f"Conversation context:\n{conv_context}\n\nCurrent query:\n{original_query}\n\n"
+            'Return JSON only: {"rewritten_query":"...","was_rewritten":true|false}'
+        )
+        parsed = await _call_llm_judge(rewrite_prompt, config)
+        if isinstance(parsed, dict) and parsed.get("was_rewritten"):
+            candidate = str(parsed.get("rewritten_query") or "").strip()
+            if candidate and len(candidate) <= 1200:
+                rewritten_query = candidate
+
+    if rewritten_query != original_query:
         logger.info(f"[QueryRewriter] Original Query: '{original_query}' → Rewritten Query: '{rewritten_query}'")
     else:
         logger.info(f"[QueryRewriter] Query preserved without rewrite: '{original_query}'")

@@ -376,10 +376,35 @@ class BM25IndexManager:
                 self._indexes[user_id] = index
                 return
 
-            # Incrementally add new chunks without full rebuild
+            # Incrementally add new chunks without full rebuild. Multiple chat
+            # attachments can finish embedding concurrently; if the first add
+            # triggers a full index build after a second file is already in
+            # Chroma, that second task may append the same chunks again. Treat
+            # (document_id, chunk_index) as a stable idempotency key.
+            existing_keys = {
+                (str(meta.get("document_id")), int(meta["chunk_index"]))
+                for meta in existing.corpus_metas
+                if meta.get("document_id") is not None and meta.get("chunk_index") is not None
+            }
+            added_keys = set()
+            added_count = 0
             for text, meta in zip(texts, metadatas):
+                document_id = meta.get("document_id")
+                chunk_index = meta.get("chunk_index")
+                chunk_key = (
+                    (str(document_id), int(chunk_index))
+                    if document_id is not None and chunk_index is not None
+                    else None
+                )
+                if chunk_key is not None and (chunk_key in existing_keys or chunk_key in added_keys):
+                    continue
+
                 tokens = _tokenize(text)
                 existing.corpus_tokens.append(tokens)
+                # Keep the parallel arrays aligned. Without this, the next BM25
+                # query finds the new chunk but cannot return its text, so
+                # VectorStore silently drops BM25-only hits until the index TTL.
+                existing.corpus_texts.append(text)
                 existing.corpus_metas.append(meta)
                 existing.doc_lengths.append(len(tokens))
                 for term in set(tokens):
@@ -387,11 +412,14 @@ class BM25IndexManager:
                         existing.df[term] += 1
                     else:
                         existing.df[term] = 1
+                if chunk_key is not None:
+                    added_keys.add(chunk_key)
+                added_count += 1
 
             total = sum(existing.doc_lengths)
             existing.avg_dl = total / max(len(existing.doc_lengths), 1)
             logger.debug(
-                f"[BM25] Incrementally added {len(texts)} chunks for user={user_id}. "
+                f"[BM25] Incrementally added {added_count} chunks for user={user_id}. "
                 f"Index size: {existing.size}"
             )
 

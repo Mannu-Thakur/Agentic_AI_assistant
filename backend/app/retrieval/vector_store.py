@@ -324,6 +324,34 @@ class VectorStore:
         await retrieval_cache.set(user_id, query, k, chunks)
         return chunks
 
+    async def search(
+        self,
+        query: str,
+        user_id: str,
+        top_k: int = 5,
+        api_key: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Run the same hybrid retrieval, reranking, and compression pipeline used by chat.
+
+        ``RagAgent`` historically called this convenience method even though only
+        ``query_relevant_chunks`` existed. Keeping this adapter here ensures both
+        entry points use the same user-scoped dense + BM25 retrieval path.
+        """
+        top_k = max(1, min(int(top_k), 50))
+        candidates = await self.query_relevant_chunks(
+            user_id=user_id,
+            query=query,
+            k=max(top_k * 4, 20),
+            api_key=api_key,
+        )
+        reranked = await self.rerank_chunks(
+            query=query,
+            chunks=candidates,
+            config={},
+            threshold=0.0,
+        )
+        return self.compress_context(reranked[:top_k])
+
     # ── Cross-encoder re-ranking ───────────────────────────────────────────────
 
     @staticmethod
@@ -385,21 +413,22 @@ class VectorStore:
         """
         Remove duplicate and near-duplicate chunks, then enforce a token budget.
 
+        The input order is authoritative because it is already ordered by the
+        final retrieval/reranking stage. Re-sorting by pre-rerank confidence
+        here can undo the cross-encoder ranking before generation.
+
         Strategy:
-          1. Exact deduplication by content hash.
+          1. Exact deduplication by content hash, preserving rank order.
           2. Near-duplicate removal (>80% word overlap).
-          3. Token-budget truncation (highest confidence chunks kept first).
+          3. Token-budget truncation from highest to lowest retrieval rank.
         """
         if not chunks:
             return []
 
-        # Sort by confidence (descending) before dedup so we keep the best copy
-        sorted_chunks = sorted(chunks, key=lambda c: c.get("confidence", 0), reverse=True)
-
         seen_contents: List[str] = []
         deduped: List[Dict[str, Any]] = []
 
-        for chunk in sorted_chunks:
+        for chunk in chunks:
             content = chunk.get("content", "")
             if not content.strip():
                 continue

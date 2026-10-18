@@ -65,6 +65,11 @@ class RagAgent(BaseAgent):
         model      = task_input.get("active_model", settings.GEMINI_MODEL)
         api_keys   = task_input.get("api_keys", {})
         top_k      = int(task_input.get("top_k", 6))
+        embedding_key = (
+            api_keys.get("google")
+            or api_keys.get("gemini")
+            or getattr(settings, "GEMINI_API_KEY", None)
+        )
 
         logger.info(f"[RagAgent] query={query[:60]!r} user={user_id}")
 
@@ -78,6 +83,7 @@ class RagAgent(BaseAgent):
                 query=query,
                 user_id=user_id,
                 top_k=top_k,
+                api_key=embedding_key,
             )
 
             for i, chunk in enumerate(raw_chunks or [], start=1):

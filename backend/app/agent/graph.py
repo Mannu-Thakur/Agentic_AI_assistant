@@ -218,9 +218,12 @@ workflow.add_node("reflect",                   reflect_node)
 # Entry point → intent classifier
 workflow.set_entry_point("classify_intent")
 
-# classify_intent → memory_write | clarification | execute_web_search | check_retrieval | plan
+# Rewrite contextual follow-ups before selecting the fast path or planner path.
+# Previously direct chat/document turns bypassed query_rewriter entirely.
+workflow.add_edge("classify_intent", "query_rewriter")
+
 workflow.add_conditional_edges(
-    "classify_intent",
+    "query_rewriter",
     route_after_classify,
     {
         "memory_write":       "memory_write",
@@ -244,11 +247,8 @@ workflow.add_edge("planner", "tool_planner")
 # tool_planner → parallel_tool_execution (Phase 3)
 workflow.add_edge("tool_planner", "parallel_tool_execution")
 
-# parallel_tool_execution → query_rewriter
-workflow.add_edge("parallel_tool_execution", "query_rewriter")
-
-# query_rewriter → check_retrieval
-workflow.add_edge("query_rewriter", "check_retrieval")
+# parallel_tool_execution → check_retrieval
+workflow.add_edge("parallel_tool_execution", "check_retrieval")
 
 # check_retrieval → retrieve_context OR generate_response (Self-RAG)
 workflow.add_conditional_edges(

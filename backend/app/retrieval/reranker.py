@@ -36,8 +36,11 @@ reused for all requests.  Model loading happens lazily on first call.
 from __future__ import annotations
 
 import asyncio
+import math
 import logging
+import re
 import time
+from collections import Counter
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("app.retrieval.reranker")
@@ -73,8 +76,7 @@ class CrossEncoderReranker:
         except ImportError:
             self._load_error = (
                 "sentence-transformers is not installed. "
-                "Run: pip install sentence-transformers  "
-                "Falling back to original chunk order."
+                "Using lexical relevance scoring as the reranking fallback."
             )
             logger.warning(f"[Reranker] {self._load_error}")
         except Exception as exc:
@@ -94,8 +96,7 @@ class CrossEncoderReranker:
         """
         self._load_model()
         if self._model is None:
-            # Model unavailable — return original order with neutral scores
-            return [(0.5, c) for c in chunks]
+            return self._lexical_scores(query, chunks)
 
         pairs = [
             (query, c.get("content", "")[:_MAX_CHUNK_CHARS])
@@ -104,6 +105,57 @@ class CrossEncoderReranker:
         scores = self._model.predict(pairs)
         scored = list(zip(scores.tolist(), chunks))
         scored.sort(key=lambda x: x[0], reverse=True)
+        return scored
+
+    @staticmethod
+    def _lexical_scores(
+        query: str,
+        chunks: List[Dict[str, Any]],
+    ) -> List[Tuple[float, Dict[str, Any]]]:
+        """Rank candidates by BM25-style term relevance when the model is absent.
+
+        This fallback is deliberately transparent in the returned metadata. It
+        is a real second-stage ranking pass, but it does not pretend to be a
+        neural cross-encoder.
+        """
+        query_terms = re.findall(r"\w+", query.casefold())
+        query_counts = Counter(query_terms)
+        tokenized = [
+            re.findall(r"\w+", str(chunk.get("content", "")).casefold())
+            for chunk in chunks
+        ]
+        if not query_counts:
+            return [(float(len(chunks) - index), chunk) for index, chunk in enumerate(chunks)]
+
+        document_frequency = Counter(
+            term
+            for terms in tokenized
+            for term in set(terms)
+            if term in query_counts
+        )
+        avg_length = sum(map(len, tokenized)) / max(len(tokenized), 1)
+        scored: List[Tuple[float, Dict[str, Any]]] = []
+        for index, (terms, chunk) in enumerate(zip(tokenized, chunks)):
+            frequencies = Counter(terms)
+            score = 0.0
+            for term, query_frequency in query_counts.items():
+                tf = frequencies.get(term, 0)
+                if not tf:
+                    continue
+                df = document_frequency.get(term, 0)
+                idf = math.log(1 + (len(chunks) - df + 0.5) / (df + 0.5))
+                length_norm = tf + 1.5 * (1 - 0.75 + 0.75 * len(terms) / max(avg_length, 1))
+                score += idf * (tf * 2.5 / length_norm) * min(query_frequency, 2)
+
+            content = str(chunk.get("content", "")).casefold()
+            normalized_query = " ".join(query_terms)
+            if normalized_query and normalized_query in content:
+                score += 1.0
+            # Use the original hybrid rank only as a stable tie-breaker.
+            score += float(chunk.get("rrf_score", 0.0)) / 1000.0
+            scored.append((score if score else -index * 1e-9, chunk))
+
+        scored.sort(key=lambda item: item[0], reverse=True)
         return scored
 
     async def rerank(
@@ -149,12 +201,15 @@ class CrossEncoderReranker:
             )
             return chunks
 
+        method = "cross_encoder" if self._model is not None else "lexical_fallback"
+
         result: List[Dict[str, Any]] = []
         for score, chunk in scored:
             if score < threshold:
                 continue
             enriched = dict(chunk)
             enriched["rerank_score"] = round(float(score), 4)
+            enriched["reranker_method"] = method
             # Blend cross-encoder score with existing confidence
             # Use sigmoid-like rescaling: sigmoid(score) ≈ confidence
             import math
@@ -171,7 +226,7 @@ class CrossEncoderReranker:
         final_ids   = [c.get("chunk_id", f"idx_{i}") for i, c in enumerate(result)]
         logger.info(
             f"[Reranker] Completed in {elapsed_ms} ms | "
-            f"model='{self._model_name}' | "
+            f"method='{method}' model='{self._model_name if method == 'cross_encoder' else 'BM25-style lexical'}' | "
             f"{len(candidates)} → {len(result)} chunks | "
             f"ranking: {initial_ids} → {final_ids}"
         )

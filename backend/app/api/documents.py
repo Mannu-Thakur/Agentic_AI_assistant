@@ -5,9 +5,10 @@ import uuid
 import re
 import zipfile
 import io
+from datetime import datetime, timezone
 from typing import List, Optional
 from pydantic import BaseModel
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from app.core.database import get_db
@@ -17,8 +18,6 @@ from app.schemas.document import DocumentOut
 from app.services.document_service import DocumentService
 from app.services.parser_service import ParserService
 from app.core.config import settings
-from app.core.security import decrypt_api_key
-from app.models.user import ApiKey
 
 logger = logging.getLogger(__name__)
 
@@ -233,8 +232,33 @@ async def list_documents(
     return await DocumentService.get_user_documents(db, current_user.id, chat_id=chat_id)
 
 
+@router.get("/{document_id}/status", response_model=DocumentOut)
+async def get_document_status(
+    document_id: str,
+    current_user: UserOut = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return an owned document's live indexing state for upload progress UIs."""
+    from app.models.document import Document
+
+    # Reuse the service's stale-job recovery so a crashed worker eventually
+    # reports a terminal failure instead of leaving clients polling forever.
+    await DocumentService.get_user_documents(db, current_user.id)
+    result = await db.execute(
+        select(Document).where(
+            Document.id == document_id,
+            Document.user_id == current_user.id,
+        )
+    )
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    return doc
+
+
 @router.post("/upload", response_model=DocumentOut, status_code=status.HTTP_201_CREATED)
 async def upload_document(
+    request: Request,
     file: UploadFile = File(...),
     chat_id: Optional[str] = Form(None),
     current_user: UserOut = Depends(get_current_user),
@@ -398,20 +422,15 @@ async def upload_document(
             chat_id=chat_id,
         )
 
-        # ── Resolve user's Gemini API key for real semantic ingestion ────────
-        # User keys are stored encrypted in the DB — decrypt and pass to
-        # the ingestion pipeline so chunks get real Gemini embeddings.
+        # ── Resolve the Google embedding key used for chat retrieval ─────────
+        # The frontend can provide a temporary key in x-api-keys, or the user
+        # can have a saved encrypted key. Use the shared resolver so upload
+        # and query embeddings follow the same provider path.
         user_api_key: Optional[str] = None
         try:
-            key_result = await db.execute(
-                select(ApiKey).where(
-                    ApiKey.user_id == current_user.id,
-                    ApiKey.provider_name.in_(["google", "gemini"]),
-                )
-            )
-            db_key = key_result.scalar_one_or_none()
-            if db_key and db_key.encrypted_api_key:
-                user_api_key = decrypt_api_key(db_key.encrypted_api_key)
+            from app.services.provider_key_service import get_request_provider_keys
+            request_keys = await get_request_provider_keys(db, current_user.id, request)
+            user_api_key = request_keys.get("google") or request_keys.get("gemini")
         except Exception as _key_exc:
             logger.warning(f"[Upload] Could not fetch user Gemini key for ingestion: {_key_exc}")
         # Fall back to server-level key if user key is absent
@@ -437,7 +456,7 @@ async def upload_document(
                         from app.retrieval.vector_store import VectorStore
                         vs = VectorStore()
                         coll = vs.get_collection()
-                        chunk_data = coll.get(where={"doc_id": str(doc.id)}, include=["documents", "ids"])
+                        chunk_data = coll.get(where={"document_id": str(doc.id)}, include=["documents", "ids"])
                         if chunk_data and chunk_data.get("ids"):
                             chunks = [
                                 {"id": cid, "text": cdoc}
@@ -459,29 +478,24 @@ async def upload_document(
                 logger.warning(f"[Proactive] Post-upload scan warning (non-fatal): {_pie_err}")
 
         # CRIT-1 FIX: anchor the main ingestion task.
-        ingest_task = _make_background_task(_ingest_and_extract())
-        # For documents ≤ 10 MB, await ingestion synchronously for up to 15 seconds.
-        # This covers the SentenceTransformer cold-start time (~7s) so that when the
-        # user immediately asks about the uploaded file the chunks are already in ChromaDB.
-        if size_bytes <= 10 * 1024 * 1024:
-            try:
-                await asyncio.wait_for(asyncio.shield(ingest_task), timeout=15.0)
-                await db.refresh(doc)
-                logger.info(f"[Upload] Synchronous ingestion completed for doc {doc.id} — status={doc.status}")
-            except asyncio.TimeoutError:
-                logger.info(f"[Upload] Ingestion for doc {doc.id} still running in background (timeout=15s)")
-            except Exception as _e:
-                logger.warning(f"[Upload] Synchronous ingestion check warning: {_e}")
-
+        _make_background_task(_ingest_and_extract())
+        # Return the document ID immediately. The frontend follows the persisted
+        # progress endpoint while parsing/embedding/indexing continues in the
+        # background; chat-attached uploads wait for status=ready before asking RAG.
         logger.info(f"[Upload] Scheduled ingestion for doc {doc.id} ({sanitized_filename})")
 
         from app.services.audit_service import AuditService
-        await AuditService.log_event(
-            db,
-            current_user.id,
-            "document_upload",
-            {"document_id": str(doc.id), "filename": sanitized_filename, "size_bytes": size_bytes},
-        )
+        try:
+            await AuditService.log_event(
+                db,
+                current_user.id,
+                "document_upload",
+                {"document_id": str(doc.id), "filename": sanitized_filename, "size_bytes": size_bytes},
+            )
+        except Exception as audit_exc:
+            # A telemetry/audit failure must not turn a committed upload into a
+            # false client-side failure or delete its source file.
+            logger.warning(f"[Upload] Audit logging failed for document {doc.id}: {audit_exc}")
 
         return doc
 
@@ -543,6 +557,7 @@ async def download_document(
 @router.post("/{document_id}/retry", response_model=DocumentOut)
 async def retry_document_indexing(
     document_id: str,
+    request: Request,
     current_user: UserOut = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -571,21 +586,19 @@ async def retry_document_indexing(
         )
 
     doc.status = "processing"
+    doc.processing_started_at = datetime.now(timezone.utc)
+    doc.stage = "queued"
+    doc.progress = 0
+    doc.chunk_count = 0
     doc.error_message = None
     await db.commit()
     await db.refresh(doc)
 
     user_api_key: Optional[str] = None
     try:
-        key_result = await db.execute(
-            select(ApiKey).where(
-                ApiKey.user_id == current_user.id,
-                ApiKey.provider_name.in_(["google", "gemini"]),
-            )
-        )
-        db_key = key_result.scalar_one_or_none()
-        if db_key and db_key.encrypted_api_key:
-            user_api_key = decrypt_api_key(db_key.encrypted_api_key)
+        from app.services.provider_key_service import get_request_provider_keys
+        request_keys = await get_request_provider_keys(db, current_user.id, request)
+        user_api_key = request_keys.get("google") or request_keys.get("gemini")
     except Exception as _key_exc:
         logger.warning(f"[Retry] Could not fetch user Gemini key: {_key_exc}")
 
@@ -610,7 +623,7 @@ async def retry_document_indexing(
                     from app.retrieval.vector_store import VectorStore
                     vs = VectorStore()
                     coll = vs.get_collection()
-                    chunk_data = coll.get(where={"doc_id": str(doc.id)}, include=["documents", "ids"])
+                    chunk_data = coll.get(where={"document_id": str(doc.id)}, include=["documents", "ids"])
                     if chunk_data and chunk_data.get("ids"):
                         chunks = [
                             {"id": cid, "text": cdoc}

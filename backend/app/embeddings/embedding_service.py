@@ -139,39 +139,15 @@ class EmbeddingService:
         Resolves the Gemini API key to use in order of priority:
           1. Explicitly supplied `api_key` argument
           2. Server-level `settings.GEMINI_API_KEY`
-          3. Any active, verified Google key in the SQLite/PostgreSQL `api_keys` table
-        Returns None if no key can be resolved.
+        Per-user keys must be resolved by the authenticated request and passed
+        explicitly. This service must never select an arbitrary user's database
+        key when it has no request context.
         """
         if api_key and api_key.strip():
             return api_key.strip()
 
         if settings.GEMINI_API_KEY and settings.GEMINI_API_KEY.strip():
             return settings.GEMINI_API_KEY.strip()
-
-        # Database fallback
-        try:
-            from app.core.database import AsyncSessionLocal
-            from app.models.user import ApiKey
-            from app.core.security import decrypt_api_key
-            from sqlalchemy.future import select
-
-            async with AsyncSessionLocal() as session:
-                stmt = select(ApiKey).where(
-                    ApiKey.provider_name.in_(["google", "gemini"]),
-                    ApiKey.status == "VERIFIED",
-                ).order_by(ApiKey.verified_at.desc())
-                result = await session.execute(stmt)
-                db_keys = result.scalars().all()
-                for db_key in db_keys:
-                    if db_key and db_key.encrypted_api_key:
-                        try:
-                            decrypted = decrypt_api_key(db_key.encrypted_api_key)
-                            if decrypted and decrypted.strip():
-                                return decrypted.strip()
-                        except Exception as dec_err:
-                            logger.debug(f"[EmbeddingService] Decryption failed for key {db_key.id}: {dec_err}")
-        except Exception as db_err:
-            logger.debug(f"[EmbeddingService] DB key lookup failed: {db_err}")
 
         return None
 

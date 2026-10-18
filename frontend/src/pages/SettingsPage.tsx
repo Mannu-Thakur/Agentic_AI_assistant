@@ -81,6 +81,9 @@ interface DocumentFile {
   file_type: string;
   size_bytes: number;
   status: 'processing' | 'ready' | 'failed';
+  stage: string;
+  progress: number;
+  chunk_count: number;
   error_message?: string;
   uploaded_at: string;
 }
@@ -114,14 +117,13 @@ type IngestionStep = {
 };
 
 const INGESTION_STEPS: IngestionStep[] = [
-  { id: 'waking',    icon: Zap,        label: 'Waking up server',     detail: 'Backend is starting from cold sleep (Render free tier — ~30-60s)' },
-  { id: 'uploading', icon: UploadCloud, label: 'Uploading document',   detail: 'Transmitting file bytes to the server' },
-  { id: 'parsing',   icon: FileText,    label: 'Parsing document',     detail: 'Extracting raw text from PDF/DOCX/XLSX' },
-  { id: 'chunking',  icon: Scissors,    label: 'Chunking text',        detail: 'Splitting content into semantic segments' },
-  { id: 'splitting', icon: Layers,      label: 'Text splitting',        detail: 'Applying recursive character splitter' },
-  { id: 'embedding', icon: Cpu,         label: 'Creating embeddings',  detail: 'Encoding chunks into dense vector space' },
-  { id: 'storing',   icon: HardDrive,   label: 'Storing in vector DB', detail: 'Writing vectors into Chroma/FAISS index' },
-  { id: 'indexing',  icon: Database,    label: 'Indexing complete',    detail: 'Document is ready for semantic retrieval' },
+  { id: 'connecting', icon: Zap,         label: 'Connecting to server', detail: 'Waiting for the backend before sending the file' },
+  { id: 'queued',     icon: UploadCloud, label: 'Upload received',     detail: 'The file is stored and queued for ingestion' },
+  { id: 'extracting', icon: FileText,    label: 'Extracting text',     detail: 'Reading text and page structure from the document' },
+  { id: 'chunking',   icon: Scissors,    label: 'Preparing chunks',    detail: 'Splitting extracted text into searchable passages' },
+  { id: 'embedding',  icon: Cpu,         label: 'Creating embeddings', detail: 'Encoding passages for semantic retrieval' },
+  { id: 'indexing',   icon: HardDrive,   label: 'Updating indexes',   detail: 'Writing semantic vectors and BM25 keyword entries' },
+  { id: 'ready',      icon: Database,    label: 'Ready for chat',      detail: 'Hybrid retrieval can use this document now' },
 ];
 
 // ── Curated model list — only reliably-working providers ────────────────────
@@ -288,9 +290,9 @@ const cleanErrorMessage = (raw: string): string => {
 };
 
 const IngestionProgress = memo(function IngestionProgress({
-  filename, currentStep, done, error,
+  filename, currentStep, done, error, progress,
 }: {
-  filename: string; currentStep: number; done: boolean; error: string | null;
+  filename: string; currentStep: number; done: boolean; error: string | null; progress: number;
 }) {
   return (
     <div className="mt-4 p-4 rounded-xl border border-border bg-surface-2/50 space-y-3">
@@ -306,6 +308,18 @@ const IngestionProgress = memo(function IngestionProgress({
           {done ? 'Ingestion complete!' : error ? 'Ingestion failed' : `Processing: ${filename}`}
         </p>
       </div>
+
+      {!error && (
+        <div className="space-y-1">
+          <div className="flex justify-between text-[10px] text-foreground-3">
+            <span>Server indexing progress</span>
+            <span>{progress}%</span>
+          </div>
+          <div className="h-1.5 rounded-full bg-surface-3 overflow-hidden">
+            <div className="h-full rounded-full bg-blue-500 transition-all duration-500" style={{ width: `${Math.max(0, Math.min(100, progress))}%` }} />
+          </div>
+        </div>
+      )}
 
       {error && (
         <div className="bg-rose-950/20 border border-rose-900/30 rounded-lg px-3 py-2.5 text-[10px] text-rose-300 leading-relaxed">
@@ -1441,7 +1455,7 @@ export default function SettingsPage() {
   const [ingestFilename, setIngestFilename] = useState<string>('');
   const [ingestStep, setIngestStep]       = useState<number>(-1);
   const [ingestDone, setIngestDone]       = useState(false);
-  const ingestTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [ingestProgress, setIngestProgress] = useState(0);
   // Tracks active polling intervals per document ID to prevent duplicates
   const pollIntervalsRef = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map());
 
@@ -1503,25 +1517,11 @@ export default function SettingsPage() {
   useEffect(() => {
     if (tab === 'documents') {
       fetchDocuments().then((docs: DocumentFile[] | void) => {
-        // Auto-resume polling for any documents already in 'processing' state,
-        // UNLESS they are already older than 90 seconds (in which case they timed out).
-        const now = Date.now();
+        // Resume server-backed progress for unfinished documents whenever the
+        // documents tab is reopened. The backend decides when a job is stale.
         const processList = (list: DocumentFile[]) => {
           list.forEach((d) => {
-            if (d.status === 'processing') {
-              const uploadAgeMs = d.uploaded_at ? now - new Date(d.uploaded_at).getTime() : 0;
-              if (uploadAgeMs > 90_000) {
-                setDocuments((prev) =>
-                  prev.map((item) =>
-                    item.id === d.id
-                      ? { ...item, status: 'failed' as const, error_message: 'Indexing timed out. Click Retry to re-index.' }
-                      : item
-                  )
-                );
-              } else {
-                pollUntilReadyRef.current(d.id);
-              }
-            }
+            if (d.status === 'processing') pollUntilReadyRef.current(d.id);
           });
         };
 
@@ -1539,10 +1539,9 @@ export default function SettingsPage() {
     else if (tab === 'mcpservers') fetchMcpServers();
   }, [tab, fetchDocuments, fetchMemories, fetchMcpServers]);
 
-  // Cleanup: clear all active poll intervals and the ingest step timer when the component unmounts
+  // Cleanup active document progress poll intervals when the component unmounts
   useEffect(() => {
     return () => {
-      if (ingestTimerRef.current) clearTimeout(ingestTimerRef.current);
       pollIntervalsRef.current.forEach((id) => clearInterval(id));
       pollIntervalsRef.current.clear();
     };
@@ -1657,13 +1656,6 @@ export default function SettingsPage() {
   };
 
 
-
-  // Clean up ingestion timer
-  useEffect(() => {
-    return () => {
-      if (ingestTimerRef.current) clearTimeout(ingestTimerRef.current);
-    };
-  }, []);
 
   // Apply font size on mount
   useEffect(() => {
@@ -1848,34 +1840,21 @@ export default function SettingsPage() {
   }, []);
 
   // -- Ingestion progress ------------------------------------
-  const startIngestionProgress = useCallback((filename: string, startStep = 1) => {
-    // startStep=0 → show 'waking up' first; startStep=1 → skip straight to 'uploading'
+  const startIngestionProgress = useCallback((filename: string, startStep = 0) => {
     setIngestFilename(filename);
     setIngestStep(startStep);
     setIngestDone(false);
+    setIngestProgress(0);
     setUploadError(null);
-
-    let step = startStep;
-    // Durations for steps 1-7 (index 0 = waking, handled separately)
-    const STEP_DURATIONS = [0, 600, 900, 800, 700, 1200, 800];
-
-    const advance = () => {
-      step += 1;
-      setIngestStep(step);
-      if (step < STEP_DURATIONS.length) {
-        ingestTimerRef.current = setTimeout(advance, STEP_DURATIONS[step]);
-      }
-    };
-    const delay = STEP_DURATIONS[startStep] ?? 600;
-    ingestTimerRef.current = setTimeout(advance, delay);
   }, []);
 
   const pollUntilReady = useCallback(async (docId: string) => {
     // Guard: if we're already polling this document, don't create a duplicate interval
     if (pollIntervalsRef.current.has(docId)) return;
 
-    const MAX_POLLS = 45;  // 90s total (45 × 2s)
+    const MAX_POLLS = 660; // 11 minutes; the server marks abandoned work failed at 10 minutes
     let polls = 0;
+    let requestInFlight = false;
 
     const stopPoll = (intervalId: ReturnType<typeof setInterval>) => {
       clearInterval(intervalId);
@@ -1883,60 +1862,39 @@ export default function SettingsPage() {
     };
 
     const interval = setInterval(async () => {
+      if (requestInFlight) return;
+      requestInFlight = true;
       polls++;
       try {
-        const docs: DocumentFile[] = await apiRequest('/documents');
-        setDocuments(docs);
-        const doc = docs.find((d) => d.id === docId);
+        const doc: DocumentFile = await apiRequestWithWakeup(`/documents/${encodeURIComponent(docId)}/status`);
+        setDocuments((prev) => prev.map((item) => item.id === docId ? { ...item, ...doc } : item));
+        setIngestProgress(doc.progress || 0);
+        const stepIndex = INGESTION_STEPS.findIndex((step) => step.id === doc.stage);
+        if (stepIndex >= 0 && doc.status === 'processing') setIngestStep(stepIndex);
         if (doc && doc.status === 'ready') {
           stopPoll(interval);
-          if (ingestTimerRef.current) clearTimeout(ingestTimerRef.current);
-          setIngestStep(6);
+          setIngestStep(INGESTION_STEPS.length - 1);
           setIngestDone(true);
           setUploading(false);
           setUploadError(null);
           return;
         } else if (doc && doc.status === 'failed') {
           stopPoll(interval);
-          if (ingestTimerRef.current) clearTimeout(ingestTimerRef.current);
           setUploadError(doc.error_message ? `Indexing failed: ${doc.error_message}` : 'Indexing failed on the server. Please try again.');
           setIngestStep(-1);
           setUploading(false);
           return;
         }
-      } catch { /* ignore */ }
+      } catch { /* Retry transient status read errors; do not fake a failed job. */ }
+      finally { requestInFlight = false; }
 
       if (polls >= MAX_POLLS) {
         stopPoll(interval);
-
-        // ── Optimistic UI update first ──────────────────────────────────────
-        // Immediately flip the badge to 'Failed' in local state so the user
-        // sees the Retry button right away, regardless of whether the PATCH
-        // to the backend succeeds or fails (backend may be slow / suspended).
-        const TIMEOUT_MSG = 'Indexing timed out. The server may be busy — click Retry to re-index.';
-        setDocuments((prev) =>
-          prev.map((d) =>
-            d.id === docId
-              ? { ...d, status: 'failed' as const, error_message: TIMEOUT_MSG }
-              : d
-          )
-        );
-        setUploadError('Indexing timed out after 90 seconds. Click Retry on the document to try again.');
+        setUploadError('Indexing is taking longer than expected. The document remains in its server status; reopen this tab to resume progress.');
         setIngestStep(-1);
         setUploading(false);
-
-        // ── Best-effort: persist failed state to DB + resync from server ────
-        try {
-          await apiRequest(`/documents/${docId}`, {
-            method: 'PATCH',
-            json: { status: 'failed', error_message: TIMEOUT_MSG },
-          });
-          // Only overwrite local state if the server responds successfully
-          const docs: DocumentFile[] = await apiRequest('/documents');
-          setDocuments(docs);
-        } catch { /* ignore — local state already shows Failed */ }
       }
-    }, 2000);
+    }, 1000);
 
     // Register the interval so duplicates are blocked and cleanup is possible
     pollIntervalsRef.current.set(docId, interval);
@@ -1991,12 +1949,14 @@ export default function SettingsPage() {
         },
       );
 
-      // Backend is now warm — advance to the upload→indexing animation steps
-      startIngestionProgress(file.name, 1);   // startStep=1 skips 'waking'
+      // The upload response confirms the file is stored. From this point on,
+      // progress reflects the server's persisted ingestion stage.
+      const initialStageIndex = INGESTION_STEPS.findIndex((step) => step.id === doc.stage);
+      startIngestionProgress(file.name, initialStageIndex >= 0 ? initialStageIndex : 1);
+      setIngestProgress(doc.progress || 0);
       setDocuments((prev) => [doc, ...prev.filter((d) => d.id !== doc.id)]);
       pollUntilReady(doc.id);
     } catch (err: unknown) {
-      if (ingestTimerRef.current) clearTimeout(ingestTimerRef.current);
       setUploadError((err as Error).message || 'Failed to upload document');
       setIngestStep(-1);
       setUploading(false);
@@ -2680,6 +2640,7 @@ export default function SettingsPage() {
                           currentStep={ingestStep}
                           done={ingestDone}
                           error={uploadError}
+                          progress={ingestProgress}
                         />
                       )}
                     </div>
