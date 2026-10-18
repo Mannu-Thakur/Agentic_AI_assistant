@@ -19,6 +19,7 @@ import {
   approveHITL,
   rejectHITL,
   persistMission,
+  getMissionStatus,
   MissionSSEEvent,
 } from '../services/missionApi';
 import type { Message } from '../types/chat';
@@ -76,6 +77,11 @@ const INITIAL: MissionState = {
   retryCount:    0,
 };
 
+interface MissionCallbacks {
+  onDelegated?: () => void;
+  onMissionAccepted?: () => void;
+}
+
 export function useMission() {
   const [mission, setMission] = useState<MissionState>(INITIAL);
   const cleanupRef = useRef<(() => void) | null>(null);
@@ -90,7 +96,7 @@ export function useMission() {
     model: string,
     sessionId: string,
     apiKeys: Record<string, string>,
-    onDelegated?: () => void,
+    callbacks: MissionCallbacks = {},
   ) => {
     if (!token) return;
 
@@ -124,6 +130,30 @@ export function useMission() {
       return;
     }
 
+    // sessionId is the chat selected by the caller. It also covers a mission
+    // launched from the welcome view, where this hook's activeChatId closure
+    // may still be null until React renders the newly created chat.
+    const missionChatId = sessionId || activeChatId;
+    let statusPollCancelled = false;
+    let statusPollStarted = false;
+    let terminalHandled = false;
+    let recoverMissionStatus: () => void = () => {};
+
+    // A reconnect can replay classification events. Keep route callbacks
+    // idempotent so one mission can never recursively enqueue duplicate chats.
+    let delegatedNotified = false;
+    let missionAcceptedNotified = false;
+    const notifyDelegated = () => {
+      if (delegatedNotified) return;
+      delegatedNotified = true;
+      callbacks.onDelegated?.();
+    };
+    const notifyMissionAccepted = () => {
+      if (missionAcceptedNotified) return;
+      missionAcceptedNotified = true;
+      callbacks.onMissionAccepted?.();
+    };
+
     // ── Step 2: Subscribe to SSE stream ──────────────────────────────────────
     const handleEvent = (event: MissionSSEEvent) => {
       const { type, data } = event;
@@ -139,7 +169,8 @@ export function useMission() {
             status: 'running' as const,
           })),
         }));
-        if (!data.is_mission) onDelegated?.();
+        if (data.is_mission) notifyMissionAccepted();
+        else notifyDelegated();
       }
 
       else if (type === 'agent_done') {
@@ -180,7 +211,11 @@ export function useMission() {
       }
 
       else if (type === 'mission_complete') {
+        if (terminalHandled) return;
+        terminalHandled = true;
+        statusPollCancelled = true;
         const finalResponse: string = data.response || '';
+        if (finalResponse) notifyMissionAccepted();
 
         setMission(prev => {
           const updated = {
@@ -192,10 +227,10 @@ export function useMission() {
           };
 
           // ── Inject into chat thread (in-memory) ──────────────────────────
-          if (finalResponse && activeChatId) {
+          if (finalResponse && missionChatId) {
             const missionMessage: Message = {
               id:                `mission-${jobId}-${Date.now()}`,
-              chat_id:           activeChatId,
+              chat_id:           missionChatId,
               parent_id:         null,
               role:              'assistant',
               content:           finalResponse,
@@ -219,9 +254,9 @@ export function useMission() {
         });
 
         // ── Persist to DB so it survives page refresh ─────────────────────
-        if (finalResponse && activeChatId && token) {
+        if (finalResponse && missionChatId && token) {
           persistMission(token, {
-            chat_id:      activeChatId,
+            chat_id:      missionChatId,
             query,
             response:     finalResponse,
             model,
@@ -234,21 +269,80 @@ export function useMission() {
       }
 
       else if (type === 'mission_delegated') {
+        terminalHandled = true;
+        statusPollCancelled = true;
         setMission(prev => ({ ...prev, status: 'delegated', isDelegated: true }));
-        onDelegated?.();
+        notifyDelegated();
       }
 
       else if (type === 'error') {
-        setMission(prev => ({
-          ...prev,
-          status: 'error',
-          error:  data.error || 'Mission failed',
-        }));
+        recoverMissionStatus();
       }
     };
 
+    // SSE is the real-time path. If a host/proxy closes that connection, poll
+    // the authenticated job record until it reaches a terminal state so the
+    // user still receives the mission result instead of a transient network error.
+    recoverMissionStatus = () => {
+      if (statusPollStarted || terminalHandled) return;
+      statusPollStarted = true;
+      setMission(prev => ({
+        ...prev,
+        error: 'Live progress disconnected; checking the saved mission status…',
+      }));
+
+      void (async () => {
+        let unavailableAttempts = 0;
+        for (let attempt = 0; attempt < 45 && !statusPollCancelled; attempt += 1) {
+          await new Promise(resolve => setTimeout(resolve, 2_000));
+          if (statusPollCancelled) return;
+          const status = await getMissionStatus(jobId, token);
+          if (!status) {
+            unavailableAttempts += 1;
+            if (unavailableAttempts >= 3) break;
+            continue;
+          }
+          unavailableAttempts = 0;
+
+          if (status.status === 'complete') {
+            if (status.result) {
+              handleEvent({ type: 'mission_complete', data: {
+                job_id: jobId,
+                response: status.result,
+              } });
+            } else if (!missionAcceptedNotified) {
+              terminalHandled = true;
+              statusPollCancelled = true;
+              setMission(prev => ({ ...prev, status: 'delegated', isDelegated: true, error: '' }));
+              notifyDelegated();
+            } else {
+              terminalHandled = true;
+              statusPollCancelled = true;
+              setMission(prev => ({ ...prev, status: 'error', error: 'Mission completed without a response.' }));
+            }
+            return;
+          }
+
+          if (status.status === 'error') {
+            terminalHandled = true;
+            statusPollCancelled = true;
+            setMission(prev => ({ ...prev, status: 'error', error: status.error || 'Mission failed.' }));
+            return;
+          }
+        }
+
+        if (!statusPollCancelled) {
+          terminalHandled = true;
+          setMission(prev => ({ ...prev, status: 'error', error: 'Could not reconnect to the mission service. Please retry this task.' }));
+        }
+      })();
+    };
+
     const cleanup = streamMissionEvents(jobId, token, handleEvent);
-    cleanupRef.current = cleanup;
+    cleanupRef.current = () => {
+      statusPollCancelled = true;
+      cleanup();
+    };
 
   }, [token, activeChatId, addMessage]);
 

@@ -1103,6 +1103,7 @@ export default function ChatPage() {
 
   // ── Core UI state ────────────────────────────────────────────
   const [convoOpen, setConvoOpen]                 = useState(true);
+  const [mobileNavOpen, setMobileNavOpen]         = useState(false);
   const [showUserMenu, setShowUserMenu]           = useState(false);
   const [searchQuery, setSearchQuery]             = useState('');
   const [copiedMsgId, setCopiedMsgId]             = useState<string | null>(null);
@@ -1603,6 +1604,7 @@ export default function ChatPage() {
 
   // ── Chat CRUD ────────────────────────────────────────────────
   const handleCreateChat = useCallback(() => {
+    setMobileNavOpen(false);
     setIsStreaming(false);
     setActiveChatId(null);
     setMessages([]);
@@ -1684,37 +1686,64 @@ export default function ChatPage() {
   const handleSendMessage = useCallback(async (
     text: string,
     imagesToSend: { base64: string; mimeType: string }[] = [],
-    attachedFiles: File[] = []
+    attachedFiles: File[] = [],
+    options: { skipMissionMode?: boolean; targetChatId?: string } = {},
   ) => {
     let trimmed = text.trim();
     if ((!trimmed && imagesToSend.length === 0 && attachedFiles.length === 0) || isStreaming) return;
 
     // ── Mission Mode routing ─────────────────────────────────────────────────
-    if (missionModeEnabled && trimmed && imagesToSend.length === 0) {
+    if (missionModeEnabled && !options.skipMissionMode && trimmed && imagesToSend.length === 0 && attachedFiles.length === 0) {
       const apiKeysRaw = ProviderKeyManager.getAllKeys?.() ?? {};
-      // Add user message to thread first
-      const userMsg: any = {
-        id: `user-mission-${Date.now()}`,
-        chat_id: activeChatId ?? 'default',
+      let missionChatId = activeChatId;
+
+      // A mission needs a real chat id so its accepted prompt and final answer
+      // are attached to the conversation even when started from the welcome view.
+      if (!missionChatId) {
+        try {
+          const createdChat = await apiRequest('/chats', {
+            method: 'POST',
+            json: { title: formatShortTitle(trimmed) },
+          });
+          addChat(createdChat);
+          missionChatId = createdChat.id;
+          skipFetchRef.current = true;
+          setActiveChatId(missionChatId);
+          window.history.replaceState(null, '', `/c/${missionChatId}`);
+          navigate(`/c/${missionChatId}`, { replace: true });
+        } catch (err) {
+          console.error('[Mission] failed to create conversation:', err);
+          addToast('Could not start Mission Mode because a chat session could not be created.', 'error');
+          return;
+        }
+      }
+
+      const addMissionPrompt = () => addMessage({
+        id: `user-mission-${crypto.randomUUID()}`,
+        chat_id: missionChatId!,
         parent_id: null,
         role: 'user',
         content: trimmed,
         tool_calls: null,
         created_at: new Date().toISOString(),
         developer_metrics: null,
-      };
-      addMessage(userMsg);
+      });
 
       await startMission(
         trimmed,
         activeModel,
-        activeChatId ?? 'default',
+        missionChatId!,
         apiKeysRaw,
-        // onDelegated: fall through to normal handleSendMessage
-        () => { handleSendMessage(trimmed, imagesToSend, attachedFiles); },
+        {
+          // Classification can be replayed by SSE reconnects; the hook makes
+          // each callback idempotent. Accepted missions add their prompt once.
+          onMissionAccepted: addMissionPrompt,
+          // A request outside Mission scope uses the standard chat pipeline,
+          // with this guard preventing it from being sent back to Mission Mode.
+          onDelegated: () => { void handleSendMessage(trimmed, imagesToSend, attachedFiles, { skipMissionMode: true, targetChatId: missionChatId! }); },
+        },
       );
-      // If not delegated, mission handles the response
-      if (!mission.isDelegated) return;
+      return;
     }
 
     if (attachedFiles.length > 0) {
@@ -1744,7 +1773,7 @@ export default function ChatPage() {
       }
     }
 
-    let chatId = activeChatId;
+    let chatId = options.targetChatId || activeChatId;
     let isNewChat = false;
 
     if (!chatId) {
@@ -2079,7 +2108,7 @@ export default function ChatPage() {
       }
 
     }
-  }, [activeChatId, isStreaming, messages, activeModel, language, token, addChat, addMessage, updateMessage, setActiveChatId, setIsStreaming, navigate, currentModel, validateChatRequest]);
+  }, [activeChatId, isStreaming, messages, activeModel, language, token, addChat, addMessage, updateMessage, setActiveChatId, setIsStreaming, navigate, currentModel, validateChatRequest, missionModeEnabled, startMission, addToast]);
 
   // ── Message actions ──────────────────────────────────────────
   const handleCopyMessage = (id: string, content: string) => {
@@ -2780,12 +2809,20 @@ export default function ChatPage() {
 
       {/* Keyboard shortcuts & global search modals */}
       <KeyboardShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
-      <GlobalSearch open={globalSearchOpen} onClose={() => setGlobalSearchOpen(false)} chats={chats} onSelectChat={(id) => { setActiveChatId(id); navigate(`/c/${id}`); }} />
+      <GlobalSearch open={globalSearchOpen} onClose={() => setGlobalSearchOpen(false)} chats={chats} onSelectChat={(id) => { setActiveChatId(id); navigate(`/c/${id}`); setMobileNavOpen(false); }} />
 
       {/* ══════════ CONVERSATION SIDEBAR ══════════ */}
+      {mobileNavOpen && (
+        <button
+          type="button"
+          aria-label="Close navigation"
+          onClick={() => setMobileNavOpen(false)}
+          className="fixed inset-0 z-40 bg-black/55 backdrop-blur-[2px] lg:hidden"
+        />
+      )}
       <aside
-        className="flex flex-col border-r border-border/80 bg-surface flex-shrink-0 sidebar-transition hidden lg:flex select-none relative z-[1]"
-        style={{ width: convoOpen ? '280px' : '58px' }}
+        className={`fixed inset-y-0 left-0 z-50 flex w-[min(86vw,300px)] transform flex-col border-r border-border/80 bg-surface shadow-2xl transition-all duration-200 lg:relative lg:inset-auto lg:z-[1] lg:h-full lg:translate-x-0 lg:shadow-none lg:w-[var(--sidebar-width)] select-none ${mobileNavOpen ? 'translate-x-0' : '-translate-x-full'}`}
+        style={{ '--sidebar-width': convoOpen ? '280px' : '58px' } as React.CSSProperties}
         aria-label="Conversations"
       >
         {convoOpen ? (
@@ -2817,12 +2854,20 @@ export default function ChatPage() {
                   <Tooltip content="Collapse sidebar" side="bottom">
                     <button
                       onClick={() => setConvoOpen(false)}
-                      className="p-1.5 rounded-lg text-foreground-3 hover:text-foreground hover:bg-surface-2 transition-all duration-150"
+                      className="hidden lg:flex p-1.5 rounded-lg text-foreground-3 hover:text-foreground hover:bg-surface-2 transition-all duration-150"
                       aria-label="Collapse"
                     >
                       <ChevronLeft className="w-4 h-4" />
                     </button>
                   </Tooltip>
+                  <button
+                    type="button"
+                    onClick={() => setMobileNavOpen(false)}
+                    className="flex lg:hidden p-1.5 rounded-lg text-foreground-3 hover:text-foreground hover:bg-surface-2 transition-all duration-150"
+                    aria-label="Close navigation"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
                 </div>
               </div>
 
@@ -2859,7 +2904,7 @@ export default function ChatPage() {
               {/* Omni Quick Navigation Features */}
               <div className="space-y-0.5 pt-1">
                 <button
-                  onClick={() => setFilesModalOpen(true)}
+                  onClick={() => { setFilesModalOpen(true); setMobileNavOpen(false); }}
                   className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-medium text-foreground-2 hover:text-foreground hover:bg-surface-2 transition-all duration-150 text-left"
                 >
                   <Folder className="w-4 h-4 text-foreground-3" />
@@ -2867,7 +2912,7 @@ export default function ChatPage() {
                 </button>
 
                 <button
-                  onClick={toggleDeveloperMode}
+                  onClick={() => { toggleDeveloperMode(); setMobileNavOpen(false); }}
                   className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-medium text-foreground-2 hover:text-foreground hover:bg-surface-2 transition-all duration-150 text-left"
                 >
                   <SquareTerminal className="w-4 h-4 text-foreground-3" />
@@ -2880,7 +2925,7 @@ export default function ChatPage() {
                 </button>
 
                 <button
-                  onClick={() => navigate('/analytics')}
+                  onClick={() => { navigate('/analytics'); setMobileNavOpen(false); }}
                   className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-medium text-foreground-2 hover:text-foreground hover:bg-surface-2 transition-all duration-150 text-left"
                 >
                   <BarChart2 className="w-4 h-4 text-foreground-3" />
@@ -2983,7 +3028,7 @@ export default function ChatPage() {
 
             <Tooltip content="Workspace Files" side="right">
               <button
-                onClick={() => setFilesModalOpen(true)}
+                onClick={() => { setFilesModalOpen(true); setMobileNavOpen(false); }}
                 aria-label="Files"
                 className="w-9 h-9 rounded-xl flex items-center justify-center text-foreground-3 hover:text-foreground hover:bg-surface-2 transition-all duration-150"
               >
@@ -2993,7 +3038,7 @@ export default function ChatPage() {
 
             <Tooltip content="Developer HUD" side="right">
               <button
-                onClick={toggleDeveloperMode}
+                onClick={() => { toggleDeveloperMode(); setMobileNavOpen(false); }}
                 aria-label="Dev HUD"
                 className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all duration-150 ${
                   developerMode ? 'bg-accent/10 text-accent' : 'text-foreground-3 hover:text-foreground hover:bg-surface-2'
@@ -3005,7 +3050,7 @@ export default function ChatPage() {
 
             <Tooltip content="Analytics" side="right">
               <button
-                onClick={() => navigate('/analytics')}
+                onClick={() => { navigate('/analytics'); setMobileNavOpen(false); }}
                 aria-label="Analytics"
                 className="w-9 h-9 rounded-xl flex items-center justify-center text-foreground-3 hover:text-foreground hover:bg-surface-2 transition-all duration-150"
               >
@@ -3059,7 +3104,7 @@ export default function ChatPage() {
                   style={{ animationDuration: '180ms' }}
                 >
                   <button
-                    onClick={() => { navigate('/resume'); setShowUserMenu(false); }}
+                    onClick={() => { navigate('/resume'); setShowUserMenu(false); setMobileNavOpen(false); }}
                     className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium text-foreground-2 hover:text-foreground hover:bg-surface-2 transition-all duration-150"
                   >
                     <FileText className="w-4 h-4 text-violet-400" />
@@ -3069,7 +3114,7 @@ export default function ChatPage() {
                     </span>
                   </button>
                   <button
-                    onClick={() => { navigate('/settings'); setShowUserMenu(false); }}
+                    onClick={() => { navigate('/settings'); setShowUserMenu(false); setMobileNavOpen(false); }}
                     className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium text-foreground-2 hover:text-foreground hover:bg-surface-2 transition-all duration-150"
                   >
                     <Settings className="w-4 h-4 text-foreground-3" />
@@ -3096,7 +3141,12 @@ export default function ChatPage() {
         {/* Toolbar */}
         <header className="h-[var(--header-height)] px-4 flex items-center justify-between bg-background flex-shrink-0 z-30 relative">
           <div className="flex items-center gap-2.5 min-w-0">
-            <button onClick={() => setConvoOpen((v) => !v)} className="lg:hidden p-1.5 text-foreground-3 hover:text-foreground">
+            <button
+              onClick={() => { setConvoOpen(true); setMobileNavOpen(true); }}
+              className="lg:hidden p-1.5 rounded-lg text-foreground-3 hover:text-foreground hover:bg-surface-2"
+              aria-label="Open navigation"
+              aria-expanded={mobileNavOpen}
+            >
               <MessageSquare className="w-4 h-4" />
             </button>
             {/* Model Dropdown Selection (Top Left) */}
@@ -3145,7 +3195,7 @@ export default function ChatPage() {
                         <div className="px-3 py-3 text-center text-xs text-foreground-3 italic">
                           No verified models.<br/>
                           <button 
-                            onClick={() => { setModelDropdownOpen(false); navigate('/settings?tab=models'); }}
+                            onClick={() => { setModelDropdownOpen(false); navigate('/settings?tab=models'); setMobileNavOpen(false); }}
                             className="mt-1.5 text-[10px] font-semibold text-accent hover:underline not-italic"
                           >
                             Add API Keys →
@@ -3506,14 +3556,33 @@ export default function ChatPage() {
             {/* Ambient glow orbs */}
             <div className="welcome-orb welcome-orb-1" aria-hidden />
             <div className="welcome-orb welcome-orb-2" aria-hidden />
-            <div className="w-full max-w-chat flex flex-col items-center gap-8 relative z-10">
+            <div className="w-full max-w-chat flex flex-col items-center gap-7 relative z-10">
               <div className="welcome-content flex flex-col items-center mb-1">
+                <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.035] px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-foreground-3 shadow-[0_6px_24px_rgba(0,0,0,0.12)]">
+                  <Sparkles className="h-3.5 w-3.5 text-accent" />
+                  Your AI workspace
+                </div>
                 <h2 className="welcome-headline">{greeting}</h2>
-                <p className="text-sm text-foreground-3 mt-2">Your AI workspace — ask anything, search everywhere, build anything.</p>
+                <p className="mt-2 max-w-md text-sm leading-6 text-foreground-3">Ask a question, bring in a document, or start a multi-step task.</p>
               </div>
 
               {/* Centered input form */}
-              <div className="w-full space-y-4">
+              <div className="w-full space-y-3.5">
+                <MissionModeBanner
+                  isActive={missionModeEnabled || isMissionActive}
+                  status={mission.status}
+                  agentSteps={mission.agentSteps}
+                  critcResult={mission.critcResult}
+                  hitlRequest={mission.hitlRequest}
+                  artifactCount={mission.artifacts.length}
+                  error={mission.error}
+                  missionId={mission.missionId}
+                  onToggle={() => setMissionModeEnabled((current) => !current)}
+                  onApprove={handleMissionApprove}
+                  onReject={handleMissionReject}
+                  onDismiss={() => { resetMission(); setMissionModeEnabled(false); }}
+                />
+
                 <ChatInput
                   ref={chatInputRef}
                   key={activeChatId ?? 'new'}
@@ -3522,69 +3591,80 @@ export default function ChatPage() {
                   isStreaming={isStreaming}
                   onStop={handleStopGeneration}
                   activeModel={activeModel}
-                  placeholder="Ask anything — web, docs, code, analysis..."
+                  placeholder={missionModeEnabled ? 'Describe a multi-step task for Mission Mode...' : 'Ask anything — web, docs, code, analysis...'}
                   className="w-full"
                   chats={chats}
                   connectedChat={connectedChat}
                   onSelectConnectedChat={setConnectedChat}
                 />
 
-                {/* Streamlined Capability Pills */}
-                <div className="flex flex-wrap items-center justify-center gap-2 max-w-xl mx-auto pt-1">
+                {/* Workspace shortcuts */}
+                <div className="mx-auto grid w-full max-w-2xl grid-cols-2 gap-2.5 pt-1 sm:grid-cols-3">
                   {[
                     {
-                      icon: '🔬',
+                      icon: Globe,
                       label: 'Deep Research',
+                      detail: 'Explore a topic in depth',
                       action: () => {
                         setSearchMode('deep_research');
                         chatInputRef.current?.setText('Research the latest developments and provide a comprehensive report on: ');
                       },
                     },
                     {
-                      icon: '💻',
+                      icon: Terminal,
                       label: 'Write Code',
+                      detail: 'Build or debug software',
                       action: () => {
                         chatInputRef.current?.setText('Write a clean, production-ready implementation for: ');
                       },
                     },
                     {
-                      icon: '📄',
+                      icon: FileText,
                       label: 'Analyze Document',
+                      detail: 'Upload a file to discuss',
                       action: () => {
                         setSearchMode('kb');
                         chatInputRef.current?.openFilePicker();
                       },
                     },
                     {
-                      icon: '📊',
+                      icon: BarChart2,
                       label: 'Data Analysis',
+                      detail: 'Find patterns and trends',
                       action: () => {
                         chatInputRef.current?.setText('Analyze this dataset, calculate summary statistics, and highlight key trends: ');
                       },
                     },
                     {
-                      icon: '✍️',
+                      icon: PenLine,
                       label: 'Write & Edit',
+                      detail: 'Draft and refine content',
                       action: () => {
                         chatInputRef.current?.setText('Help me draft and refine a clear, well-structured document about: ');
                       },
                     },
                     {
-                      icon: '🧮',
+                      icon: Sparkles,
                       label: 'Math & Science',
+                      detail: 'Work through a concept',
                       action: () => {
                         chatInputRef.current?.setText('Explain the following concept step-by-step with mathematical formulation: ');
                       },
                     },
-                  ].map(({ icon, label, action }) => (
+                  ].map(({ icon: Icon, label, detail, action }) => (
                     <button
                       key={label}
                       type="button"
                       onClick={action}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-border/70 bg-surface-2/40 hover:bg-surface-2 hover:border-border text-xs text-foreground-3 hover:text-foreground transition-all duration-150 active:scale-95 shadow-2xs"
+                      className="group flex min-h-[66px] items-center gap-3 rounded-2xl border border-white/[0.075] bg-gradient-to-br from-white/[0.045] to-white/[0.015] px-3 py-2.5 text-left shadow-[0_8px_28px_rgba(0,0,0,0.13)] transition-all duration-200 hover:-translate-y-0.5 hover:border-accent/25 hover:from-accent/[0.08] hover:to-white/[0.02] hover:shadow-[0_14px_34px_rgba(0,0,0,0.2)] active:translate-y-0"
                     >
-                      <span className="text-sm">{icon}</span>
-                      <span className="font-medium text-[11px]">{label}</span>
+                      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/[0.07] bg-black/15 text-foreground-3 transition-colors group-hover:border-accent/20 group-hover:bg-accent/10 group-hover:text-accent">
+                        <Icon className="h-4 w-4" />
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block truncate text-[11px] font-semibold text-foreground-2 transition-colors group-hover:text-foreground">{label}</span>
+                        <span className="mt-0.5 block truncate text-[10px] text-foreground-3">{detail}</span>
+                      </span>
                     </button>
                   ))}
                 </div>
@@ -3598,6 +3678,31 @@ export default function ChatPage() {
             <div className="flex-1 flex flex-col min-h-0 relative">
               <div ref={chatScrollRef} onScroll={handleScroll} className="chat-main-scroll flex-1 overflow-y-auto px-4 sm:px-6 md:px-8 pt-6 pb-36 space-y-6" style={{ scrollBehavior: 'smooth' }}>
               <div className="max-w-chat mx-auto space-y-6">
+                {(mission.agentSteps.length > 0 || isMissionActive) && (
+                  <PlanDAG
+                    planReason={mission.planReason}
+                    agentSteps={mission.agentSteps}
+                    criticScore={mission.critcResult?.score ?? null}
+                    criticPasses={mission.critcResult?.passes ?? null}
+                    criticFeedback={mission.critcResult?.feedback}
+                    retryCount={mission.retryCount}
+                    isVisible={true}
+                  />
+                )}
+
+                {(mission.agentSteps.length > 0 || mission.artifacts.length > 0 || isMissionActive) && (
+                  <AgentTracePanel
+                    agentSteps={mission.agentSteps}
+                    critcResult={mission.critcResult ?? undefined}
+                    hitlRequest={mission.hitlRequest}
+                    artifacts={mission.artifacts}
+                    missionId={mission.missionId}
+                    isRunning={isMissionActive}
+                    onHITLApprove={() => handleMissionApprove()}
+                    onHITLReject={() => handleMissionReject()}
+                  />
+                )}
+
                 {messages.map((m, idx) => {
                   if (m.role === 'system' || m.role === 'tool') return null;
                   const isUser          = m.role === 'user';
@@ -3962,33 +4067,6 @@ export default function ChatPage() {
             {/* Input Bar Floating Footer */}
             <footer className="absolute bottom-0 left-0 right-0 p-4 pointer-events-none bg-gradient-to-t from-background via-background/80 to-transparent">
               <div className="pointer-events-auto max-w-chat mx-auto space-y-2">
-
-                {/* ── Plan DAG (Mission Mode) — shows execution graph ── */}
-                {(mission.agentSteps.length > 0 || isMissionActive) && (
-                  <PlanDAG
-                    planReason={mission.planReason}
-                    agentSteps={mission.agentSteps}
-                    criticScore={mission.critcResult?.score ?? null}
-                    criticPasses={mission.critcResult?.passes ?? null}
-                    criticFeedback={mission.critcResult?.feedback}
-                    retryCount={mission.retryCount}
-                    isVisible={true}
-                  />
-                )}
-
-                {/* ── Agent Execution Trace (Mission Mode) ── */}
-                {(mission.agentSteps.length > 0 || mission.artifacts.length > 0 || isMissionActive) && (
-                  <AgentTracePanel
-                    agentSteps={mission.agentSteps}
-                    critcResult={mission.critcResult ?? undefined}
-                    hitlRequest={mission.hitlRequest}
-                    artifacts={mission.artifacts}
-                    missionId={mission.missionId}
-                    isRunning={isMissionActive}
-                    onHITLApprove={() => handleMissionApprove()}
-                    onHITLReject={() => handleMissionReject()}
-                  />
-                )}
 
                 {/* ── Mission Mode Banner ── */}
                 <MissionModeBanner
@@ -4396,6 +4474,7 @@ export default function ChatPage() {
                   setActiveChatId(c.id);
                 }
                 navigate(`/c/${c.id}`);
+                setMobileNavOpen(false);
               }}
               className={`w-full min-h-[36px] px-3 py-1.5 rounded-[12px] flex items-center justify-between text-left transition-all duration-150 ease-in-out ${
                 active

@@ -8,6 +8,7 @@
  */
 
 import { BASE_URL } from './api';
+import { apiRequestWithWakeup } from './api';
 
 export interface MissionRunRequest {
   query: string;
@@ -45,22 +46,15 @@ export async function enqueueMission(
   token: string,
   apiKeys: Record<string, string>,
 ): Promise<MissionRunResponse> {
-  const res = await fetch(`${BASE_URL}/mission/run`, {
+  return apiRequestWithWakeup<MissionRunResponse>('/mission/run', {
     method: 'POST',
     headers: {
-      'Content-Type':  'application/json',
       'Authorization': `Bearer ${token}`,
       'x-api-keys':    JSON.stringify(apiKeys),
     },
-    body: JSON.stringify(req),
+    json: req,
+    timeoutMs: 60_000,
   });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`Mission enqueue failed: ${res.status} ${text}`);
-  }
-
-  return res.json();
 }
 
 /**
@@ -74,82 +68,107 @@ export function streamMissionEvents(
   onEvent: MissionEventHandler,
   lastEventId?: string,
 ): () => void {
-  const headers: Record<string, string> = {
-    'Authorization': `Bearer ${token}`,
-  };
-  if (lastEventId) {
-    headers['Last-Event-ID'] = lastEventId;
-  }
+  let stopped = false;
+  let retryCount = 0;
+  let lastSeenEventId = lastEventId || '';
+  let activeController: AbortController | null = null;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // Use fetch-based SSE for auth header support
-  const controller = new AbortController();
+  const connect = async () => {
+    while (!stopped) {
+      const controller = new AbortController();
+      activeController = controller;
+      const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
+      if (lastSeenEventId) headers['Last-Event-ID'] = lastSeenEventId;
 
-  (async () => {
-    try {
-      const res = await fetch(`${BASE_URL}/mission/${jobId}/stream`, {
-        headers,
-        signal: controller.signal,
-      });
+      try {
+        const res = await fetch(`${BASE_URL}/mission/${jobId}/stream`, {
+          headers,
+          signal: controller.signal,
+          cache: 'no-store',
+        });
+        if (!res.ok || !res.body) {
+          onEvent({ type: 'error', data: { error: `Mission progress stream returned HTTP ${res.status}.` } });
+          return;
+        }
 
-      if (!res.ok || !res.body) {
-        onEvent({ type: 'error', data: { error: `Stream failed: ${res.status}` } });
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let currentEvent = '';
+        let currentData = '';
+
+        while (!stopped) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            if (line.startsWith('id: ')) {
+              lastSeenEventId = line.slice(4).trim();
+            } else if (line.startsWith('event: ')) {
+              currentEvent = line.slice(7).trim();
+            } else if (line.startsWith('data: ')) {
+              currentData = currentData ? `${currentData}\n${line.slice(6).trim()}` : line.slice(6).trim();
+            } else if (line === '' && currentEvent && currentData) {
+              try {
+                const parsed = JSON.parse(currentData);
+                onEvent({
+                  type: (parsed.event_type || currentEvent) as MissionSSEEvent['type'],
+                  data: parsed,
+                });
+              } catch {
+                // Ignore malformed events; keep the stream alive for later updates.
+              }
+              currentEvent = '';
+              currentData = '';
+            }
+          }
+        }
+        if (stopped) return;
+      } catch (error: any) {
+        if (stopped || error?.name === 'AbortError') return;
+      }
+
+      if (retryCount >= 2) {
+        onEvent({
+          type: 'error',
+          data: { error: 'Live mission updates disconnected. Checking the saved mission result…' },
+        });
         return;
       }
 
-      const reader  = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer    = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        let currentEvent = '';
-        let currentData  = '';
-
-        for (const line of lines) {
-          if (line.startsWith('event: ')) {
-            currentEvent = line.slice(7).trim();
-          } else if (line.startsWith('data: ')) {
-            currentData = line.slice(6).trim();
-          } else if (line === '' && currentEvent && currentData) {
-            try {
-              const parsed = JSON.parse(currentData);
-              onEvent({
-                type: (parsed.event_type || currentEvent) as MissionSSEEvent['type'],
-                data: parsed,
-              });
-            } catch {
-              // ignore parse error
-            }
-            currentEvent = '';
-            currentData  = '';
-          }
-        }
-      }
-    } catch (e: any) {
-      if (e?.name !== 'AbortError') {
-        onEvent({ type: 'error', data: { error: String(e) } });
-      }
+      retryCount += 1;
+      await new Promise<void>((resolve) => {
+        retryTimer = setTimeout(() => {
+          retryTimer = null;
+          resolve();
+        }, 600 * retryCount);
+      });
     }
-  })();
+  };
 
-  return () => controller.abort();
+  void connect();
+  return () => {
+    stopped = true;
+    activeController?.abort();
+    if (retryTimer) clearTimeout(retryTimer);
+  };
 }
 
 /**
  * Step 3 — Poll final job status (fallback / periodic check).
  */
 export async function getMissionStatus(jobId: string, token: string): Promise<any> {
-  const res = await fetch(`${BASE_URL}/mission/${jobId}`, {
-    headers: { 'Authorization': `Bearer ${token}` },
-  });
-  if (!res.ok) return null;
-  return res.json();
+  try {
+    return await apiRequestWithWakeup(`/mission/${jobId}`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+  } catch {
+    return null;
+  }
 }
 
 /**

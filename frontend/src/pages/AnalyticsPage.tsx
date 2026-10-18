@@ -377,6 +377,9 @@ export default function AnalyticsPage() {
     n == null ? '—' : `${n.toFixed(0)}ms`;
   const fmtCost = (n: number | null | undefined) =>
     n == null ? '—' : `$${n.toFixed(5)}`;
+  const vectorStoreHealth = health?.components?.vector_store;
+  const vectorStoreStatus = vectorStoreHealth?.status?.toLowerCase();
+  const vectorStoreHealthy = vectorStoreStatus === 'healthy';
 
   const formatRelativeTime = (timestampSec: number) => {
     const diff = Math.floor(Date.now() / 1000 - timestampSec);
@@ -591,7 +594,7 @@ export default function AnalyticsPage() {
                 </div>
                 <div className="flex items-center justify-between text-xs sm:text-sm">
                   <span className="text-zinc-400">Hallucination Risk Rate</span>
-                  <span className={`font-semibold ${(quality?.evaluation?.hallucination_rate ?? 0) > 0.1 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                  <span className={`font-semibold ${quality?.evaluation?.hallucination_rate == null ? 'text-zinc-300' : quality.evaluation.hallucination_rate > 0.1 ? 'text-amber-400' : 'text-emerald-400'}`}>
                     {fmtPct(quality?.evaluation?.hallucination_rate)}
                   </span>
                 </div>
@@ -622,8 +625,8 @@ export default function AnalyticsPage() {
                     <span className="text-zinc-300">SLM (Fast & Economical)</span>
                   </div>
                   <div className="text-right">
-                    <span className="font-semibold text-zinc-100">{overview?.cost?.slm ?? 0} req</span>
-                    <span className="text-xs text-zinc-400 ml-2 font-mono">({overview?.cost?.slm_pct ?? 0}%)</span>
+                    <span className="font-semibold text-zinc-100">{fmt(overview?.cost?.slm)} req</span>
+                    <span className="text-xs text-zinc-400 ml-2 font-mono">{overview?.cost?.slm_pct == null ? '—' : `(${overview.cost.slm_pct}%)`}</span>
                   </div>
                 </div>
 
@@ -633,8 +636,8 @@ export default function AnalyticsPage() {
                     <span className="text-zinc-300">LLM Medium (Balanced)</span>
                   </div>
                   <div className="text-right">
-                    <span className="font-semibold text-zinc-100">{overview?.cost?.llm_medium ?? 0} req</span>
-                    <span className="text-xs text-zinc-400 ml-2 font-mono">({overview?.cost?.llm_medium_pct ?? 0}%)</span>
+                    <span className="font-semibold text-zinc-100">{fmt(overview?.cost?.llm_medium)} req</span>
+                    <span className="text-xs text-zinc-400 ml-2 font-mono">{overview?.cost?.llm_medium_pct == null ? '—' : `(${overview.cost.llm_medium_pct}%)`}</span>
                   </div>
                 </div>
 
@@ -644,8 +647,8 @@ export default function AnalyticsPage() {
                     <span className="text-zinc-300">LLM Strong (Deep Reasoning)</span>
                   </div>
                   <div className="text-right">
-                    <span className="font-semibold text-zinc-100">{overview?.cost?.llm_strong ?? 0} req</span>
-                    <span className="text-xs text-zinc-400 ml-2 font-mono">({overview?.cost?.llm_strong_pct ?? 0}%)</span>
+                    <span className="font-semibold text-zinc-100">{fmt(overview?.cost?.llm_strong)} req</span>
+                    <span className="text-xs text-zinc-400 ml-2 font-mono">{overview?.cost?.llm_strong_pct == null ? '—' : `(${overview.cost.llm_strong_pct}%)`}</span>
                   </div>
                 </div>
               </div>
@@ -699,35 +702,35 @@ export default function AnalyticsPage() {
               icon={Database}
               label="Vector Chunks Indexed"
               color="blue"
-              value={fmt(retrieval?.knowledge_base?.indexed_chunks ?? 879)}
+              value={fmt(retrieval?.knowledge_base?.indexed_chunks)}
               sub="ChromaDB collection"
             />
             <StatCard
               icon={FileText}
               label="Source Documents"
               color="indigo"
-              value={fmt(retrieval?.knowledge_base?.total_documents ?? 29)}
-              sub={`${fmt(retrieval?.knowledge_base?.ready_documents ?? 17)} ready for search`}
+              value={fmt(retrieval?.knowledge_base?.total_documents)}
+              sub={`${fmt(retrieval?.knowledge_base?.ready_documents)} ready for search`}
             />
             <StatCard
               icon={Target}
               label="Retrieval Confidence"
               color="cyan"
-              value={retrieval?.retrieval_used ? fmtPct(retrieval?.avg_retrieval_confidence) : '100%'}
-              sub={retrieval?.retrieval_used ? `${fmt(retrieval?.retrieval_used)} requests` : 'Baseline benchmark'}
+              value={retrieval?.retrieval_used ? fmtPct(retrieval?.avg_retrieval_confidence) : '—'}
+              sub={retrieval ? `${fmt(retrieval.retrieval_used)} retrieval requests` : 'No retrieval telemetry yet'}
             />
             <StatCard
               icon={Layers}
               label="Retrieval Mode"
               color="violet"
-              value="Hybrid"
-              sub="Vector + Semantic rerank"
+              value={retrieval?.knowledge_base?.retrieval_mode || '—'}
+              sub={retrieval ? `${fmt(retrieval.retrieval_used)} queries used retrieval` : 'Awaiting live retrieval data'}
             />
             <StatCard
               icon={Network}
               label="Graph Evidence"
               color="amber"
-              value={fmt(retrieval?.total_graph_evidence_items ?? 0)}
+              value={fmt(retrieval?.total_graph_evidence_items)}
               sub="KG cross-references"
             />
           </div>
@@ -753,11 +756,18 @@ export default function AnalyticsPage() {
             ) : (
               <div className="p-4 rounded-xl border border-white/5 bg-zinc-900/60 space-y-2 mt-2">
                 <div className="flex items-center gap-2 text-xs font-semibold text-zinc-300">
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                  Primary Vector RAG (ChromaDB) is Active
+                  {vectorStoreHealthy
+                    ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                    : <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />}
+                  {vectorStoreHealthy ? 'ChromaDB is reachable' : vectorStoreStatus === 'error' ? 'Vector retrieval is unavailable' : 'Vector store status unavailable'}
                 </div>
                 <p className="text-xs text-zinc-400 leading-relaxed">
-                  Vector retrieval is fully operational with {fmt(retrieval?.knowledge_base?.indexed_chunks ?? 879)} indexed chunks. Neo4j Knowledge Graph is an optional extension for graph entity traversal that can be enabled by configuring NEO4J_URI in settings.
+                  {vectorStoreHealthy
+                    ? `${fmt(vectorStoreHealth?.chunk_count ?? retrieval?.knowledge_base?.indexed_chunks)} chunks are indexed in the vector store. ${Number(vectorStoreHealth?.chunk_count ?? retrieval?.knowledge_base?.indexed_chunks ?? 0) > 0 ? 'Document retrieval has indexed content available.' : 'No document chunks are indexed yet, so document retrieval has no sources to search.'}`
+                    : vectorStoreStatus === 'error'
+                      ? `The live health check failed: ${vectorStoreHealth?.error || 'No error details were returned.'}`
+                      : 'Live vector store health has not been returned yet.'}
+                  {' '}Neo4j Knowledge Graph is an optional extension for graph traversal.
                 </p>
               </div>
             )}
@@ -770,14 +780,14 @@ export default function AnalyticsPage() {
                 <TrendingUp className="w-4 h-4 text-emerald-400" />
                 <h4 className="text-sm font-semibold text-zinc-200">Statistical Data Drift</h4>
               </div>
-              <StatusBadge status={drift?.overall_status || 'NORMAL'} />
+              <StatusBadge status={drift?.overall_status || 'No data'} />
             </div>
 
             <div className="space-y-2.5 mt-2">
               <div className="flex justify-between text-xs text-zinc-400 pb-1 border-b border-white/5">
                 <span>Distribution Window</span>
                 <span className="font-mono text-zinc-300">
-                  Baseline: {drift?.baseline_count ?? 9} samples | Current: {drift?.current_count ?? 10} samples
+                  Baseline: {fmt(drift?.baseline_count)} samples | Current: {fmt(drift?.current_count)} samples
                 </span>
               </div>
 

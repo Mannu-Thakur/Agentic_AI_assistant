@@ -1,15 +1,4 @@
-/**
- * MissionModeBanner.tsx — Mission Mode Trigger & Status Banner
- *
- * A self-contained banner that:
- * 1. Shows a "⚡ Mission Mode" toggle button the user can click to activate
- * 2. When active, shows which agents are running with animated status
- * 3. Shows HITL approval prompts inline
- * 4. Shows final mission status + artifact count
- *
- * This component integrates with useMission() hook in the parent.
- * Place it just above ChatInput inside ChatPage.
- */
+/** Mission Mode control and live status for the chat composer. */
 
 import React from 'react';
 import {
@@ -39,7 +28,7 @@ interface MissionModeBannerProps {
   artifactCount: number;
   error: string;
   missionId: string;
-  onToggle: () => void;       // Toggle mission mode on/off
+  onToggle: () => void;
   onApprove: () => void;
   onReject: () => void;
   onDismiss: () => void;
@@ -56,21 +45,17 @@ const AGENT_META: Record<string, { icon: React.ElementType; label: string; color
 function AgentPill({ agent, status }: AgentStatus) {
   const meta = AGENT_META[agent] || { icon: Zap, label: agent, color: 'text-gray-400' };
   const Icon = meta.icon;
-
   return (
-    <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[10px] font-medium transition-all ${
-      status === 'running' ? 'border-blue-500/30 bg-blue-500/10 text-blue-300' :
-      status === 'done'    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' :
-                             'border-red-500/30 bg-red-500/10 text-red-300'
+    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium ${
+      status === 'running' ? 'border-blue-500/25 bg-blue-500/10 text-blue-200' :
+      status === 'done' ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-200' :
+      'border-rose-500/25 bg-rose-500/10 text-rose-200'
     }`}>
-      {status === 'running'
-        ? <Loader2 className="w-2.5 h-2.5 animate-spin" />
-        : status === 'done'
-          ? <CheckCircle2 className="w-2.5 h-2.5" />
-          : <XCircle className="w-2.5 h-2.5" />}
-      <Icon className={`w-2.5 h-2.5 ${meta.color}`} />
-      <span>{meta.label}</span>
-    </div>
+      {status === 'running' ? <Loader2 className="h-3 w-3 animate-spin" /> :
+        status === 'done' ? <CheckCircle2 className="h-3 w-3" /> : <XCircle className="h-3 w-3" />}
+      <Icon className={`h-3 w-3 ${meta.color}`} />
+      {meta.label}
+    </span>
   );
 }
 
@@ -90,125 +75,125 @@ export function MissionModeBanner({
 }: MissionModeBannerProps) {
   const [collapsed, setCollapsed] = React.useState(false);
 
-  // HITL prompt takes priority
   if (hitlRequest) {
     return (
-      <div className="mx-2 mb-2 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 text-xs animate-fade-in">
-        <div className="flex items-center gap-2 mb-2">
-          <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0" />
-          <span className="font-semibold text-amber-300">⏸ Human Approval Required</span>
-          <span className="ml-auto text-[10px] font-mono text-foreground-3">{missionId}</span>
+      <section className="rounded-2xl border border-amber-400/25 bg-amber-400/[0.06] p-3.5 text-sm shadow-[0_8px_28px_rgba(0,0,0,0.16)]">
+        <div className="flex items-center gap-2.5">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-amber-400/20 bg-amber-400/10">
+            <AlertTriangle className="h-4 w-4 text-amber-300" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <h3 className="font-semibold text-amber-100">Approval needed to continue</h3>
+            <p className="text-xs text-foreground-3">Review this step before the agents proceed.</p>
+          </div>
+          <span className="hidden font-mono text-[10px] text-foreground-3 sm:inline">{missionId.slice(0, 8)}</span>
         </div>
-        <p className="text-foreground-3 mb-3 pl-6 text-[11px] leading-relaxed">{hitlRequest.reason}</p>
-        <div className="flex gap-2 pl-6">
-          <button
-            onClick={onApprove}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/30 transition-colors font-medium text-[11px]"
-          >
-            <ThumbsUp className="w-3 h-3" /> Approve & Continue
+        <p className="mb-3 mt-3 text-xs leading-relaxed text-foreground-2">{hitlRequest.reason}</p>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" onClick={onApprove} className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-400/25 bg-emerald-400/10 px-3 py-2 text-xs font-semibold text-emerald-200 transition hover:bg-emerald-400/15">
+            <ThumbsUp className="h-3.5 w-3.5" /> Approve and continue
           </button>
-          <button
-            onClick={onReject}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-500/20 border border-red-500/30 text-red-300 hover:bg-red-500/30 transition-colors font-medium text-[11px]"
-          >
-            <ThumbsDown className="w-3 h-3" /> Reject
+          <button type="button" onClick={onReject} className="inline-flex items-center gap-1.5 rounded-xl border border-rose-400/25 bg-rose-400/10 px-3 py-2 text-xs font-semibold text-rose-200 transition hover:bg-rose-400/15">
+            <ThumbsDown className="h-3.5 w-3.5" /> Reject
           </button>
         </div>
-      </div>
+      </section>
     );
   }
 
-  // Idle — just show the toggle button hint
-  if (!isActive && status === 'idle') {
+  if (status === 'idle') {
     return (
-      <button
-        onClick={onToggle}
-        className="mx-2 mb-1 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-violet-500/20 bg-violet-500/5 text-violet-400 hover:bg-violet-500/10 hover:border-violet-500/30 transition-all text-[11px] font-semibold"
-        title="Activate Mission Mode for complex multi-agent tasks"
-      >
-        <Zap className="w-3 h-3" />
-        Mission Mode
-      </button>
+      <section className={`flex items-center gap-3 rounded-2xl border px-3.5 py-3 transition-colors sm:px-4 ${
+        isActive
+          ? 'border-violet-400/25 bg-gradient-to-r from-violet-500/[0.11] via-violet-500/[0.05] to-transparent shadow-[0_8px_28px_rgba(91,33,182,0.08)]'
+          : 'border-border/70 bg-surface/75 hover:border-violet-400/25 hover:bg-surface-2/70'
+      }`}>
+        <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border ${
+          isActive ? 'border-violet-400/25 bg-violet-400/15 text-violet-200' : 'border-border bg-surface-2 text-foreground-3'
+        }`}>
+          <Zap className="h-4 w-4" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <h3 className="text-xs font-semibold text-foreground">Mission Mode</h3>
+            {isActive && <span className="rounded-full border border-violet-300/20 bg-violet-300/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-violet-200">Ready</span>}
+          </div>
+          <p className="mt-0.5 text-[11px] leading-4 text-foreground-3">
+            {isActive ? 'Complex requests can be planned across specialist agents.' : 'Coordinate specialist agents for larger, multi-step tasks.'}
+          </p>
+        </div>
+        <button
+          type="button"
+          aria-pressed={isActive}
+          onClick={onToggle}
+          className={`shrink-0 rounded-xl border px-3 py-2 text-[11px] font-semibold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/60 ${
+            isActive
+              ? 'border-violet-300/20 bg-violet-400/10 text-violet-100 hover:bg-violet-400/15'
+              : 'border-border/80 bg-surface-2/80 text-foreground-2 hover:border-violet-400/25 hover:text-foreground'
+          }`}
+        >
+          {isActive ? 'Turn off' : 'Enable'}
+        </button>
+      </section>
     );
   }
 
-  // Running / Complete
+  const running = status === 'queued' || status === 'classifying' || status === 'running';
+  const title = status === 'queued' ? 'Mission queued' :
+    status === 'classifying' ? 'Planning mission' :
+    status === 'running' ? 'Mission in progress' :
+    status === 'complete' ? 'Mission complete' :
+    status === 'delegated' ? 'Continuing in chat' : 'Mission failed';
+  const tone = status === 'error' ? 'rose' : status === 'complete' ? 'emerald' : status === 'delegated' ? 'blue' : 'violet';
+  const toneClasses = {
+    rose: 'border-rose-400/25 bg-rose-400/[0.06] text-rose-200',
+    emerald: 'border-emerald-400/20 bg-emerald-400/[0.05] text-emerald-200',
+    blue: 'border-blue-400/20 bg-blue-400/[0.05] text-blue-200',
+    violet: 'border-violet-400/20 bg-violet-400/[0.06] text-violet-200',
+  }[tone];
+
   return (
-    <div className={`mx-2 mb-2 rounded-xl border text-xs transition-all animate-fade-in ${
-      status === 'error'    ? 'border-red-500/30 bg-red-500/5' :
-      status === 'complete' ? 'border-emerald-500/20 bg-emerald-500/5' :
-                              'border-violet-500/20 bg-violet-500/5'
-    }`}>
-      {/* Header bar */}
-      <div className="flex items-center gap-2 px-3 py-2">
-        {status === 'running' || status === 'classifying' || status === 'queued'
-          ? <Loader2 className="w-3.5 h-3.5 text-violet-400 animate-spin flex-shrink-0" />
-          : status === 'complete'
-            ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
-            : status === 'error'
-              ? <XCircle className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />
-              : <Zap className="w-3.5 h-3.5 text-violet-400 flex-shrink-0" />}
-
-        <span className={`font-semibold ${
-          status === 'complete' ? 'text-emerald-300' :
-          status === 'error'   ? 'text-red-300'     : 'text-violet-300'
-        }`}>
-          {status === 'queued'        && '⚡ Queued...'}
-          {status === 'classifying'   && '⚡ Planning mission...'}
-          {status === 'running'       && '⚡ Mission Running'}
-          {status === 'complete'      && '✅ Mission Complete'}
-          {status === 'error'         && '❌ Mission Failed'}
+    <section className={`rounded-2xl border px-3.5 py-3 shadow-[0_8px_28px_rgba(0,0,0,0.15)] ${toneClasses}`}>
+      <div className="flex items-center gap-2.5">
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-black/10">
+          {running ? <Loader2 className="h-4 w-4 animate-spin" /> :
+            status === 'complete' ? <CheckCircle2 className="h-4 w-4" /> :
+            status === 'error' ? <XCircle className="h-4 w-4" /> : <Zap className="h-4 w-4" />}
         </span>
-
-        {missionId && (
-          <span className="text-[10px] font-mono text-foreground-3 bg-black/20 px-1.5 py-0.5 rounded">
-            {missionId.slice(0, 8)}
-          </span>
-        )}
-
-        {artifactCount > 0 && (
-          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-accent/15 text-accent border border-accent/20">
-            {artifactCount} artifact{artifactCount !== 1 ? 's' : ''}
-          </span>
-        )}
-
-        {/* Critic score */}
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-xs font-semibold">{title}</h3>
+            {missionId && <span className="rounded-md bg-black/15 px-1.5 py-0.5 font-mono text-[10px] text-foreground-3">{missionId.slice(0, 8)}</span>}
+            {artifactCount > 0 && <span className="rounded-full border border-accent/20 bg-accent/10 px-1.5 py-0.5 text-[10px] text-accent">{artifactCount} artifact{artifactCount === 1 ? '' : 's'}</span>}
+          </div>
+          <p className="mt-0.5 text-[11px] leading-4 text-foreground-3">
+            {error ? error : status === 'delegated' ? 'This request did not need multi-agent planning.' :
+              status === 'complete' ? 'The agent plan and execution trace are available above in the conversation.' :
+              status === 'error' ? 'Review the failure details below, then dismiss to try again.' :
+              'Specialist agents are working through the plan.'}
+          </p>
+        </div>
         {critcResult && (
-          <span className={`text-[10px] font-bold ml-auto ${
-            critcResult.score >= 0.8 ? 'text-emerald-400' :
-            critcResult.score >= 0.6 ? 'text-amber-400' : 'text-red-400'
-          }`}>
-            <Shield className="w-2.5 h-2.5 inline mr-0.5" />
-            {Math.round(critcResult.score * 100)}%
+          <span className="hidden items-center gap-1 rounded-lg bg-black/10 px-2 py-1 text-[10px] font-bold sm:inline-flex">
+            <Shield className="h-3 w-3" /> {Math.round(critcResult.score * 100)}%
           </span>
         )}
-
-        <div className="flex items-center gap-1 ml-auto">
-          {agentSteps.length > 0 && (
-            <button onClick={() => setCollapsed(p => !p)} className="text-foreground-3 hover:text-foreground">
-              {collapsed ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />}
-            </button>
-          )}
-          <button onClick={onDismiss} className="text-foreground-3 hover:text-foreground">
-            <X className="w-3 h-3" />
+        {agentSteps.length > 0 && (
+          <button type="button" onClick={() => setCollapsed((value) => !value)} aria-label={collapsed ? 'Show mission agents' : 'Hide mission agents'} aria-expanded={!collapsed} className="rounded-lg p-1.5 text-foreground-3 transition hover:bg-black/10 hover:text-foreground">
+            {collapsed ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
           </button>
-        </div>
+        )}
+        <button type="button" onClick={onDismiss} aria-label="Dismiss Mission Mode status" className="rounded-lg p-1.5 text-foreground-3 transition hover:bg-black/10 hover:text-foreground">
+          <X className="h-4 w-4" />
+        </button>
       </div>
-
-      {/* Agent pills */}
       {!collapsed && agentSteps.length > 0 && (
-        <div className="px-3 pb-2 flex flex-wrap gap-1.5">
-          {agentSteps.map((step, i) => (
-            <AgentPill key={`${step.agent}-${i}`} {...step} />
-          ))}
+        <div className="mt-3 flex flex-wrap gap-1.5 border-t border-white/5 pt-3">
+          {agentSteps.map((step, index) => <AgentPill key={`${step.agent}-${index}`} {...step} />)}
         </div>
       )}
-
-      {/* Error */}
-      {status === 'error' && error && (
-        <p className="px-3 pb-2 text-[10px] text-red-400">{error.slice(0, 200)}</p>
-      )}
-    </div>
+      {status === 'error' && error && <p className="mt-2 border-t border-rose-400/10 pt-2 text-xs leading-relaxed text-rose-200/90">{error.slice(0, 300)}</p>}
+    </section>
   );
 }
 

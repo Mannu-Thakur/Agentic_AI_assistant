@@ -60,10 +60,17 @@ class VectorStore:
         if cls._lock is None:
             cls._lock = threading.Lock()
         with cls._lock:
-            if not cls._instance:
-                cls._instance = super().__new__(cls)
-                cls._instance._init_client()
-        return cls._instance
+            instance = cls._instance
+            if instance is not None and getattr(instance, "client", None) is not None:
+                return instance
+
+            # Publish the singleton only after Chroma initializes successfully.
+            # If PersistentClient raises during a cold start, storing the partial
+            # object here makes every later request fail with "no attribute client".
+            candidate = instance if instance is not None else super().__new__(cls)
+            candidate._init_client()
+            cls._instance = candidate
+            return candidate
 
     def _init_client(self):
         os.makedirs(settings.VECTOR_DB_DIR, exist_ok=True)
