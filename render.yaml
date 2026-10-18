@@ -42,6 +42,15 @@ services:
         value: https://agentic-ai-assistant-eight.vercel.app
       - key: BACKEND_CORS_ORIGINS
         value: '["https://agentic-ai-assistant-eight.vercel.app","https://ai-assistant-frontend.onrender.com","http://localhost:5173","http://localhost:3000"]'
+      # This is a native Python service, not the Docker image that uses /app.
+      # /tmp is writable at runtime; configure a Render disk before using these
+      # paths for data that must survive a deploy or instance restart.
+      - key: VECTOR_DB_DIR
+        value: /tmp/agentic-ai-assistant/vector_db
+      - key: UPLOAD_DIR
+        value: /tmp/agentic-ai-assistant/uploads
+      - key: ARTIFACT_DIR
+        value: /tmp/agentic-ai-assistant/artifacts
       - key: GOOGLE_REDIRECT_URI
         value: https://agentic-ai-assistant-eight.vercel.app/auth/google/callback
       - key: GITHUB_REDIRECT_URI
