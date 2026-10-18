@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import List, Optional, Any, Union
 from pydantic import AnyHttpUrl, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from app.core.storage_paths import resolve_storage_path
 
 logger = logging.getLogger("app.core.config")
 
@@ -128,7 +129,7 @@ class Settings(BaseSettings):
                 return f"sqlite:///{abs_db_path.as_posix()}"
         return v
 
-    @field_validator("VECTOR_DB_DIR", "UPLOAD_DIR", mode="before")
+    @field_validator("VECTOR_DB_DIR", "UPLOAD_DIR", "ARTIFACT_DIR", mode="before")
     @classmethod
     def _canonicalize_storage_paths(cls, v: Any) -> str:
         if isinstance(v, str) and not os.path.isabs(v):
@@ -204,7 +205,7 @@ class Settings(BaseSettings):
     WEB_SEARCH_MAX_RESULTS:    int = 8      # max results to fetch per search
 
     # Vector DB
-    VECTOR_DB_DIR: str = "./vector_db"   # overridden to /app/vector_db in Docker
+    VECTOR_DB_DIR: str = "./vector_db"   # deployment-specific; falls back if unwritable
 
     # OAuth
     GOOGLE_CLIENT_ID: Optional[str] = None
@@ -217,9 +218,9 @@ class Settings(BaseSettings):
 
     # File upload constraints
     MAX_UPLOAD_SIZE_MB: int = 20
-    UPLOAD_DIR: str = "./uploads"         # overridden to /app/uploads in Docker
+    UPLOAD_DIR: str = "./uploads"         # deployment-specific; falls back if unwritable
     # Generated agent files use a separate, persistent, per-user store.
-    ARTIFACT_DIR: str = "./artifacts"     # overridden to /app/artifacts in Docker
+    ARTIFACT_DIR: str = "./artifacts"     # deployment-specific; falls back if unwritable
     MAX_ARTIFACT_SIZE_MB: int = 20
 
     # OCR — Tesseract binary path (auto-detected if blank)
@@ -266,6 +267,20 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _post_init(self) -> "Settings":
+        # Render's native Python runtime cannot write to the Docker image's
+        # conventional /app path. Keep usable configured directories and fall
+        # back to the runtime temp directory when a stale path is unwritable.
+        for setting_name, storage_name in (
+            ("VECTOR_DB_DIR", "vector_db"),
+            ("UPLOAD_DIR", "uploads"),
+            ("ARTIFACT_DIR", "artifacts"),
+        ):
+            setattr(
+                self,
+                setting_name,
+                resolve_storage_path(getattr(self, setting_name), storage_name),
+            )
+
         # ── Database engine enforcement ─────────────────────────────────────
         # SQLite cannot handle concurrent writes from multiple async workers.
         # In staging and production environments we require PostgreSQL.
