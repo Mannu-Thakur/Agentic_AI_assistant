@@ -1072,6 +1072,34 @@ export default function ChatPage() {
   // ── Toast notification system ─────────────────────────────────
   const { toasts, addToast, removeToast } = useToast();
 
+  // Remote MCP actions are never auto-executed.  The backend emits a durable
+  // one-time approval ID; this native confirmation is the user gesture that
+  // permits the separate authenticated approval request.
+  const handleToolApproval = useCallback(async (approval: any) => {
+    if (!approval?.id || !token) return;
+    const details = JSON.stringify(approval.arguments || {}, null, 2);
+    const approved = window.confirm(
+      `Approve external action "${approval.tool_name}" on ${approval.server_name || 'a connected MCP server'}?\n\nArguments:\n${details}\n\nThis external request has not yet been sent. Approving it will invoke the connected service.`
+    );
+    const endpoint = approved ? 'approve' : 'reject';
+    try {
+      const response = await fetch(`${BASE_URL}/tool-approvals/${approval.id}/${endpoint}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
+      addToast(
+        approved
+          ? `External action completed: ${String(payload.result || '').slice(0, 160)}`
+          : 'External action rejected. No change was made.',
+        approved ? 'success' : 'info',
+      );
+    } catch (error: any) {
+      addToast(`Could not process action confirmation: ${error?.message || 'unknown error'}`, 'error');
+    }
+  }, [token, addToast]);
+
   // ── Core UI state ────────────────────────────────────────────
   const [convoOpen, setConvoOpen]                 = useState(true);
   const [showUserMenu, setShowUserMenu]           = useState(false);
@@ -1197,14 +1225,12 @@ export default function ChatPage() {
   // which floods the picker with 300+ OpenRouter entries.
   const CURATED_MODELS = [
     // Google Gemini — current models (Oct 2026)
-    { id: 'gemini-3.5-flash',      name: 'Gemini 3.5 Flash',      provider: 'Google Gemini', apiProvider: 'google', icon: Sparkles, badge: 'Recommended', desc: 'Fast, intelligent & highly capable' },
-    { id: 'gemini-3.5-flash-lite', name: 'Gemini 3.5 Flash Lite', provider: 'Google Gemini', apiProvider: 'google', icon: Cpu,      badge: 'Fastest',     desc: 'Lightweight & ultra-low latency' },
-    { id: 'gemini-3.7-flash',      name: 'Gemini 3.7 Flash',      provider: 'Google Gemini', apiProvider: 'google', icon: Sparkles, badge: 'Latest',       desc: 'Balanced performance & quality' },
-    { id: 'gemini-3.8-flash',      name: 'Gemini 3.8 Flash',      provider: 'Google Gemini', apiProvider: 'google', icon: Sparkles, badge: 'Preview',      desc: 'Cutting-edge Gemini preview model' },
-    // Groq (Free, Fast) — current models (Oct 2026)
-    { id: 'meta-llama/llama-4-scout-17b-16e-instruct', name: 'Llama 4 Scout 17B', provider: 'Groq', apiProvider: 'groq', icon: Cpu, badge: 'Fast & Free', desc: 'Multimodal Llama 4 Scout on Groq LPU' },
-    { id: 'llama-3.1-8b-instant',  name: 'Llama 3.1 8B',          provider: 'Groq',          apiProvider: 'groq',   icon: Cpu,      badge: 'Fastest Free', desc: 'Ultra-fast low-latency model on Groq' },
-    { id: 'openai/gpt-oss-120b',   name: 'GPT-OSS 120B (Groq)',   provider: 'Groq',          apiProvider: 'groq',   icon: Cpu,      badge: 'Powerful',     desc: 'Large open-source GPT model on Groq' },
+    { id: 'gemini-3.8-flash',      name: 'Gemini 3.8 Flash',      provider: 'Google Gemini', apiProvider: 'google', icon: Sparkles, badge: 'Recommended',   desc: 'Stable multimodal model for production' },
+    { id: 'gemini-3.6-flash',      name: 'Gemini 3.6 Flash',      provider: 'Google Gemini', apiProvider: 'google', icon: Cpu,      badge: 'Fast',          desc: 'Stable fast fallback model' },
+    { id: 'gemini-3.5-flash-lite', name: 'Gemini 3.5 Flash-Lite', provider: 'Google Gemini', apiProvider: 'google', icon: Cpu,      badge: 'Lowest cost',   desc: 'High-throughput lightweight model' },
+    // Groq production models (Oct 2026)
+    { id: 'openai/gpt-oss-20b',    name: 'GPT-OSS 20B (Groq)',    provider: 'Groq', apiProvider: 'groq', icon: Cpu, badge: 'Fast', desc: 'Fast production model with tool support' },
+    { id: 'openai/gpt-oss-120b',   name: 'GPT-OSS 120B (Groq)',   provider: 'Groq', apiProvider: 'groq', icon: Cpu, badge: 'Powerful', desc: 'High-capability production model with tool support' },
     // OpenAI — exposed when a server or user OpenAI key is verified. Without
     // this entry a valid OpenAI-only installation leaves the chat locked.
     { id: 'gpt-4o-mini',           name: 'GPT-4o mini',           provider: 'OpenAI',        apiProvider: 'openai', icon: Sparkles, badge: 'Reliable',     desc: 'Fast general-purpose model with document support' },
@@ -1273,11 +1299,11 @@ export default function ChatPage() {
     const isStale = !curatedIds.has(activeModel);
 
     if (isStale) {
-      // Snap immediately to gemini-2.0-flash (or first verified model)
+      // Snap immediately to a current supported model (or first verified model).
       if (models.length > 0) {
         setActiveModel(models[0].id);
       } else {
-        setActiveModel('gemini-3.5-flash');
+        setActiveModel('gemini-3.8-flash');
       }
       return;
     }
@@ -1978,6 +2004,8 @@ export default function ChatPage() {
               });
             } else if (parsed.event === 'metrics') {
               updateMessage(asstMsgId, { developer_metrics: parsed.metrics });
+            } else if (parsed.event === 'tool_approval_required') {
+              await handleToolApproval(parsed.approval);
             } else if (parsed.event === 'title') {
               const { chats: liveChats, updateChat: liveUpdateChat } = useChatStore.getState();
               const liveChat = liveChats.find((c: any) => c.id === chatId);
@@ -2337,6 +2365,8 @@ export default function ChatPage() {
               });
             } else if (parsed.event === 'metrics') {
               updateMessage(asstId, { developer_metrics: parsed.metrics });
+            } else if (parsed.event === 'tool_approval_required') {
+              await handleToolApproval(parsed.approval);
             } else if (parsed.event === 'error') {
               asstText += `\n\n*[Error: ${parsed.detail || 'Failed to generate response'}]*`;
               updateMessage(asstId, { content: asstText });
@@ -2475,6 +2505,8 @@ export default function ChatPage() {
               });
             } else if (p.event === 'metrics') {
               updateMessage(retryAsstId, { developer_metrics: p.metrics });
+            } else if (p.event === 'tool_approval_required') {
+              await handleToolApproval(p.approval);
             } else if (p.event === 'error') {
               retryAsstText += `\n\n*[Error: ${p.detail || 'Failed to generate response'}]*`;
               updateMessage(retryAsstId, { content: retryAsstText });

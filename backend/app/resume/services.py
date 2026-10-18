@@ -196,7 +196,8 @@ class ResumeService:
         resume = req.resume
 
         changes_summary = []
-        model_used = req.model or "gemini-2.0-flash"
+        from app.core.config import settings
+        model_used = req.model or settings.GEMINI_MODEL
 
         role = jd.role or "Senior Full Stack AI Engineer"
         company = jd.company or "Target Company"

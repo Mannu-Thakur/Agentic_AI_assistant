@@ -1,0 +1,4 @@
+# Intentionally minimal runtime for the isolated code-execution sidecar.
+fastapi==0.115.9
+uvicorn[standard]==0.34.0
+pydantic==2.13.5

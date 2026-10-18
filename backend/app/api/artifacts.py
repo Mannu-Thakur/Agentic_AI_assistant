@@ -55,7 +55,7 @@ async def list_artifacts(
     return {
         "artifacts": [a.to_dict() for a in arts],
         "total": len(arts),
-        "stats": artifact_store.stats(),
+        "stats": artifact_store.stats_for_user(user_id),
     }
 
 

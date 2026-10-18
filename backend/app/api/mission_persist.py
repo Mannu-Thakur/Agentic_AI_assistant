@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import get_current_user
 from app.core.database import get_db
+from app.core.config import settings
 from app.services.chat_service import ChatService
 
 logger = logging.getLogger("api.mission_persist")
@@ -32,7 +33,7 @@ class PersistMissionRequest(BaseModel):
     chat_id:      str
     query:        str
     response:     str
-    model:        str              = "gemini-2.0-flash"
+    model:        str              = settings.GEMINI_MODEL
     critic_score: float            = 0.8
     agent_names:  List[str]        = []
     artifacts:    List[Dict]       = []

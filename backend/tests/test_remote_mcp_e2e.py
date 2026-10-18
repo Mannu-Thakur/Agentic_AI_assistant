@@ -145,7 +145,8 @@ async def test_mcp_http_client_full_rpc_cycle():
 
         return Response(status_code=200, json=body, headers=resp_headers, request=req_obj)
 
-    with patch("httpx.AsyncClient.post", side_effect=mock_post):
+    with patch("app.tools.mcp_client.assert_public_dns_resolution", new=AsyncMock(return_value=mock_url)), \
+         patch("httpx.AsyncClient.post", side_effect=mock_post):
         # 1. Connect (initialize + notifications/initialized)
         await client.connect()
         assert client.session_id == "sess-xyz-12345"
@@ -194,7 +195,8 @@ async def test_mcp_client_error_handling():
             request=httpx.Request("POST", str(url))
         )
 
-    with patch("httpx.AsyncClient.post", side_effect=mock_post_err):
+    with patch("app.tools.mcp_client.assert_public_dns_resolution", new=AsyncMock(return_value=client.url)), \
+         patch("httpx.AsyncClient.post", side_effect=mock_post_err):
         with pytest.raises(Exception) as exc_info:
             await client.call_tool("add_expense", {"amount": 500})
         assert "PostgreSQL connection failed" in str(exc_info.value)
@@ -234,6 +236,7 @@ async def test_tool_registry_remote_server_registration():
          patch.object(registry, "sync_remote_servers", new=AsyncMock(return_value=None)), \
          patch("app.tools.registry.McpHttpClient", return_value=mock_client), \
          patch("app.tools.mcp_client.McpHttpClient", return_value=mock_client), \
+         patch("app.tools.registry.assert_public_dns_resolution", new=AsyncMock(side_effect=lambda url, **_kwargs: url)), \
          patch("app.tools.registry.AsyncSessionLocal", mock_async_session_local), \
          patch("app.tools.registry.AuditService") as mock_audit, \
          patch("app.tools.registry.metrics_collector"):
@@ -246,12 +249,14 @@ async def test_tool_registry_remote_server_registration():
         assert len(reg_tools) == 8
 
         all_names = registry.get_all_mcp_tool_names()
-        assert "add_expense" in all_names
-        assert "list_expenses" in all_names
-        assert "top_merchants" in all_names
+        assert "remote_expenseserver__add_expense" in all_names
+        assert "remote_expenseserver__list_expenses" in all_names
+        assert "remote_expenseserver__top_merchants" in all_names
 
         # Call tool through registry — routes to mock_client.call_tool, no real I/O
-        res = await registry.call_tool("list_expenses", {})
+        blocked = await registry.call_tool("remote_expenseserver__list_expenses", {})
+        assert "requires your explicit confirmation" in blocked
+        res = await registry.call_tool("remote_expenseserver__list_expenses", {}, approved=True)
         assert res == "Execution Success"
 
         # Clean up inside the patch context so mock_client.close() handles unregister
@@ -299,6 +304,7 @@ async def test_acceptance_criteria_prompts_intent_and_whitelisting():
          patch.object(registry, "sync_remote_servers", new=AsyncMock(return_value=None)), \
          patch("app.tools.registry.McpHttpClient", return_value=mock_client), \
          patch("app.tools.mcp_client.McpHttpClient", return_value=mock_client), \
+         patch("app.tools.registry.assert_public_dns_resolution", new=AsyncMock(side_effect=lambda url, **_kwargs: url)), \
          patch("app.agent.nodes._call_llm_judge", new=AsyncMock(return_value={"intent": "MCP_TOOL"})):
 
         registry.is_initialized = True
@@ -311,9 +317,13 @@ async def test_acceptance_criteria_prompts_intent_and_whitelisting():
                 "uploaded_file_paths": [],
                 "is_ambiguous": False,
             }
-            res = await classify_intent_node(state)
+            res = await classify_intent_node(
+                state,
+                {"configurable": {"tool_registry": registry}},
+            )
             assert res["intent"] == INTENT_MCP_TOOL, f"Failed intent classification for prompt: {user_prompt}"
-            assert expected_tool in res["allowed_tools"], f"Expected {expected_tool} in allowed_tools for prompt: {user_prompt}"
+            namespaced_tool = f"remote_expenseserver__{expected_tool}"
+            assert namespaced_tool in res["allowed_tools"], f"Expected {namespaced_tool} in allowed_tools for prompt: {user_prompt}"
 
         # Clean up inside the patch context so mock_client.close() handles unregister
         await registry.unregister_remote_server("remote_expenseserver")

@@ -5,11 +5,20 @@ import logging
 from typing import Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from app.api.auth import get_current_user
+from app.api.auth import RoleChecker
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/git", tags=["Git Integration"])
+
+
+def _require_git_integration(current_user=Depends(RoleChecker(["admin"]))):
+    """Keep host-repository inspection out of the public application surface."""
+    if not settings.ENABLE_GIT_INTEGRATION:
+        # Do not advertise deployment-host capabilities to ordinary users.
+        raise HTTPException(status_code=404, detail="Git integration is not enabled")
+    return current_user
 
 
 class GitStatusResponse(BaseModel):
@@ -54,7 +63,7 @@ def _run_git_cmd(args: list, cwd: Optional[str] = None) -> tuple[int, str, str]:
 
 
 @router.get("/status", response_model=GitStatusResponse)
-async def get_git_status(current_user=Depends(get_current_user)):
+async def get_git_status(current_user=Depends(_require_git_integration)):
     """Inspect local repository git status, current branch, and clean state."""
     git_installed = bool(shutil.which("git"))
     if not git_installed:
@@ -101,7 +110,7 @@ async def get_git_status(current_user=Depends(get_current_user)):
 
 
 @router.post("/commit-suggestion", response_model=CommitSuggestionResponse)
-async def suggest_commit_message(current_user=Depends(get_current_user)):
+async def suggest_commit_message(current_user=Depends(_require_git_integration)):
     """Generate an intelligent conventional commit suggestion from staged diffs."""
     git_installed = bool(shutil.which("git"))
     if not git_installed:

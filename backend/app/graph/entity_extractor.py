@@ -229,7 +229,7 @@ async def extract_entities_from_chunk(
             provider = GroqProvider()
             result = await provider.chat(
                 messages=[{"role": "user", "content": prompt}],
-                model="llama-3.1-8b-instant",  # cheapest SLM for extraction
+                model=settings.GROQ_MODEL,
                 max_tokens=1500,
                 temperature=0.1,
                 stream=False,
@@ -241,7 +241,7 @@ async def extract_entities_from_chunk(
             provider = GeminiProvider()
             result = await provider.chat(
                 messages=[{"role": "user", "content": prompt}],
-                model="gemini-2.0-flash-lite",
+                model=settings.GEMINI_MODEL,
                 max_tokens=1500,
                 temperature=0.1,
                 stream=False,

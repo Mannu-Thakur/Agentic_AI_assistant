@@ -143,7 +143,8 @@ class DocumentAgent(BaseAgent):
         doc_type   = task_input.get("doc_type", "pptx")
         user_id    = task_input.get("user_id", "anon")
         session_id = task_input.get("session_id", "default")
-        model      = task_input.get("active_model", "gemini-2.0-flash")
+        from app.core.config import settings
+        model      = task_input.get("active_model", settings.GEMINI_MODEL)
         api_keys   = task_input.get("api_keys", {})
 
         logger.info(f"[DocumentAgent] type={doc_type} query={query[:60]!r}")

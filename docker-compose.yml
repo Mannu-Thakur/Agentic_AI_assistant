@@ -94,8 +94,14 @@ services:
       # Data directory paths must match the volume mount points below
       VECTOR_DB_DIR:  /app/vector_db
       UPLOAD_DIR:     /app/uploads
+      ARTIFACT_DIR:   /app/artifacts
       # Clear Windows Tesseract path — Linux binary is auto-detected at /usr/bin/tesseract
       TESSERACT_CMD:  /usr/bin/tesseract
+      # User code is only delegated to the internal sandbox.  It remains off
+      # unless an operator opts in and supplies a shared secret.
+      ENABLE_CODE_EXECUTION: ${ENABLE_CODE_EXECUTION:-false}
+      CODE_SANDBOX_URL: http://sandbox:8001
+      SANDBOX_SHARED_SECRET: ${SANDBOX_SHARED_SECRET:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -105,15 +111,62 @@ services:
         condition: service_healthy
         required: false
     volumes:
-      - ./backend/app:/app/app
       - vector_data:/app/vector_db
       - upload_data:/app/uploads
+      - artifact_data:/app/artifacts
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=128m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - default
+      - sandbox_net
     healthcheck:
       test:         ["CMD-SHELL", "curl -f http://localhost:8000/api/v1/health || exit 1"]
       interval:     15s
       timeout:      5s
       start_period: 30s
       retries:      3
+
+  # ── Isolated code-execution sidecar ───────────────────────────────────────
+  # Starts only when explicitly requested:
+  #   SANDBOX_SHARED_SECRET=<random> ENABLE_CODE_EXECUTION=true \
+  #     docker compose --profile code-execution up --build -d
+  # It has no host port, no application data, no writable root filesystem, and
+  # no Internet-facing network.  The public backend can reach it over the
+  # private sandbox_net only.
+  sandbox:
+    profiles: ["code-execution"]
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.sandbox
+    restart: unless-stopped
+    environment:
+      SANDBOX_SHARED_SECRET: ${SANDBOX_SHARED_SECRET:-}
+      PORT: 8001
+    expose:
+      - "8001"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 32
+    mem_limit: 192m
+    cpus: 0.50
+    networks:
+      - sandbox_net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=3).read()"]
+      interval: 15s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
 
   # ── Frontend ───────────────────────────────────────────────────────────────
   frontend:
@@ -144,7 +197,13 @@ volumes:
     driver: local
   upload_data:
     driver: local
+  artifact_data:
+    driver: local
   neo4j_data:
     driver: local
   neo4j_logs:
     driver: local
+
+networks:
+  sandbox_net:
+    internal: true

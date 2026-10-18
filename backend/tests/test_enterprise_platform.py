@@ -99,7 +99,7 @@ class TestModelProfiles:
             from app.routing.model_profiles import get_all_profiles
             profiles = get_all_profiles()
             if isinstance(profiles, dict):
-                assert "llama-3.1-8b-instant" in profiles or len(profiles) > 0
+                assert "openai/gpt-oss-20b" in profiles or len(profiles) > 0
             else:
                 assert len(profiles) > 0
         except ImportError:
@@ -239,7 +239,7 @@ class TestTelemetryRecord:
             request_id="test-001",
             user_id="user-1",
             chat_id="chat-1",
-            model_used="llama-3.1-8b-instant",
+            model_used="openai/gpt-oss-20b",
             model_tier="slm",
             created_at=time.time(),
         )

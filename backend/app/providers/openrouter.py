@@ -176,7 +176,7 @@ class OpenRouterProvider(BaseLLMProvider):
             )
 
         # ── Deprecated model remapping ────────────────────────────────────────
-        model = model or os.getenv("DEFAULT_OPENROUTER_MODEL") or "google/gemini-2.0-flash-001"
+        model = model or os.getenv("DEFAULT_OPENROUTER_MODEL") or settings.OPENROUTER_MODEL
         model = registry.remap_model(model)
         model = self._normalize_model_id(model)
 
@@ -346,7 +346,7 @@ class OpenRouterProvider(BaseLLMProvider):
             )
 
         # ── Deprecated model remapping ────────────────────────────────────────
-        model = model or os.getenv("DEFAULT_OPENROUTER_MODEL") or "google/gemini-2.0-flash-001"
+        model = model or os.getenv("DEFAULT_OPENROUTER_MODEL") or settings.OPENROUTER_MODEL
         model = registry.remap_model(model)
         model = self._normalize_model_id(model)
 

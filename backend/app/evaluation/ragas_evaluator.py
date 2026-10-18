@@ -60,7 +60,7 @@ async def run_ragas_evaluation(
             ragas_llm = ChatOpenAI(model="gpt-4o-mini", api_key=settings.OPENAI_API_KEY)
         elif settings.GROQ_API_KEY:
             from langchain_groq import ChatGroq
-            ragas_llm = ChatGroq(model="llama-3.1-8b-instant", groq_api_key=settings.GROQ_API_KEY)
+            ragas_llm = ChatGroq(model=settings.GROQ_MODEL, groq_api_key=settings.GROQ_API_KEY)
 
         if ragas_llm is None:
             raise ValueError("No LLM configured for RAGAS")

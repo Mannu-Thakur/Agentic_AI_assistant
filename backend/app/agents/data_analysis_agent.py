@@ -60,7 +60,8 @@ class DataAnalysisAgent(BaseAgent):
         data_path  = task_input.get("data_path", "")
         user_id    = task_input.get("user_id", "anon")
         session_id = task_input.get("session_id", "default")
-        model      = task_input.get("active_model", "gemini-2.0-flash")
+        from app.core.config import settings
+        model      = task_input.get("active_model", settings.GEMINI_MODEL)
         api_keys   = task_input.get("api_keys", {})
 
         logger.info(f"[DataAnalysisAgent] Query: {query[:60]!r}")

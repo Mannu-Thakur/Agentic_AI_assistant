@@ -60,6 +60,15 @@ services:
         sync: false
       - key: EXA_API_KEY
         sync: false
+      # Render's native Python service has no isolated sandbox sidecar.  Keep
+      # execution fail-closed until a separately hardened sandbox is deployed.
+      - key: ENABLE_CODE_EXECUTION
+        value: "false"
+      - key: ENABLE_ADMIN_DATABASE_INSPECTOR
+        value: "false"
+      # Never let the public web process inspect its deployment checkout.
+      - key: ENABLE_GIT_INTEGRATION
+        value: "false"
       - key: GOOGLE_CLIENT_ID
         sync: false
       - key: GOOGLE_CLIENT_SECRET

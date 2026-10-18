@@ -12,6 +12,9 @@ class AgentState(TypedDict):
     metrics: Dict[str, Any]
     response_text: str
     tool_calls: Optional[List[Dict[str, Any]]]
+    # Durable confirmation records created when an external MCP action may
+    # change state.  The API streams these to the authenticated client.
+    pending_tool_approvals: List[Dict[str, Any]]
     steps: List[str]
 
     # ── Intent Classifier (NEW — P0 fix) ─────────────────────────
@@ -222,7 +225,7 @@ class AgentState(TypedDict):
     # ── Intelligent Routing ───────────────────────────────────────────────────
     # Tier selected by the model router: "slm" | "llm-medium" | "llm-strong" | "unknown"
     model_tier: Optional[str]
-    # The exact model identifier used for this request (e.g. "gemini-2.0-flash")
+    # The exact model identifier used for this request (for example, "gemini-3.8-flash")
     model_used: Optional[str]
     # The provider that served the request (e.g. "google", "groq", "openai")
     provider_used: Optional[str]

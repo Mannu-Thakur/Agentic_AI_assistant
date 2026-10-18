@@ -200,7 +200,8 @@ async def supervisor_classify_node(state: MissionState, config: RunnableConfig) 
     """Classify whether the query needs Mission Mode or simple pass-through."""
     t0 = time.perf_counter()
     query       = state.get("query", "")
-    model       = state.get("active_model", "gemini-2.0-flash")
+    from app.core.config import settings
+    model       = state.get("active_model", settings.GEMINI_MODEL)
     api_keys    = state.get("api_keys", {})
     retry_hint  = state.get("critic_retry_hint", "")
 
@@ -405,7 +406,8 @@ async def critic_verification_node(state: MissionState, config: RunnableConfig) 
     merged  = state.get("merged_content", "")
     sources = state.get("sources", [])
     query   = state.get("query", "")
-    model   = state.get("active_model", "gemini-2.0-flash")
+    from app.core.config import settings
+    model   = state.get("active_model", settings.GEMINI_MODEL)
     api_keys = state.get("api_keys", {})
     trace   = list(state.get("supervisor_trace") or [])
 
@@ -458,7 +460,8 @@ async def synthesizer_node(state: MissionState, config: RunnableConfig) -> Dict:
     t0 = time.perf_counter()
     merged   = state.get("merged_content", "")
     query    = state.get("query", "")
-    model    = state.get("active_model", "gemini-2.0-flash")
+    from app.core.config import settings
+    model    = state.get("active_model", settings.GEMINI_MODEL)
     api_keys = state.get("api_keys", {})
     critic_feedback = state.get("critic_feedback", "")
     trace = list(state.get("supervisor_trace") or [])

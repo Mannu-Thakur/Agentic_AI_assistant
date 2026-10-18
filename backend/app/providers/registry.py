@@ -40,59 +40,53 @@ logger = logging.getLogger("app.providers.registry")
 # Maps truly retired / obsolete model IDs to their supported replacement.
 # Providers call remap_model() before constructing the API request URL.
 DEPRECATED_MODELS: Dict[str, str] = {
-    # ── Gemini — ALL 1.x and 2.x models shut down (June 1, 2026) ─────────────
-    # Remap everything to gemini-3.5-flash (current default)
-    "gemini-1.0-pro":                      "gemini-3.5-flash",
-    "gemini-pro":                          "gemini-3.5-flash",
-    "gemini-2.0-flash":                    "gemini-3.5-flash",
-    "gemini-2.0-flash-exp":                "gemini-3.5-flash",
-    "gemini-2.0-flash-lite":               "gemini-3.5-flash-lite",
-    "gemini-1.5-flash":                    "gemini-3.5-flash",
-    "gemini-1.5-pro":                      "gemini-3.5-flash",
-    "gemini-1.5-flash-latest":             "gemini-3.5-flash",
-    "gemini-2.5-flash":                    "gemini-3.5-flash",
-    "gemini-2.5-pro":                      "gemini-3.5-flash",
-    "gemini-3.1-flash-lite":               "gemini-3.5-flash-lite",
-    "gemini-flash-lite-latest":            "gemini-3.5-flash-lite",
-    "gemini-3.8-flash":                    "gemini-3.5-flash",
-    "gemini-3.7-flash":                    "gemini-3.5-flash",
-    "google/gemini-2.0-flash":             "gemini-3.5-flash",
-    "google/gemini-2.0-flash-lite":        "gemini-3.5-flash-lite",
-    "google/gemini-flash-lite-latest":     "gemini-3.5-flash-lite",
-    "google/gemini-2.0-flash-001":         "gemini-3.5-flash",
+    # ── Gemini legacy aliases ────────────────────────────────────────────────
+    # Never map a newer ID backward.  The deployment can override
+    # GEMINI_MODEL after its own account-level startup validation.
+    "gemini-1.0-pro":                      settings.GEMINI_MODEL,
+    "gemini-pro":                          settings.GEMINI_MODEL,
+    "gemini-2.0-flash":                    settings.GEMINI_MODEL,
+    "gemini-2.0-flash-exp":                settings.GEMINI_MODEL,
+    "gemini-2.0-flash-lite":               settings.GEMINI_MODEL,
+    "gemini-1.5-flash":                    settings.GEMINI_MODEL,
+    "gemini-1.5-pro":                      settings.GEMINI_MODEL,
+    "gemini-1.5-flash-latest":             settings.GEMINI_MODEL,
+    "gemini-3.7-flash":                    settings.GEMINI_MODEL,
+    "gemini-3.5-flash":                    settings.GEMINI_MODEL,
+    "google/gemini-2.0-flash":             settings.GEMINI_MODEL,
+    "google/gemini-2.0-flash-lite":        settings.GEMINI_MODEL,
+    "google/gemini-2.0-flash-001":         settings.GEMINI_MODEL,
 
     # ── Groq — deprecated / alias mappings ───────────────────────────────────
-    # llama-3.3-70b-versatile decommissioned August 16, 2026
-    "llama-3.3-70b-versatile":             "meta-llama/llama-4-scout-17b-16e-instruct",
-    "llama3-70b-8192":                     "meta-llama/llama-4-scout-17b-16e-instruct",
-    "llama-3-70b":                         "meta-llama/llama-4-scout-17b-16e-instruct",
-    "llama-3.1-70b-versatile":             "meta-llama/llama-4-scout-17b-16e-instruct",
-    "llama2-70b-4096":                     "meta-llama/llama-4-scout-17b-16e-instruct",
-    "llama-3.2-90b-vision-preview":        "meta-llama/llama-4-scout-17b-16e-instruct",
-    "llama3-8b-8192":                      "llama-3.1-8b-instant",
-    "llama-3-8b":                          "llama-3.1-8b-instant",
-    "llama-3.2-11b-vision-preview":        "llama-3.1-8b-instant",
-    "groq/compound-mini":                  "llama-3.1-8b-instant",
-    # llama-4-scout aliases
-    "llama-4-scout-17b-16e-instruct":      "meta-llama/llama-4-scout-17b-16e-instruct",
-    "mixtral-8x7b-32768":                  "meta-llama/llama-4-scout-17b-16e-instruct",
+    # Active Groq production replacements as of October 2026. Deprecated and
+    # decommissioned IDs stay here only for compatibility with stored choices.
+    "llama-3.1-8b-instant":                "openai/gpt-oss-20b",
+    "llama-3.3-70b-versatile":             "openai/gpt-oss-120b",
+    "meta-llama/llama-4-scout-17b-16e-instruct": "openai/gpt-oss-120b",
+    "groq/compound":                       "openai/gpt-oss-20b",
+    "groq/compound-mini":                  "openai/gpt-oss-20b",
+    "llama3-70b-8192":                     "openai/gpt-oss-120b",
+    "llama-3-70b":                         "openai/gpt-oss-120b",
+    "llama-3.1-70b-versatile":             "openai/gpt-oss-120b",
+    "llama2-70b-4096":                     "openai/gpt-oss-120b",
+    "llama-3.2-90b-vision-preview":        "openai/gpt-oss-20b",
+    "llama3-8b-8192":                      "openai/gpt-oss-20b",
+    "llama-3-8b":                          "openai/gpt-oss-20b",
+    "llama-3.2-11b-vision-preview":        "openai/gpt-oss-20b",
+    "mixtral-8x7b-32768":                  "openai/gpt-oss-120b",
     # deepseek removed from Groq
-    "deepseek-r1-distill-llama-70b":       "llama-3.1-8b-instant",
+    "deepseek-r1-distill-llama-70b":       "openai/gpt-oss-120b",
 }
 
 # ── Known-good model sets per provider ────────────────────────────────────────
 # Current as of October 2026. These protect models from being quarantined.
 KNOWN_MODELS: Dict[str, List[str]] = {
     "gemini": [
-        "gemini-3.5-flash",
-        "gemini-3.5-flash-lite",
-        "gemini-3.7-flash",
         "gemini-3.8-flash",
-        "gemini-3.1-pro-preview",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash-lite",
     ],
     "groq": [
-        "meta-llama/llama-4-scout-17b-16e-instruct",
-        "llama-3.1-8b-instant",
         "openai/gpt-oss-120b",
         "openai/gpt-oss-20b",
     ],

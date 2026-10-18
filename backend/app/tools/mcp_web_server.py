@@ -154,8 +154,13 @@ def handle_web_search(query: str, max_results: int = 5) -> str:
 
 def handle_web_fetch(url: str, max_chars: int = 4000) -> str:
     """Fetches a URL and returns clean readable text."""
-    if not url.startswith("http://") and not url.startswith("https://"):
-        url = "https://" + url
+    try:
+        from app.core.config import settings
+        from app.tools.network_safety import assert_public_dns_resolution
+        allow_http = settings.ENVIRONMENT == "development" and settings.ALLOW_INSECURE_MCP_IN_DEVELOPMENT
+        url = asyncio.run(assert_public_dns_resolution(url, allow_http=allow_http))
+    except Exception as exc:
+        return f"Blocked unsafe webpage URL: {exc}"
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -182,8 +187,13 @@ def handle_web_fetch(url: str, max_chars: int = 4000) -> str:
 
 def handle_web_extract(url: str) -> str:
     """Extracts structured elements (headings, links, metadata) from a webpage."""
-    if not url.startswith("http://") and not url.startswith("https://"):
-        url = "https://" + url
+    try:
+        from app.core.config import settings
+        from app.tools.network_safety import assert_public_dns_resolution
+        allow_http = settings.ENVIRONMENT == "development" and settings.ALLOW_INSECURE_MCP_IN_DEVELOPMENT
+        url = asyncio.run(assert_public_dns_resolution(url, allow_http=allow_http))
+    except Exception as exc:
+        return f"Blocked unsafe webpage URL: {exc}"
 
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     req = urllib.request.Request(url, headers=headers)

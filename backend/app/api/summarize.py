@@ -5,9 +5,14 @@ POST /api/v1/summarize
   Summarize text in bullet, paragraph, or tldr style.
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from typing import Optional, Literal
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.api.auth import get_current_user
+from app.core.database import get_db
+from app.schemas.auth import UserOut
+from app.services.provider_key_service import get_request_provider_keys
 
 router = APIRouter(prefix="/summarize", tags=["Summarization"])
 
@@ -28,7 +33,12 @@ class SummarizeResponse(BaseModel):
 
 
 @router.post("", response_model=SummarizeResponse, summary="Summarize text")
-async def summarize_endpoint(body: SummarizeRequest):
+async def summarize_endpoint(
+    body: SummarizeRequest,
+    request: Request,
+    current_user: UserOut = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """
     Summarize text in one of three styles:
     - **bullet**: Key points as a markdown bullet list (default)
@@ -39,10 +49,12 @@ async def summarize_endpoint(body: SummarizeRequest):
         raise HTTPException(status_code=400, detail="text must not be empty.")
 
     from app.tools.advanced_tools import summarize_text
+    api_keys = await get_request_provider_keys(db, current_user.id, request)
     result = await summarize_text(
         text=body.text,
         style=body.style,
         max_length=body.max_length or 500,
+        api_keys=api_keys,
     )
 
     if result.startswith("Error:"):

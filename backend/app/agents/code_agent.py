@@ -27,13 +27,8 @@ Safety
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import os
 import re
-import tempfile
-from asyncio.subprocess import PIPE
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from app.agents.registry import BaseAgent, AgentResult, agent_registry
@@ -55,7 +50,6 @@ _DANGEROUS_PATTERNS: List[re.Pattern] = [
     re.compile(r"\bsocket\s*\.\s*socket\s*\("),
 ]
 
-MAX_OUTPUT_BYTES = 8 * 1024   # 8 KB stdout/stderr cap
 DEFAULT_TIMEOUT  = 15         # seconds
 
 
@@ -105,62 +99,32 @@ async def execute_code_sandboxed(
     timeout: int = DEFAULT_TIMEOUT,
     env_vars: Optional[Dict[str, str]] = None,
 ) -> CodeExecutionResult:
-    """
-    Run `code` inside a temporary isolated subprocess.
+    """Delegate computation-only Python to the isolated sandbox service.
 
-    Returns a CodeExecutionResult with captured stdout/stderr.
+    This agent must never create a subprocess in the public API process.  The
+    common sandbox client fails closed when the hardened sidecar is absent.
+    ``env_vars`` is retained only for API compatibility and is intentionally
+    ignored so a planner cannot influence process credentials or environment.
     """
     if language not in ("python", "python3"):
         return CodeExecutionResult(
             error=f"Unsupported language for sandbox: {language}"
         )
 
-    with tempfile.TemporaryDirectory(prefix="agent_sandbox_") as tmpdir:
-        script_path = Path(tmpdir) / "script.py"
-        script_path.write_text(code, encoding="utf-8")
+    from app.tools.local_tools import python_sandbox
 
-        # Minimal safe environment
-        safe_env = {"PATH": os.environ.get("PATH", ""), "PYTHONIOENCODING": "utf-8"}
-        if env_vars:
-            safe_env.update(env_vars)
-
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "python",
-                str(script_path),
-                stdout=PIPE,
-                stderr=PIPE,
-                cwd=tmpdir,
-                env=safe_env,
-            )
-            try:
-                raw_out, raw_err = await asyncio.wait_for(
-                    proc.communicate(), timeout=timeout
-                )
-                stdout = raw_out.decode("utf-8", errors="replace")[:MAX_OUTPUT_BYTES]
-                stderr = raw_err.decode("utf-8", errors="replace")[:MAX_OUTPUT_BYTES]
-                return CodeExecutionResult(
-                    stdout=stdout,
-                    stderr=stderr,
-                    exit_code=proc.returncode or 0,
-                )
-            except asyncio.TimeoutError:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
-                return CodeExecutionResult(
-                    timed_out=True,
-                    error=f"Execution timed out after {timeout}s",
-                    exit_code=-1,
-                )
-        except FileNotFoundError:
-            return CodeExecutionResult(
-                error="Python interpreter not found in PATH",
-                exit_code=-1,
-            )
-        except Exception as exc:
-            return CodeExecutionResult(error=str(exc), exit_code=-1)
+    output = await python_sandbox(code)
+    if output.startswith("Sandbox policy blocked"):
+        return CodeExecutionResult(error=output, exit_code=126)
+    if output.startswith("Code execution is unavailable") or output.startswith("Sandbox execution failed"):
+        return CodeExecutionResult(error=output, exit_code=125)
+    if output.startswith("Code execution is temporarily unavailable"):
+        return CodeExecutionResult(error=output, exit_code=125)
+    if output.startswith("Runtime error"):
+        return CodeExecutionResult(stderr=output, error=output, exit_code=1)
+    if output.startswith("Execution timed out"):
+        return CodeExecutionResult(stdout=output, timed_out=True, exit_code=124)
+    return CodeExecutionResult(stdout=output, exit_code=0)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -189,7 +153,7 @@ class CodeAgent(BaseAgent):
     name = "code"
     description = (
         "Generates, executes, and tests Python code. "
-        "Runs in a sandboxed subprocess with timeout and output capture."
+        "Runs only through the separately isolated code sandbox."
     )
     capabilities = ["code_generation", "code_execution", "debugging", "scripting"]
 
@@ -204,7 +168,8 @@ class CodeAgent(BaseAgent):
         save_art   = task_input.get("save_artifact", True)
         user_id    = task_input.get("user_id", "anon")
         session_id = task_input.get("session_id", "default")
-        model      = task_input.get("active_model", "gemini-2.0-flash")
+        from app.core.config import settings
+        model      = task_input.get("active_model", settings.GEMINI_MODEL)
         api_keys   = task_input.get("api_keys", {})
         messages   = task_input.get("messages", [])
 

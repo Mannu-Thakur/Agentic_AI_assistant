@@ -84,7 +84,8 @@ class CriticAgent(BaseAgent):
         response    = task_input.get("response", "")
         sources     = task_input.get("sources", [])
         query       = task_input.get("query", "")
-        model       = task_input.get("active_model", "gemini-2.0-flash")
+        from app.core.config import settings
+        model       = task_input.get("active_model", settings.GEMINI_MODEL)
         api_keys    = task_input.get("api_keys", {})
 
         logger.info(f"[CriticAgent] Verifying response for query: {query[:60]!r}")

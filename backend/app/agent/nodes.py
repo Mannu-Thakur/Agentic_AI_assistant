@@ -114,6 +114,30 @@ from app.services.web_search import (
 
 logger = logging.getLogger("agent.nodes")
 
+
+async def _get_request_tool_registry(
+    state: AgentState,
+    config: Optional[RunnableConfig],
+):
+    """Return this graph invocation's tenant-scoped tool registry.
+
+    A remote MCP server can contain a user's credentials, so it is kept in the
+    in-memory graph config rather than a process-wide singleton.  This helper
+    also makes direct node tests safe by constructing an isolated registry.
+    """
+    from app.tools.registry import ToolRegistry
+
+    config = config or {}
+    configurable = config.setdefault("configurable", {})
+    registry = configurable.get("tool_registry")
+    if registry is None:
+        registry = ToolRegistry()
+        configurable["tool_registry"] = registry
+    if not registry.is_initialized:
+        user_id = configurable.get("user_id") or state.get("user_id")
+        await registry.initialize(str(user_id) if user_id else None)
+    return registry
+
 async def _notify_step(config: Optional[RunnableConfig], step_message: str) -> None:
     """Send live progress step message to frontend via config on_step callback."""
     if not config:
@@ -873,6 +897,10 @@ _TOOL_PHRASE_PATTERNS: List[re.Pattern] = [
     re.compile(r"(?i)\[System Context\]\s*"),
 ]
 
+# Remote MCP tools are namespaced at runtime and therefore cannot be listed in
+# INTERNAL_TOOL_NAMES ahead of time.
+_REMOTE_TOOL_LEAK_PATTERN = re.compile(r"(?i)\bremote_[a-z0-9_]+__[a-z0-9_-]+\b")
+
 
 def _sanitize_response(text: str) -> str:
     """
@@ -884,6 +912,7 @@ def _sanitize_response(text: str) -> str:
         text = pattern.sub("", text)
     for pattern in _TOOL_LEAK_PATTERNS:
         text = pattern.sub("", text)
+    text = _REMOTE_TOOL_LEAK_PATTERN.sub("", text)
     # BUG-4 FIX: Redact any API keys / secrets that leaked into the response
     try:
         from app.middleware.security import SecretRedactor
@@ -1037,11 +1066,11 @@ async def _call_llm_judge(prompt: str, config: dict) -> Optional[dict]:
     messages = [{"role": "user", "content": prompt}]
 
     candidates = [
-        (groq_provider,       "groq",       "llama-3.1-8b-instant"),
-        (groq_provider,       "groq",       "llama-3.3-70b-versatile"),
-        (gemini_provider,     "gemini",     "gemini-2.0-flash"),
+        (groq_provider,       "groq",       settings.GROQ_MODEL),
+        (groq_provider,       "groq",       "openai/gpt-oss-120b"),
+        (gemini_provider,     "gemini",     settings.GEMINI_MODEL),
         (openai_provider,     "openai",     "gpt-4o-mini"),
-        (openrouter_provider, "openrouter", "google/gemini-2.0-flash-001"),
+        (openrouter_provider, "openrouter", settings.OPENROUTER_MODEL),
     ]
 
     for provider, key_name, model in candidates:
@@ -1105,11 +1134,11 @@ async def _call_llm_text(prompt: str, config: dict, max_tokens: int = 256) -> Op
     messages = [{"role": "user", "content": prompt}]
 
     candidates = [
-        (groq_provider,       "groq",       "llama-3.1-8b-instant"),
-        (groq_provider,       "groq",       "llama-3.3-70b-versatile"),
-        (gemini_provider,     "gemini",     "gemini-2.0-flash"),
+        (groq_provider,       "groq",       settings.GROQ_MODEL),
+        (groq_provider,       "groq",       "openai/gpt-oss-120b"),
+        (gemini_provider,     "gemini",     settings.GEMINI_MODEL),
         (openai_provider,     "openai",     "gpt-4o-mini"),
-        (openrouter_provider, "openrouter", "google/gemini-2.0-flash-001"),
+        (openrouter_provider, "openrouter", settings.OPENROUTER_MODEL),
     ]
 
     for provider, key_name, model in candidates:
@@ -1693,13 +1722,12 @@ async def classify_intent_node(
     # For tool-eligible intents, expose ALL registered tools to the semantic router.
     # The router uses cosine similarity between the query and tool descriptions to
     # select the most relevant tools — no hardcoded name lists.
-    from app.tools.registry import ToolRegistry
-    registry = ToolRegistry()
-    if not registry.is_initialized:
-        try:
-            await registry.initialize()
-        except Exception as init_exc:
-            logger.warning(f"ToolRegistry initialization warning in classify_intent_node: {init_exc}")
+    try:
+        registry = await _get_request_tool_registry(state, config)
+    except Exception as init_exc:
+        logger.warning(f"ToolRegistry initialization warning in classify_intent_node: {init_exc}")
+        from app.tools.registry import ToolRegistry
+        registry = ToolRegistry()
 
     _NO_TOOL_INTENTS = {INTENT_MEMORY_WRITE, INTENT_NORMAL_CHAT, INTENT_DOCUMENT_QA, INTENT_VISION}
     from app.agent.prompts import INTENT_TOOL_WHITELIST
@@ -1717,8 +1745,10 @@ async def classify_intent_node(
     # Always include ALL currently-registered remote MCP tools for tool-eligible
     # intents so that user-added servers (e.g. expense tracker on Render) are
     # never excluded by a stale static whitelist.
-    _MCP_ELIGIBLE = {INTENT_MCP_TOOL, INTENT_COMPLEX}
-    if intent in _MCP_ELIGIBLE and registry.mcp_tools_schemas:
+    # A static label must not make a real connected capability unreachable
+    # (for example, an expense connector classified as FINANCE).  Every remote
+    # call remains protected by durable user approval before execution.
+    if intent not in _NO_TOOL_INTENTS and registry.mcp_tools_schemas:
         _live_mcp = list(registry.mcp_tools_schemas.keys())
         allowed_tools = list(set(allowed_tools) | set(_live_mcp))
         logger.debug(f"classify_intent_node: augmented allowed_tools with {len(_live_mcp)} live MCP tools")
@@ -1891,9 +1921,9 @@ async def memory_write_node(
             messages_for_ack = [{"role": "user", "content": prompt}]
 
             for provider, key_name, model in [
-                (gemini_provider,     "gemini",     "gemini-2.0-flash"),
-                (groq_provider,       "groq",       "llama-3.3-70b-versatile"),
-                (openrouter_provider, "openrouter", "google/gemini-2.0-flash"),
+                (gemini_provider,     "gemini",     settings.GEMINI_MODEL),
+                (groq_provider,       "groq",       settings.GROQ_MODEL),
+                (openrouter_provider, "openrouter", settings.OPENROUTER_MODEL),
             ]:
                 api_key = keys.get(key_name)
                 if not api_key:
@@ -3505,7 +3535,7 @@ async def generate_response_node(
 
         if gemini_key and not str(gemini_key).startswith("mock_"):
             logger.info(f"generate_response_node: '{model}' is not vision-capable — routing to Gemini Flash for native vision processing")
-            model = "gemini-2.0-flash"
+            model = settings.GEMINI_MODEL
             provider = gemini_provider
             provider_api_key = gemini_key
             is_vision_capable_model = True
@@ -3642,26 +3672,26 @@ async def generate_response_node(
 
     # ── Semantic tool schema injection ────────────────────────────────────────
     # For tool-eligible intents (allowed_tools non-empty), we ask the SemanticToolRouter
-    # to score ALL registered tools by relevance to this specific query and return the
-    # best matches. No hardcoded whitelist — pure cosine similarity.
+    # to rank only the tools permitted by that intent.  Semantic similarity is
+    # not an authorization boundary: offering every registered tool here would
+    # let an unrelated prompt bypass the intent policy.
     # For pure-text intents (NORMAL_CHAT, DOCUMENT_QA, VISION, MEMORY_WRITE),
     # allowed_tools is [] → no tools are offered to the LLM.
-    from app.tools.registry import ToolRegistry
-    registry = ToolRegistry()
-    if not registry.is_initialized:
-        try:
-            await registry.initialize()
-        except Exception as exc:
-            logger.warning(f"ToolRegistry initialization warning in generate_response_node: {exc}")
+    try:
+        registry = await _get_request_tool_registry(state, config)
+    except Exception as exc:
+        logger.warning(f"ToolRegistry initialization warning in generate_response_node: {exc}")
+        from app.tools.registry import ToolRegistry
+        registry = ToolRegistry()
 
     last_user_query = state.get("resolved_query") or state.get("original_query") or _extract_last_user_query(messages)
 
     if allowed_tools and last_user_query:
-        # allowed_tools is non-empty → intent is tool-eligible.
-        # Pass allowed_tools=None to evaluate ALL registered tools semantically.
+        # allowed_tools is non-empty → intent is tool-eligible and is the
+        # capability allowlist for this turn.
         tool_schemas = await registry.get_semantically_relevant_tools(
             query=last_user_query,
-            allowed_tools=None,   # None = evaluate all registered tools, not just whitelist
+            allowed_tools=allowed_tools,
             top_k=6,
             api_key=keys.get("gemini") or keys.get("google")
         )
@@ -3774,6 +3804,11 @@ async def generate_response_node(
         getattr(settings, "OPENROUTER_API_KEY", None) or
         os.environ.get("OPENROUTER_API_KEY")
     )
+    # Versioned provider models live in Settings.  Keep a short, distinct
+    # secondary candidate per provider, never a retired compatibility alias.
+    gemini_fallback_models = [settings.GEMINI_MODEL, "gemini-3.6-flash"]
+    groq_fallback_models = [settings.GROQ_MODEL, "openai/gpt-oss-120b"]
+    openrouter_fallback_models = [settings.OPENROUTER_MODEL, "openai/gpt-4o-mini"]
 
     candidates: List[Tuple[str, Any, str, Optional[str]]] = []
 
@@ -3782,39 +3817,39 @@ async def generate_response_node(
 
     # 1. Tier 1 — Intra-provider fallback (same provider, lighter / higher-rate-limit models)
     if primary_prov_name == "gemini" and gemini_key:
-        for m in ("gemini-3.5-flash", "gemini-3.5-flash-lite"):
+        for m in gemini_fallback_models:
             candidates.append(("gemini", gemini_provider, m, gemini_key))
     elif primary_prov_name == "groq" and groq_key:
-        for m in ("meta-llama/llama-4-scout-17b-16e-instruct", "llama-3.1-8b-instant"):
+        for m in groq_fallback_models:
             candidates.append(("groq", groq_provider, m, groq_key))
     elif primary_prov_name == "openai" and openai_key:
         for m in ("gpt-4o-mini", "gpt-4o"):
             candidates.append(("openai", openai_provider, m, openai_key))
     elif primary_prov_name in ("openrouter", "anthropic", "deepseek") and openrouter_key:
-        for m in ("google/gemini-2.0-flash-001", "openai/gpt-4o-mini"):
+        for m in openrouter_fallback_models:
             candidates.append(("openrouter", openrouter_provider, m, openrouter_key))
 
     # 2. Tier 2 — Cross-provider cascades
     cross_providers = []
     if primary_prov_name == "gemini":
         cross_providers = [
-            ("groq", groq_provider, ["meta-llama/llama-4-scout-17b-16e-instruct", "llama-3.1-8b-instant"], groq_key),
+            ("groq", groq_provider, groq_fallback_models, groq_key),
             ("openai", openai_provider, ["gpt-4o-mini", "gpt-4o"], openai_key),
-            ("openrouter", openrouter_provider, ["google/gemini-2.0-flash-001"], openrouter_key),
+            ("openrouter", openrouter_provider, openrouter_fallback_models, openrouter_key),
         ]
     elif primary_prov_name == "groq":
         cross_providers = [
-            ("gemini", gemini_provider, ["gemini-3.5-flash", "gemini-3.5-flash-lite"], gemini_key),
+            ("gemini", gemini_provider, gemini_fallback_models, gemini_key),
             ("openai", openai_provider, ["gpt-4o-mini", "gpt-4o"], openai_key),
-            ("openrouter", openrouter_provider, ["google/gemini-2.0-flash-001"], openrouter_key),
+            ("openrouter", openrouter_provider, openrouter_fallback_models, openrouter_key),
         ]
     elif primary_prov_name == "openai":
         cross_providers = [
-            ("gemini", gemini_provider, ["gemini-3.5-flash", "gemini-3.5-flash-lite"], gemini_key),
-            ("groq", groq_provider, ["meta-llama/llama-4-scout-17b-16e-instruct", "llama-3.1-8b-instant"], groq_key),
+            ("gemini", gemini_provider, gemini_fallback_models, gemini_key),
+            ("groq", groq_provider, groq_fallback_models, groq_key),
             ("openrouter", openrouter_provider, [
                 actual_model_id if "/" in actual_model_id else f"openai/{actual_model_id}",
-                "google/gemini-2.0-flash-001"
+                settings.OPENROUTER_MODEL
             ], openrouter_key),
         ]
     else:
@@ -3829,10 +3864,10 @@ async def generate_response_node(
         cross_providers = [
             ("openrouter", openrouter_provider, [
                 or_primary,
-                "google/gemini-2.0-flash-001",
+                settings.OPENROUTER_MODEL,
             ], openrouter_key),
-            ("gemini", gemini_provider, ["gemini-3.5-flash", "gemini-3.5-flash-lite"], gemini_key),
-            ("groq", groq_provider, ["meta-llama/llama-4-scout-17b-16e-instruct", "llama-3.1-8b-instant"], groq_key),
+            ("gemini", gemini_provider, gemini_fallback_models, gemini_key),
+            ("groq", groq_provider, groq_fallback_models, groq_key),
             ("openai", openai_provider, ["gpt-4o-mini"], openai_key),
         ]
 
@@ -3849,16 +3884,11 @@ async def generate_response_node(
         # Guarantee: Gemini Flash via system key (best for handwriting/vision)
         if gemini_key and not str(gemini_key).startswith("mock_"):
             if not any("gemini" in m and p == "gemini" for p, _, m, _ in candidates):
-                candidates.append(("gemini", gemini_provider, "gemini-2.0-flash", gemini_key))
+                candidates.append(("gemini", gemini_provider, settings.GEMINI_MODEL, gemini_key))
         # Guarantee: OpenAI GPT-4o via system key through OpenRouter
         if openrouter_key and not str(openrouter_key).startswith("mock_"):
             if not any("gpt-4o" in m and p == "openrouter" for p, _, m, _ in candidates):
                 candidates.append(("openrouter", openrouter_provider, "openai/gpt-4o", openrouter_key))
-        # Guarantee: Groq Llama Vision
-        if groq_key and not str(groq_key).startswith("mock_"):
-            if not any("llama-3.2" in m and p == "groq" for p, _, m, _ in candidates):
-                candidates.append(("groq", groq_provider, "llama-3.2-11b-vision-preview", groq_key))
-
         # Strict filter: only attempt vision-capable models when images are present
         candidates = [
             (p, inst, m, k) for (p, inst, m, k) in candidates
@@ -4145,13 +4175,13 @@ async def generate_response_node(
             images = []
             rescue_attempts = []
             if keys.get("gemini") or keys.get("google"):
-                rescue_attempts.append((gemini_provider, "gemini-2.0-flash", keys.get("gemini") or keys.get("google")))
+                rescue_attempts.append((gemini_provider, settings.GEMINI_MODEL, keys.get("gemini") or keys.get("google")))
             if keys.get("groq"):
-                rescue_attempts.append((groq_provider, "llama-3.3-70b-versatile", keys["groq"]))
+                rescue_attempts.append((groq_provider, settings.GROQ_MODEL, keys["groq"]))
             if keys.get("openai"):
                 rescue_attempts.append((openai_provider, "gpt-4o-mini", keys["openai"]))
             if keys.get("openrouter"):
-                rescue_attempts.append((openrouter_provider, "google/gemini-2.0-flash-001", keys["openrouter"]))
+                rescue_attempts.append((openrouter_provider, settings.OPENROUTER_MODEL, keys["openrouter"]))
 
             for r_prov, r_mod, r_key in rescue_attempts:
                 try:
@@ -4491,29 +4521,78 @@ async def execute_tools_node(
     state.setdefault("execution_trace", [])
     state.setdefault("steps", [])
     state.setdefault("tool_results", [])
+    state.setdefault("pending_tool_approvals", [])
     ensure_state_status_dicts(state)
 
     tool_calls = state.get("tool_calls", []) or []
     messages   = list(state.get("messages", []))
     req_api_keys: Dict[str, Any] = config.get("configurable", {}).get("api_keys", {})
+    request_user_id = config.get("configurable", {}).get("user_id") or state.get("user_id")
+    request_is_admin = bool(config.get("configurable", {}).get("is_admin", False))
+    request_chat_id = config.get("configurable", {}).get("chat_id") or state.get("chat_id")
 
-    from app.tools.registry import ToolRegistry
-    registry = ToolRegistry()
-
-    # Always ensure registry is initialized before executing tools
-    if not registry.is_initialized:
-        try:
-            await registry.initialize()
-        except Exception as _reinit_err:
-            logger.warning(f"execute_tools_node: registry re-init failed: {_reinit_err}")
+    try:
+        registry = await _get_request_tool_registry(state, config)
+    except Exception as _reinit_err:
+        logger.warning(f"execute_tools_node: registry re-init failed: {_reinit_err}")
+        from app.tools.registry import ToolRegistry
+        registry = ToolRegistry()
 
     new_messages = []
+    pending_approvals = list(state.get("pending_tool_approvals") or [])
     for tc in tool_calls:
         name      = tc["name"]
         arguments = tc.get("arguments") if "arguments" in tc else tc.get("args", {})
 
+        # The model may suggest a side-effecting remote MCP tool, but cannot
+        # execute it.  Persist a one-time user-owned approval record instead.
+        from app.tools.registry import tool_requires_confirmation
+        server_name = registry.mcp_tools_map.get(name, "")
+        if tool_requires_confirmation(name, server_name.startswith("remote_")):
+            if not request_user_id:
+                logger.error("Blocked remote MCP action '%s' because request user identity is missing", name)
+                new_messages.append(HumanMessage(content="[Tool Result] The external action was blocked because the authenticated user could not be verified."))
+                continue
+            try:
+                from app.core.database import AsyncSessionLocal
+                from app.services.tool_approval_service import create_approval
+                async with AsyncSessionLocal() as approval_db:
+                    approval = await create_approval(
+                        approval_db,
+                        user_id=str(request_user_id),
+                        chat_id=str(request_chat_id) if request_chat_id else None,
+                        tool_name=name,
+                        arguments=arguments or {},
+                        server_name=server_name,
+                    )
+                payload = {
+                    "id": approval.id,
+                    "tool_name": name,
+                    "server_name": server_name,
+                    "arguments": arguments or {},
+                    "status": approval.status,
+                }
+                pending_approvals.append(payload)
+                new_messages.append(HumanMessage(
+                    content=(
+                        "[Tool Result] An external action was prepared but not executed. "
+                        f"User approval is required (approval id: {approval.id})."
+                    )
+                ))
+                continue
+            except Exception as approval_error:
+                logger.error("Could not create MCP approval record for '%s': %s", name, type(approval_error).__name__)
+                new_messages.append(HumanMessage(content="[Tool Result] The external action was blocked because its approval request could not be recorded."))
+                continue
+
         # First attempt
-        result = await registry.call_tool(name, arguments, api_keys=req_api_keys)
+        result = await registry.call_tool(
+            name,
+            arguments,
+            api_keys=req_api_keys,
+            user_id=request_user_id,
+            is_admin=request_is_admin,
+        )
 
         # If MCP process died mid-query (tool not registered), force re-init and retry once
         if "is not registered" in str(result) or "not registered" in str(result).lower():
@@ -4523,8 +4602,14 @@ async def execute_tools_node(
             )
             try:
                 registry.is_initialized = False
-                await registry.initialize()
-                result = await registry.call_tool(name, arguments, api_keys=req_api_keys)
+                await registry.initialize(str(request_user_id) if request_user_id else None)
+                result = await registry.call_tool(
+                    name,
+                    arguments,
+                    api_keys=req_api_keys,
+                    user_id=request_user_id,
+                    is_admin=request_is_admin,
+                )
                 logger.info(f"execute_tools_node: retry for '{name}' succeeded after re-init.")
             except Exception as _retry_err:
                 logger.error(f"execute_tools_node: retry for '{name}' failed: {_retry_err}")
@@ -4548,6 +4633,7 @@ async def execute_tools_node(
     return {
         "messages":        messages + new_messages,
         "tool_calls":      [],
+        "pending_tool_approvals": pending_approvals,
         "steps":           steps,
         "execution_trace": state.get("execution_trace", []),
     }
@@ -4725,21 +4811,22 @@ async def parallel_tool_execution_node(
         return {"tool_execution_results": None, "steps": steps}
 
     try:
-        from app.tools.registry import ToolRegistry
         from app.tools.scheduler import ToolScheduler, ToolTask
 
-        registry  = ToolRegistry()
-        if not registry.is_initialized:
-            await registry.initialize()
+        registry = await _get_request_tool_registry(state, config)
 
 
-        # Build task list from the DAG — all registered tools are eligible for execution.
-        # The semantic router in generate_response_node and tool_planner_node already
-        # ensures only semantically relevant tools are in the DAG. The registry itself
-        # will reject any unregistered tool with a clear error.
+        # Build task list. Remote mutations are intentionally excluded: a DAG has
+        # no interactive user gesture, so it cannot satisfy the one-time approval
+        # requirement enforced by execute_tools_node.
+        from app.tools.registry import tool_requires_confirmation
         tasks = []
         for t in tool_dag:
             tool_name = t["tool"]
+            server_name = registry.mcp_tools_map.get(tool_name, "")
+            if tool_requires_confirmation(tool_name, server_name.startswith("remote_")):
+                logger.warning("[ParallelToolExec] Blocked remote mutation '%s' without interactive approval", tool_name)
+                continue
             tasks.append(
                 ToolTask(
                     id         = t["id"],
@@ -4757,7 +4844,14 @@ async def parallel_tool_execution_node(
             return {"tool_execution_results": None, "steps": steps}
 
 
-        scheduler = ToolScheduler(registry)
+        scheduler = ToolScheduler(
+            registry,
+            call_context={
+                "api_keys": config.get("configurable", {}).get("api_keys", {}),
+                "user_id": config.get("configurable", {}).get("user_id") or state.get("user_id"),
+                "is_admin": bool(config.get("configurable", {}).get("is_admin", False)),
+            },
+        )
         results   = await scheduler.run(tasks)
 
         serialized = [

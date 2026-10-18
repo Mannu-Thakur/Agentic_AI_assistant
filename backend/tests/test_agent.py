@@ -135,7 +135,7 @@ def test_gemma_provider_routing():
 
     assert resolve_provider_from_model("gemma2-9b-it") == "groq"
     assert resolve_provider_from_model("google/gemma-2-9b-it") == "groq"
-    assert resolve_provider_from_model("llama-3.3-70b-versatile") == "groq"
+    assert resolve_provider_from_model("openai/gpt-oss-20b") == "groq"
 
     assert get_provider("gemma2-9b-it") == groq_provider
 

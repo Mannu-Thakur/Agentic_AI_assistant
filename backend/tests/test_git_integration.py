@@ -5,11 +5,13 @@ from app.models.user import User
 
 @pytest.fixture
 def test_user():
-    return User(id="test-git-user-uuid", email="git_test@example.com", is_active=True)
+    return User(id="test-git-user-uuid", email="git_test@example.com", is_active=True, role="admin")
 
 @pytest.mark.anyio
-async def test_git_status_endpoint(test_user):
+async def test_git_status_endpoint(test_user, monkeypatch):
     from app.api.auth import get_current_user
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "ENABLE_GIT_INTEGRATION", True)
     app.dependency_overrides[get_current_user] = lambda: test_user
     try:
         transport = ASGITransport(app=app)
@@ -26,8 +28,10 @@ async def test_git_status_endpoint(test_user):
         app.dependency_overrides.pop(get_current_user, None)
 
 @pytest.mark.anyio
-async def test_git_commit_suggestion_endpoint(test_user):
+async def test_git_commit_suggestion_endpoint(test_user, monkeypatch):
     from app.api.auth import get_current_user
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "ENABLE_GIT_INTEGRATION", True)
     app.dependency_overrides[get_current_user] = lambda: test_user
     try:
         transport = ASGITransport(app=app)

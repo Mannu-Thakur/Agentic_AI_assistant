@@ -7,9 +7,11 @@ from app.models.audit_log import AuditLog
 from app.models.mcp_server import RemoteMcpServer
 from app.models.evaluation import EvalResult
 from app.models.telemetry import TelemetryRecord
+from app.models.tool_approval import ToolApproval
+from app.models.mission_job import MissionJob
 
 __all__ = [
     "Base", "User", "UserPreference", "ApiKey", "Chat", "Message", "SharedLink",
-    "Document", "Memory", "AuditLog", "RemoteMcpServer", "EvalResult", "TelemetryRecord",
+    "Document", "Memory", "AuditLog", "RemoteMcpServer", "EvalResult", "TelemetryRecord", "ToolApproval", "MissionJob",
 ]
 

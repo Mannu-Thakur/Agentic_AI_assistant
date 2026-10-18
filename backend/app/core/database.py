@@ -206,6 +206,7 @@ def run_schema_migrations() -> None:
 
     import app.models  # Ensure model registries are imported
     from app.models.evaluation import EvalResult
+    from app.models.tool_approval import ToolApproval
 
     _SAFE_DDL_TYPE_RE = _re_ddl.compile(r'^[A-Z0-9_\s\(\)\.\,]+$', _re_ddl.IGNORECASE)
     _SAFE_DDL_NAME_RE = _re_ddl.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
@@ -298,6 +299,28 @@ def run_schema_migrations() -> None:
                 """
                 conn.execute(text(ddl))
                 logger.info("[schema] Created table audit_logs")
+
+        # 3.1 Encrypt remote MCP authorization values created by older builds.
+        # New writes are encrypted by the API route.  This idempotent migration
+        # keeps old installations from leaving reusable bearer credentials in
+        # plaintext database backups. Fernet tokens begin with `gAAAA`.
+        if inspector.has_table("remote_mcp_servers"):
+            from app.core.security import encrypt_api_key
+            with engine.begin() as conn:
+                legacy_headers = conn.execute(
+                    text("SELECT id, auth_header FROM remote_mcp_servers WHERE auth_header IS NOT NULL")
+                ).mappings().all()
+                migrated = 0
+                for record in legacy_headers:
+                    value = record.get("auth_header")
+                    if isinstance(value, str) and value and not value.startswith("gAAAA"):
+                        conn.execute(
+                            text("UPDATE remote_mcp_servers SET auth_header = :header WHERE id = :id"),
+                            {"header": encrypt_api_key(value), "id": record["id"]},
+                        )
+                        migrated += 1
+                if migrated:
+                    logger.info("[schema] Encrypted %s legacy remote MCP credential(s)", migrated)
 
         # 4. Add new provider columns to api_keys table and migrate/backfill
         if inspector.has_table("api_keys"):

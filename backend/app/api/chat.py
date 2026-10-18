@@ -358,13 +358,13 @@ async def stream_agent_message(
     if not key_found:
         available_fallback = None
         if (user_keys.get("google") or user_keys.get("gemini") or settings.GEMINI_API_KEY) and not str(settings.GEMINI_API_KEY or "").startswith("mock_"):
-            available_fallback = ("google", user_keys.get("google") or user_keys.get("gemini") or settings.GEMINI_API_KEY, "gemini-2.0-flash")
+            available_fallback = ("google", user_keys.get("google") or user_keys.get("gemini") or settings.GEMINI_API_KEY, settings.GEMINI_MODEL)
         elif (user_keys.get("groq") or settings.GROQ_API_KEY) and not str(settings.GROQ_API_KEY or "").startswith("mock_"):
-            available_fallback = ("groq", user_keys.get("groq") or settings.GROQ_API_KEY, "llama-3.3-70b-versatile")
+            available_fallback = ("groq", user_keys.get("groq") or settings.GROQ_API_KEY, settings.GROQ_MODEL)
         elif (user_keys.get("openai") or settings.OPENAI_API_KEY) and not str(settings.OPENAI_API_KEY or "").startswith("mock_"):
             available_fallback = ("openai", user_keys.get("openai") or settings.OPENAI_API_KEY, "gpt-4o-mini")
         elif (user_keys.get("openrouter") or settings.OPENROUTER_API_KEY) and not str(settings.OPENROUTER_API_KEY or "").startswith("mock_"):
-            available_fallback = ("openrouter", user_keys.get("openrouter") or settings.OPENROUTER_API_KEY, "google/gemini-2.0-flash-001")
+            available_fallback = ("openrouter", user_keys.get("openrouter") or settings.OPENROUTER_API_KEY, settings.OPENROUTER_MODEL)
         
         if available_fallback:
             resolved_prov, final_key, active_model = available_fallback   # MED-4 FIX: local var
@@ -566,6 +566,7 @@ async def stream_agent_message(
         # being vectorised — bypasses the vector-store when RAG isn't ready yet.
         "inline_doc_context":    _inline_doc_context,
         "tool_calls":            [],
+        "pending_tool_approvals": [],
         "tool_dag":              None,
         "tool_execution_results": None,
         "reflection_feedback":   None,
@@ -601,6 +602,7 @@ async def stream_agent_message(
   async def sse_event_stream():
     # BUG-8: use INFO not ERROR for normal lifecycle events
     logger.info("STREAM GENERATOR STARTED")
+    request_tool_registry = None
     try:
       # BUG-2 FIX: Run PromptInjectionGuard before the graph is invoked.
       # Catches jailbreak / system-prompt-override patterns early and blocks
@@ -679,6 +681,7 @@ async def stream_agent_message(
           "configurable": {
               "thread_id": f"{current_user.id}:{chat_id}",
               "user_id": current_user.id,
+               "is_admin": getattr(current_user, "role", "user") == "admin",
               "chat_id": chat_id,
               "memories": memories,
               "on_token": on_token_callback,
@@ -708,7 +711,9 @@ async def stream_agent_message(
       # Ensure user's remote MCP servers are loaded and synchronized in ToolRegistry
       try:
           from app.tools.registry import ToolRegistry
-          await ToolRegistry().sync_remote_servers(current_user.id)
+          request_tool_registry = ToolRegistry()
+          await request_tool_registry.sync_remote_servers(str(current_user.id))
+          config["configurable"]["tool_registry"] = request_tool_registry
       except Exception as _mcp_sync_err:
           # BUG-5 FIX: Fail-open — local tools + previously cached MCP tools still work.
           # Include user_id for debugging stale MCP server records.
@@ -944,7 +949,12 @@ async def stream_agent_message(
             "intent": final_state.get("intent"),
             "routing_next_step": final_state.get("routing_next_step"),
             "is_private_doc_query": final_state.get("is_private_doc_query", False),
+            "pending_tool_approvals": final_state.get("pending_tool_approvals", []),
         })
+
+      if isinstance(final_state, dict):
+        for approval in final_state.get("pending_tool_approvals", []) or []:
+          yield f"data: {json.dumps({'event': 'tool_approval_required', 'approval': approval})}\n\n"
 
       # Yield runtime telemetry metrics payload to frontend right before DB save
       yield f"data: {json.dumps({'event': 'metrics', 'metrics': metrics_store})}\n\n"
@@ -1013,6 +1023,12 @@ async def stream_agent_message(
       logger.error(f"CRITICAL UNCAUGHT EXCEPTION IN sse_event_stream: {traceback.format_exc()}")
       yield f"data: {json.dumps({'event': 'error', 'detail': str(stream_err)})}\n\n"
       yield "data: [DONE]\n\n"
+    finally:
+      if request_tool_registry is not None:
+        try:
+          await request_tool_registry.shutdown()
+        except Exception as cleanup_error:
+          logger.warning("[MCP] Request registry cleanup failed: %s", type(cleanup_error).__name__)
 
   # BUG-8 FIX: was logger.error() — not an error
   logger.info(">>> RETURNING STREAMING RESPONSE <<<")

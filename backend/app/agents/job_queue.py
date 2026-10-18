@@ -21,11 +21,15 @@ Worker loop
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Dict, List, Optional
+
+from app.core.config import settings
 
 logger = logging.getLogger("agents.job_queue")
 
@@ -63,13 +67,18 @@ class JobQueue:
 
     def __init__(self) -> None:
         self._jobs: Dict[str, Job] = {}
-        self._queue: asyncio.Queue = asyncio.Queue()
+        self._queue: asyncio.Queue = asyncio.Queue(
+            maxsize=max(1, settings.MISSION_MAX_QUEUE_SIZE)
+        )
         self._worker_task: Optional[asyncio.Task] = None
         self._started = False
+        self._persistence_locks: Dict[str, asyncio.Lock] = {}
+        self._persistence_tasks: set[asyncio.Task] = set()
 
-    def start_worker(self) -> None:
-        """Start the background worker. Call once from FastAPI lifespan."""
+    async def start_worker(self) -> None:
+        """Restore durable jobs, then start the single in-process worker."""
         if not self._started:
+            await self._recover_jobs()
             self._worker_task = asyncio.create_task(self._worker_loop(), name="mission_worker")
             self._started = True
             logger.info("[JobQueue] Worker started")
@@ -82,9 +91,16 @@ class JobQueue:
                 await self._worker_task
             except asyncio.CancelledError:
                 pass
+        self._worker_task = None
+        pending_saves = list(self._persistence_tasks)
+        if pending_saves:
+            _, pending = await asyncio.wait(pending_saves, timeout=5.0)
+            if pending:
+                logger.warning("[JobQueue] %d mission persistence task(s) did not finish before shutdown", len(pending))
+        self._started = False
         logger.info("[JobQueue] Worker stopped")
 
-    def enqueue(
+    async def enqueue(
         self,
         query: str,
         user_id: str,
@@ -93,30 +109,69 @@ class JobQueue:
         api_keys: Dict[str, str],
     ) -> Job:
         """Create a job, add to queue, return immediately with job.id."""
+        if not self._started:
+            raise RuntimeError("Mission worker is not available")
+        if self._queue.full():
+            raise RuntimeError("Mission queue is full; please retry shortly")
         job = Job(
-            id=str(uuid.uuid4())[:12],
+            id=str(uuid.uuid4()),
             query=query,
             user_id=user_id,
             session_id=session_id,
             model=model,
             api_keys=api_keys,
         )
+        await self._create_persisted_job(job)
         self._jobs[job.id] = job
         self._queue.put_nowait(job)
         logger.info(f"[JobQueue] Enqueued job={job.id} user={user_id}")
         return job
 
-    def get_job(self, job_id: str) -> Optional[Job]:
-        return self._jobs.get(job_id)
+    async def get_job(self, job_id: str) -> Optional[Job]:
+        cached = self._jobs.get(job_id)
+        if cached:
+            return cached
+        return await self._load_job(job_id)
 
-    def user_jobs(self, user_id: str) -> List[Job]:
-        return [j for j in self._jobs.values() if j.user_id == user_id]
+    async def user_jobs(self, user_id: str) -> List[Job]:
+        from sqlalchemy import select
+        from app.core.database import AsyncSessionLocal
+        from app.models.mission_job import MissionJob
+
+        async with AsyncSessionLocal() as db:
+            records = (await db.execute(
+                select(MissionJob).where(MissionJob.user_id == user_id)
+                .order_by(MissionJob.created_at.desc()).limit(100)
+            )).scalars().all()
+        jobs = [self._job_from_record(record) for record in records]
+        self._jobs.update({job.id: job for job in jobs})
+        return jobs
 
     def _emit(self, job: Job, event_type: str, data: Dict[str, Any]) -> None:
         """Push an event onto the job's event list and wake SSE consumers."""
         job.events.append(JobEvent(event_type=event_type, data=data))
         job._event_signal.set()
-        job._event_signal.clear()
+        self._schedule_save(job)
+
+    def _schedule_save(self, job: Job) -> None:
+        """Persist without delaying the live SSE stream; failures are logged."""
+        task = asyncio.create_task(self._save_job(job))
+        self._persistence_tasks.add(task)
+
+        def report(task: asyncio.Task) -> None:
+            self._persistence_tasks.discard(task)
+            self._report_persist_failure(task)
+
+        task.add_done_callback(report)
+
+    @staticmethod
+    def _report_persist_failure(task: asyncio.Task) -> None:
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            logger.error("[JobQueue] Could not persist mission state: %s", exc)
 
     async def tail_events(
         self,
@@ -151,20 +206,18 @@ class JobQueue:
                 break
 
             try:
+                # Clear only after draining events.  There is no await between
+                # this clear and wait(), so an event emitted in between is never
+                # lost; the prior implementation merely polled every 100 ms.
+                job._event_signal.clear()
+                if idx < len(job.events):
+                    continue
                 await asyncio.wait_for(
-                    asyncio.shield(self._wait_for_signal(job)),
+                    asyncio.shield(job._event_signal.wait()),
                     timeout=min(remaining, 5.0),
                 )
             except asyncio.TimeoutError:
                 pass
-
-    async def _wait_for_signal(self, job: Job) -> None:
-        """Wait until the job emits a new event."""
-        signal = asyncio.Event()
-        # Re-check: new events may already be waiting
-        if len(job.events) > 0:
-            return
-        await asyncio.sleep(0.1)
 
     async def _worker_loop(self) -> None:
         """Continuously processes jobs from the queue."""
@@ -182,6 +235,7 @@ class JobQueue:
         """Run the Supervisor graph for a job, emitting events as it proceeds."""
         logger.info(f"[JobQueue] Processing job={job.id}")
         job.status = "running"
+        await self._save_job(job)
 
         self._emit(job, "mission_started", {
             "job_id":    job.id,
@@ -261,6 +315,14 @@ class JobQueue:
 
             job.status = "complete"
 
+        except asyncio.CancelledError:
+            # Never re-run an interrupted LLM operation automatically: it may
+            # have caused external work before the restart.  Surface a retryable
+            # terminal result instead of leaving the job forever "running".
+            job.status = "error"
+            job.error = "Mission interrupted by server shutdown; please start a new mission."
+            self._emit(job, "error", {"job_id": job.id, "error": job.error})
+            raise
         except Exception as exc:
             logger.error(f"[JobQueue] Job {job.id} failed: {exc}", exc_info=True)
             job.status = "error"
@@ -269,6 +331,130 @@ class JobQueue:
 
         finally:
             job.finished_at = time.time()
+            await self._save_job(job)
+
+    @staticmethod
+    def _event_to_dict(event: JobEvent) -> Dict[str, Any]:
+        return {
+            "event_type": event.event_type,
+            "data": event.data,
+            "timestamp": event.timestamp,
+        }
+
+    @staticmethod
+    def _event_from_dict(item: Dict[str, Any]) -> JobEvent:
+        return JobEvent(
+            event_type=str(item.get("event_type", "progress")),
+            data=item.get("data") if isinstance(item.get("data"), dict) else {},
+            timestamp=float(item.get("timestamp", time.time())),
+        )
+
+    def _job_from_record(self, record: Any) -> Job:
+        from app.core.security import decrypt_api_key
+
+        api_keys: Dict[str, str] = {}
+        if record.encrypted_api_keys:
+            try:
+                decrypted = json.loads(decrypt_api_key(record.encrypted_api_keys))
+                if isinstance(decrypted, dict):
+                    api_keys = {str(k): str(v) for k, v in decrypted.items()}
+            except Exception:
+                logger.warning("[JobQueue] Could not decrypt transient keys for job=%s", record.id)
+
+        created_at = record.created_at.timestamp() if record.created_at else time.time()
+        finished_at = record.finished_at.timestamp() if record.finished_at else None
+        raw_events = record.events if isinstance(record.events, list) else []
+        return Job(
+            id=record.id,
+            query=record.query,
+            user_id=record.user_id,
+            session_id=record.session_id,
+            model=record.model,
+            api_keys=api_keys,
+            status=record.status,
+            events=[self._event_from_dict(event) for event in raw_events if isinstance(event, dict)],
+            result=record.result,
+            error=record.error,
+            created_at=created_at,
+            finished_at=finished_at,
+        )
+
+    async def _create_persisted_job(self, job: Job) -> None:
+        from app.core.database import AsyncSessionLocal
+        from app.core.security import encrypt_api_key
+        from app.models.mission_job import MissionJob
+
+        async with AsyncSessionLocal() as db:
+            db.add(MissionJob(
+                id=job.id,
+                user_id=job.user_id,
+                session_id=job.session_id,
+                query=job.query,
+                model=job.model,
+                encrypted_api_keys=encrypt_api_key(json.dumps(job.api_keys)),
+                status=job.status,
+                events=[],
+            ))
+            await db.commit()
+
+    async def _save_job(self, job: Job) -> None:
+        from app.core.database import AsyncSessionLocal
+        from app.models.mission_job import MissionJob
+
+        lock = self._persistence_locks.setdefault(job.id, asyncio.Lock())
+        async with lock:
+            async with AsyncSessionLocal() as db:
+                record = await db.get(MissionJob, job.id)
+                if record is None:
+                    return
+                record.status = job.status
+                record.events = [self._event_to_dict(event) for event in job.events]
+                record.result = job.result
+                record.error = job.error
+                record.finished_at = (
+                    datetime.fromtimestamp(job.finished_at, tz=timezone.utc)
+                    if job.finished_at else None
+                )
+                await db.commit()
+
+    async def _load_job(self, job_id: str) -> Optional[Job]:
+        from app.core.database import AsyncSessionLocal
+        from app.models.mission_job import MissionJob
+
+        async with AsyncSessionLocal() as db:
+            record = await db.get(MissionJob, job_id)
+            if record is None:
+                return None
+            job = self._job_from_record(record)
+        self._jobs[job.id] = job
+        return job
+
+    async def _recover_jobs(self) -> None:
+        """Recover queued work and safely terminalize interrupted running work."""
+        from sqlalchemy import select
+        from app.core.database import AsyncSessionLocal
+        from app.models.mission_job import MissionJob
+
+        async with AsyncSessionLocal() as db:
+            records = (await db.execute(
+                select(MissionJob).where(MissionJob.status.in_(["queued", "running", "awaiting_approval"]))
+            )).scalars().all()
+            for record in records:
+                job = self._job_from_record(record)
+                self._jobs[job.id] = job
+                if job.status == "queued" and not self._queue.full():
+                    self._queue.put_nowait(job)
+                    continue
+                job.status = "error"
+                job.error = "Mission interrupted by server restart; please start a new mission."
+                job.finished_at = time.time()
+                record.status = job.status
+                record.error = job.error
+                record.finished_at = datetime.fromtimestamp(job.finished_at, tz=timezone.utc)
+                record.events = [self._event_to_dict(event) for event in job.events]
+            await db.commit()
+        if records:
+            logger.info("[JobQueue] Recovered %d durable mission record(s)", len(records))
 
 
 # ── Singleton ─────────────────────────────────────────────────────────────────

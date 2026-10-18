@@ -64,12 +64,14 @@ class ToolScheduler:
         results = await ToolScheduler(registry).run(tasks)
     """
 
-    def __init__(self, registry):
+    def __init__(self, registry, call_context: Optional[Dict[str, Any]] = None):
         """
         Args:
-            registry: ToolRegistry singleton with an async call_tool() method.
+            registry: Tenant-scoped ToolRegistry with an async call_tool() method.
+            call_context: Authenticated request context forwarded to each call.
         """
         self._registry = registry
+        self._call_context = dict(call_context or {})
 
     async def run(self, tasks: List[ToolTask]) -> List[ToolResult]:
         """
@@ -160,7 +162,7 @@ class ToolScheduler:
             attempts += 1
             try:
                 output = await asyncio.wait_for(
-                    self._registry.call_tool(task.tool, resolved_args),
+                    self._registry.call_tool(task.tool, resolved_args, **self._call_context),
                     timeout=task.timeout,
                 )
                 latency_ms = round((time.monotonic() - start) * 1000, 1)

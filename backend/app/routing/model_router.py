@@ -149,7 +149,7 @@ def route_query(
 
     if selected is None:
         # Absolute fallback — return whatever user_selected_model was, or a hardcoded default
-        fallback_model = user_selected_model or "llama-3.3-70b-versatile"
+        fallback_model = user_selected_model or settings.GROQ_MODEL
         logger.warning(f"[Router] No available profile for tier={tier}. Using fallback: {fallback_model}")
         return RoutingDecision(
             selected_model=fallback_model,

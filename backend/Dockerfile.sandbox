@@ -1,0 +1,18 @@
+FROM python:3.11-slim-bookworm
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PORT=8001
+
+WORKDIR /app
+
+COPY requirements-sandbox.txt .
+RUN pip install --no-cache-dir --default-timeout=120 --retries=5 -r requirements-sandbox.txt
+COPY app/sandbox_service.py app/sandbox_service.py
+
+RUN groupadd --system sandbox && useradd --system --gid sandbox --home-dir /nonexistent --shell /usr/sbin/nologin sandbox \
+    && chown -R sandbox:sandbox /app
+USER sandbox
+
+EXPOSE 8001
+CMD ["sh", "-c", "uvicorn app.sandbox_service:app --host 0.0.0.0 --port ${PORT} --workers 1 --no-access-log"]

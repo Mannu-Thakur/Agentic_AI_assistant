@@ -25,7 +25,7 @@ from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.core.config import settings
-from app.api import auth, chat, documents, memories, api_keys, admin, mcp_servers, metrics as metrics_router, evaluation as evaluation_router
+from app.api import auth, chat, documents, memories, api_keys, admin, mcp_servers, metrics as metrics_router, evaluation as evaluation_router, tool_approvals
 from app.api import proactive as proactive_router
 
 from app.api import health as health_router
@@ -160,17 +160,9 @@ async def lifespan(app: FastAPI):
     except Exception as _pv_err:
         logger.warning(f"Provider startup validation encountered an issue (non-fatal): {_pv_err}")
 
-    # I-H1 FIX: Instantiate ToolRegistry once and reuse the same singleton across
-    # startup and shutdown. Previously ToolRegistry() was called twice, creating two
-    # separate instances — shutdown() was a no-op because it ran on the wrong object.
+    # Tool registries are intentionally request-scoped: a shared registry would
+    # leak one user's connected remote MCP server into another user's request.
     _tool_registry = None
-    try:
-        from app.tools.registry import ToolRegistry
-        _tool_registry = ToolRegistry()
-        await _tool_registry.initialize()
-        logger.info("ToolRegistry and MCP servers initialized on startup.")
-    except Exception as _tr_err:
-        logger.warning(f"ToolRegistry startup initialization warning (non-fatal): {_tr_err}")
 
     # NEW-LOW-2 FIX: Eagerly initialise the Redis in-memory fallback lock during
     # lifespan startup (inside the running event loop) so the first concurrent
@@ -213,12 +205,13 @@ async def lifespan(app: FastAPI):
         logger.warning(f"[Proactive] Scheduler failed to start (non-fatal): {_ps_err}")
 
     # ── Multi-Agent Job Queue Worker ─────────────────────────────────────────
-    try:
-        from app.agents.job_queue import job_queue as _job_queue
-        _job_queue.start_worker()
-        logger.info("[MultiAgent] Background job queue worker started.")
-    except Exception as _jq_err:
-        logger.warning(f"[MultiAgent] Job queue worker failed to start (non-fatal): {_jq_err}")
+    if settings.ENABLE_MISSION_MODE:
+        try:
+            from app.agents.job_queue import job_queue as _job_queue
+            await _job_queue.start_worker()
+            logger.info("[MultiAgent] Background job queue worker started.")
+        except Exception as _jq_err:
+            logger.warning(f"[MultiAgent] Job queue worker failed to start (non-fatal): {_jq_err}")
 
     yield  # Application runs here
 
@@ -230,14 +223,6 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
 
-    # ── Shutdown ToolRegistry MCP clients ─────────────────────────────────────
-    # I-H1 FIX: Use the same _tool_registry instance from startup, not a new ToolRegistry()
-    if _tool_registry is not None:
-        try:
-            await _tool_registry.shutdown()
-        except Exception as _tr_err:
-            logger.warning(f"Error shutting down ToolRegistry: {_tr_err}")
-
     # Shutdown: cancel task
     if bg_task is not None:
         bg_task.cancel()
@@ -247,11 +232,12 @@ async def lifespan(app: FastAPI):
             pass
 
     # Shutdown job queue worker
-    try:
-        from app.agents.job_queue import job_queue as _jq
-        await _jq.stop_worker()
-    except Exception:
-        pass
+    if settings.ENABLE_MISSION_MODE:
+        try:
+            from app.agents.job_queue import job_queue as _jq
+            await _jq.stop_worker()
+        except Exception:
+            pass
 
     logger.info("Application shutting down.")
 
@@ -366,6 +352,7 @@ from app.api import database_query as database_query_router
 app.include_router(translate_router.router,      prefix=settings.API_V1_STR)
 app.include_router(summarize_router.router,       prefix=settings.API_V1_STR)
 app.include_router(database_query_router.router,  prefix=settings.API_V1_STR)
+app.include_router(tool_approvals.router,         prefix=settings.API_V1_STR)
 
 
 

@@ -296,13 +296,13 @@ class MemoryService:
 
         # Build multi-provider candidate list for extraction
         extraction_candidates = [
-            (GeminiProvider(),     "gemini",     "gemini-2.0-flash",
+            (GeminiProvider(),     "gemini",     settings.GEMINI_MODEL,
              user_keys.get("gemini") or user_keys.get("google") or settings.GEMINI_API_KEY),
-            (GroqProvider(),       "groq",       "llama-3.3-70b-versatile",
+            (GroqProvider(),       "groq",       settings.GROQ_MODEL,
              user_keys.get("groq") or settings.GROQ_API_KEY),
             (OpenAIProvider(),     "openai",     "gpt-4o-mini",
              user_keys.get("openai") or settings.OPENAI_API_KEY),
-            (OpenRouterProvider(), "openrouter", "google/gemini-2.0-flash-001",
+            (OpenRouterProvider(), "openrouter", settings.OPENROUTER_MODEL,
              user_keys.get("openrouter") or settings.OPENROUTER_API_KEY),
         ]
 

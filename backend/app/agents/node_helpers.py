@@ -16,6 +16,11 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger("agents.helpers")
 
 
+def _default_model() -> str:
+    from app.core.config import settings
+    return settings.GEMINI_MODEL
+
+
 def _get_provider_and_key(model: str, api_keys: Dict[str, str]):
     """
     Resolve provider + API key using the same logic as nodes.get_provider().
@@ -55,7 +60,7 @@ def _get_provider_and_key(model: str, api_keys: Dict[str, str]):
 
 async def call_llm_simple(
     prompt: str,
-    model: str = "gemini-2.0-flash",
+    model: Optional[str] = None,
     api_keys: Optional[Dict[str, str]] = None,
     system: str = "You are a helpful AI assistant.",
     temperature: float = 0.2,
@@ -64,6 +69,7 @@ async def call_llm_simple(
     """Call any supported LLM provider with a prompt, return text."""
     from langchain_core.messages import HumanMessage, SystemMessage
 
+    model = model or _default_model()
     keys = api_keys or {}
     provider, api_key = _get_provider_and_key(model, keys)
 
@@ -100,7 +106,7 @@ async def call_llm_simple(
 
 async def call_llm_json(
     prompt: str,
-    model: str = "gemini-2.0-flash",
+    model: Optional[str] = None,
     api_keys: Optional[Dict[str, str]] = None,
     system: str = "Respond ONLY with valid JSON. No explanation, no markdown fences.",
     temperature: float = 0.0,

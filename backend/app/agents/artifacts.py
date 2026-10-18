@@ -22,20 +22,23 @@ Artifact types
 
 from __future__ import annotations
 
-import os
 import json
 import logging
 import asyncio
+import os
+import re
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
+from app.core.config import settings
+
 logger = logging.getLogger("agents.artifacts")
 
-# ── Artifact storage directory (created on first use) ────────────────────────
-_ARTIFACT_BASE = Path(os.getenv("ARTIFACT_DIR", "artifacts"))
+_SAFE_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+_SAFE_FILENAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,191}$")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -76,6 +79,13 @@ class Artifact:
     preview: Optional[str] = None        # short text preview (first 500 chars)
 
     def to_dict(self) -> Dict[str, Any]:
+        """Public metadata.  Never disclose the server filesystem layout."""
+        data = asdict(self)
+        data.pop("path", None)
+        return data
+
+    def to_index_dict(self) -> Dict[str, Any]:
+        """Internal durable representation, including the verified disk path."""
         return asdict(self)
 
     @property
@@ -104,16 +114,51 @@ class ArtifactStore:
     deleted = await store.delete(artifact_id)
     """
 
-    def __init__(self) -> None:
+    def __init__(self, base_dir: Optional[Path | str] = None) -> None:
         self._index: Dict[str, Artifact] = {}
         self._lock = asyncio.Lock()
-        _ARTIFACT_BASE.mkdir(parents=True, exist_ok=True)
+        configured_base = base_dir if base_dir is not None else settings.ARTIFACT_DIR
+        self._base = Path(configured_base).expanduser().resolve()
+        self._base.mkdir(parents=True, exist_ok=True)
         self._load_index()
 
     # ── Persistence ──────────────────────────────────────────────────────────
 
     def _index_path(self) -> Path:
-        return _ARTIFACT_BASE / ".index.json"
+        return self._base / ".index.json"
+
+    @staticmethod
+    def _validate_component(value: str, label: str) -> str:
+        if not _SAFE_COMPONENT.fullmatch(value or ""):
+            raise ValueError(f"Invalid artifact {label}")
+        return value
+
+    @staticmethod
+    def _validate_filename(filename: str) -> str:
+        # A filename is not a path.  Reject traversal and Windows drive syntax
+        # before normalising human-readable document titles to a safe filename.
+        if (
+            not filename
+            or Path(filename).name != filename
+            or "/" in filename
+            or "\\" in filename
+            or filename in {".", ".."}
+            or filename.startswith(".")
+            or "\x00" in filename
+        ):
+            raise ValueError("Invalid artifact filename")
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", filename).strip("._")
+        if not safe or not _SAFE_FILENAME.fullmatch(safe):
+            raise ValueError("Invalid artifact filename")
+        return safe
+
+    def _path_under_base(self, *parts: str) -> Path:
+        path = self._base.joinpath(*parts).resolve()
+        try:
+            path.relative_to(self._base)
+        except ValueError as exc:
+            raise ValueError("Artifact path escapes its storage directory") from exc
+        return path
 
     def _load_index(self) -> None:
         """Load persisted artifact index on startup."""
@@ -123,8 +168,15 @@ class ArtifactStore:
                 data = json.loads(idx_path.read_text())
                 for item in data:
                     art = Artifact(**item)
-                    # Only load if the file still exists
-                    if art.path and Path(art.path).exists():
+                    self._validate_component(art.user_id, "owner")
+                    self._validate_component(art.session_id, "session")
+                    self._validate_filename(art.filename)
+                    expected_path = self._path_under_base(
+                        art.user_id, art.session_id, art.filename
+                    )
+                    # Do not trust an old/corrupted index path.  An item is
+                    # accepted only when it resolves to its expected tenant path.
+                    if art.path and Path(art.path).resolve() == expected_path and expected_path.is_file():
                         self._index[art.id] = art
                 logger.info(f"[ArtifactStore] Loaded {len(self._index)} artifact(s) from index.")
             except Exception as e:
@@ -133,8 +185,11 @@ class ArtifactStore:
     async def _save_index(self) -> None:
         """Persist the index to disk (called after mutations)."""
         try:
-            data = [art.to_dict() for art in self._index.values()]
-            self._index_path().write_text(json.dumps(data, indent=2))
+            data = [art.to_index_dict() for art in self._index.values()]
+            index_path = self._index_path()
+            temp_path = index_path.with_suffix(".tmp")
+            temp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            os.replace(temp_path, index_path)
         except Exception as e:
             logger.warning(f"[ArtifactStore] Could not save index: {e}")
 
@@ -156,15 +211,28 @@ class ArtifactStore:
 
         Returns the newly created Artifact object.
         """
+        if artifact_type not in ARTIFACT_TYPES:
+            raise ValueError(f"Unsupported artifact type: {artifact_type}")
+        user_id = self._validate_component(user_id, "owner")
+        session_id = self._validate_component(session_id, "session")
+        content_bytes = content.encode("utf-8") if isinstance(content, str) else content
+        max_bytes = settings.MAX_ARTIFACT_SIZE_MB * 1024 * 1024
+        if len(content_bytes) > max_bytes:
+            raise ValueError(
+                f"Artifact exceeds the {settings.MAX_ARTIFACT_SIZE_MB} MB size limit"
+            )
+
         async with self._lock:
             art_id = str(uuid4())
-            ext = ARTIFACT_TYPES.get(artifact_type, {}).get("ext", ".bin")
-            safe_filename = filename or f"{artifact_type}_{art_id[:8]}{ext}"
+            ext = ARTIFACT_TYPES[artifact_type]["ext"]
+            safe_filename = self._validate_filename(
+                filename or f"{artifact_type}_{art_id[:8]}{ext}"
+            )
 
             # Store under user_id/session_id subdirectory
-            subdir = _ARTIFACT_BASE / user_id / session_id
+            subdir = self._path_under_base(user_id, session_id)
             subdir.mkdir(parents=True, exist_ok=True)
-            file_path = subdir / safe_filename
+            file_path = self._path_under_base(user_id, session_id, safe_filename)
 
             # Write bytes or text
             if isinstance(content, str):
@@ -212,8 +280,11 @@ class ArtifactStore:
     def get_path(self, artifact_id: str) -> Optional[Path]:
         art = self._index.get(artifact_id)
         if art and art.path:
-            p = Path(art.path)
-            if p.exists():
+            try:
+                p = self._path_under_base(art.user_id, art.session_id, art.filename)
+            except ValueError:
+                return None
+            if p.is_file() and p.resolve() == Path(art.path).resolve():
                 return p
         return None
 
@@ -239,24 +310,41 @@ class ArtifactStore:
 
     async def delete(self, artifact_id: str) -> bool:
         async with self._lock:
-            art = self._index.pop(artifact_id, None)
+            art = self._index.get(artifact_id)
             if not art:
                 return False
-            if art.path:
+            file_path: Optional[Path] = None
+            try:
+                candidate = self._path_under_base(art.user_id, art.session_id, art.filename)
+                if candidate.is_file() and art.path and candidate.resolve() == Path(art.path).resolve():
+                    file_path = candidate
+            except (OSError, ValueError):
+                file_path = None
+            self._index.pop(artifact_id, None)
+            if file_path:
                 try:
-                    Path(art.path).unlink(missing_ok=True)
+                    file_path.unlink(missing_ok=True)
                 except Exception as e:
                     logger.warning(f"[ArtifactStore] Could not delete file: {e}")
             await self._save_index()
             return True
 
     def stats(self) -> Dict[str, Any]:
-        total_size = sum(a.size_bytes for a in self._index.values())
+        return self._stats_for(self._index.values())
+
+    def stats_for_user(self, user_id: str) -> Dict[str, Any]:
+        """Return aggregate data only for the requesting tenant."""
+        return self._stats_for(self.list_by_user(user_id))
+
+    @staticmethod
+    def _stats_for(artifacts: Any) -> Dict[str, Any]:
+        artifacts = list(artifacts)
+        total_size = sum(a.size_bytes for a in artifacts)
         by_type: Dict[str, int] = {}
-        for art in self._index.values():
+        for art in artifacts:
             by_type[art.type] = by_type.get(art.type, 0) + 1
         return {
-            "total_artifacts": len(self._index),
+            "total_artifacts": len(artifacts),
             "total_size_bytes": total_size,
             "by_type": by_type,
         }

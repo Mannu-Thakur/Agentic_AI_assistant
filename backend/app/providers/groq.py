@@ -211,7 +211,7 @@ class GroqProvider(BaseLLMProvider):
             )
 
         # ── Deprecated model remapping ────────────────────────────────────────
-        model = model or os.getenv("DEFAULT_GROQ_MODEL") or "llama-3.3-70b-versatile"
+        model = model or os.getenv("DEFAULT_GROQ_MODEL") or settings.GROQ_MODEL
         raw_model = model
         model = registry.remap_model(model)
 
@@ -408,7 +408,7 @@ class GroqProvider(BaseLLMProvider):
             )
 
         # ── Deprecated model remapping ────────────────────────────────────────
-        model = model or os.getenv("DEFAULT_GROQ_MODEL") or "llama-3.3-70b-versatile"
+        model = model or os.getenv("DEFAULT_GROQ_MODEL") or settings.GROQ_MODEL
         raw_model = model
         model = registry.remap_model(model)
 

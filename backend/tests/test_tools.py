@@ -1,27 +1,58 @@
-import sys
 import pytest
-import asyncio
 from unittest.mock import patch, MagicMock, AsyncMock
 from app.tools.local_tools import python_sandbox, tavily_search
 from app.tools.mcp_client import McpStdioClient
 from app.tools.registry import ToolRegistry
 from app.agent.graph import agent_graph
+from app.core.config import settings
 from langchain_core.messages import HumanMessage
 
 @pytest.mark.anyio
-async def test_python_sandbox_executor():
+async def test_python_sandbox_executor(monkeypatch):
     """
-    Verify that the Python executor sandbox runs code successfully and handles timeouts.
+    Verify code execution fails closed unless the isolated service is configured.
     """
-    # Success case
-    code = "print(10 + 20)"
-    result = await python_sandbox(code)
-    assert result == "30"
+    from app.tools.local_tools import settings
 
-    # Timeout case
-    timeout_code = "import time\ntime.sleep(20)\nprint('done')"
-    timeout_result = await python_sandbox(timeout_code)
-    assert "Timeout" in timeout_result
+    monkeypatch.setattr(settings, "ENABLE_CODE_EXECUTION", False)
+    disabled = await python_sandbox("print(10 + 20)")
+    assert "not enabled" in disabled
+    assert "not executed" in disabled
+
+    monkeypatch.setattr(settings, "ENABLE_CODE_EXECUTION", True)
+    monkeypatch.setattr(settings, "CODE_SANDBOX_URL", "https://sandbox.internal")
+    monkeypatch.setattr(settings, "SANDBOX_SHARED_SECRET", "test-only-secret")
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"output": "30", "exit_code": 0}
+
+    class FakeAsyncClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, url, *, json, headers):
+            captured.update(url=url, json=json, headers=headers)
+            return FakeResponse()
+
+    with patch("httpx.AsyncClient", FakeAsyncClient):
+        result = await python_sandbox("print(10 + 20)")
+    assert result == "30"
+    assert captured["url"] == "https://sandbox.internal/execute"
+    assert captured["json"] == {"code": "print(10 + 20)"}
+    assert captured["headers"]["X-Sandbox-Token"] == "test-only-secret"
 
 @pytest.mark.anyio
 async def test_tavily_search_mock(monkeypatch):
@@ -40,57 +71,11 @@ async def test_tavily_search_mock(monkeypatch):
 @pytest.mark.anyio
 async def test_mcp_client_and_calculator_server():
     """
-    Verify that our custom Stdio MCP client can spawn our calculator server,
-    perform the handshake, query tools, execute math, and terminate cleanly.
+    Verify the public deployment never launches a local stdio MCP process.
     """
-    import os
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    calculator_script = os.path.join(current_dir, "..", "app", "tools", "mcp_calculator_server.py")
-    python_exe = sys.executable or "python"
-
-    client = McpStdioClient(command=python_exe, args=[calculator_script])
-    await client.connect()
-
-    # 1. List tools — 7 tools (calculate + add_expense + get_expenses + summarize_expenses + create_reminder + get_reminders + send_email)
-    tools = await client.list_tools()
-    tool_names = [t["name"] for t in tools]
-    assert len(tools) == 7
-    assert "calculate" in tool_names
-    assert "add_expense" in tool_names
-    assert "get_expenses" in tool_names
-    assert "summarize_expenses" in tool_names
-    assert "create_reminder" in tool_names
-    assert "get_reminders" in tool_names
-    assert "send_email" in tool_names
-
-    # 2. Call tool calculate
-    result = await client.call_tool("calculate", {"expression": "12 * 12"})
-    assert result == "144"
-
-    # 3. Call tool with sin
-    result_sin = await client.call_tool("calculate", {"expression": "sin(pi/2)"})
-    assert abs(float(result_sin) - 1.0) < 0.01
-
-    # 4. Test add_expense
-    result_exp = await client.call_tool("add_expense", {"amount": 500, "description": "lunch", "category": "food"})
-    assert "Added expense" in result_exp or "Successfully added" in result_exp
-
-    # 5. Test get_expenses & summarize_expenses
-    result_get = await client.call_tool("get_expenses", {"category": "food"})
-    assert "lunch" in result_get or "food" in result_get.lower()
-
-    result_sum = await client.call_tool("summarize_expenses", {})
-    assert "Expense Summary" in result_sum
-
-    # 6. Test create_reminder
-    result_rem = await client.call_tool("create_reminder", {"time": "tomorrow 10 AM", "text": "Meeting"})
-    assert "Successfully created" in result_rem or "Reminder set" in result_rem
-
-    # 7. Test send_email
-    result_email = await client.call_tool("send_email", {"to": "test@example.com", "subject": "Test", "body": "Test body"})
-    assert any(term in result_email for term in ("Successfully sent", "Email sent", "Email NOT sent", "logged", "SMTP"))
-
-    # 8. Clean up subprocess
+    client = McpStdioClient(command="python", args=["must-not-run.py"])
+    with pytest.raises(RuntimeError, match="disabled in the public deployment"):
+        await client.connect()
     await client.close()
 
 @pytest.mark.anyio
@@ -108,13 +93,20 @@ async def test_tool_registry():
     assert "python_sandbox" in names
     assert "calculate" in names
 
-    # Route local execution
+    # The tool stays visible, but fails closed until the isolated sandbox is configured.
     res_py = await registry.call_tool("python_sandbox", {"code": "print(12345)"})
-    assert res_py == "12345"
+    assert "not enabled" in res_py
+    assert "not executed" in res_py
 
     # Route MCP execution
     res_mcp = await registry.call_tool("calculate", {"expression": "3 * 3 * 3"})
     assert res_mcp == "27"
+
+    with patch("app.tools.registry.metrics_collector") as metrics:
+        metrics.record_tool_call = MagicMock()
+        failure = await registry.call_tool("calculate", {"expression": "1 / 0"})
+        assert failure.startswith("Calculation failed:")
+        metrics.record_tool_call.assert_called_with("calculate", "error")
 
     await registry.shutdown()
 
@@ -128,8 +120,10 @@ async def test_agent_graph_tool_calling_loop():
     """
     initial_state = {
         "messages":              [HumanMessage(content="calculate 8 * 8")],
-        "active_model":          "gemini-3.5-flash",
-        "user_id":               "test-user",
+        "active_model":          settings.GEMINI_MODEL,
+        # This test targets the tool loop; retrieval would send its fake key to
+        # the embedding API and exercise an unrelated external dependency.
+        "user_id":               None,
         "chat_id":               "test-chat",
         "retrieved_documents":   [],
         "metrics":               {},

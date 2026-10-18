@@ -11,11 +11,6 @@ INTERNAL_TOOL_NAMES: List[str] = [
     "tavily_search",
     "python_sandbox",
     "calculate",
-    "mcp_calculator_server",
-    "add_expense",
-    "get_expenses",
-    "create_reminder",
-    "send_email",
     "translate_text",
     "summarize_text",
     "list_tables",
@@ -56,28 +51,20 @@ INTENT_MULTI_STEP     = "MULTI_STEP"
 INTENT_TOOL_WHITELIST: Dict[str, List[str]] = {
     INTENT_MEMORY_WRITE:   [],                           # No tools — pure ACK
     INTENT_NORMAL_CHAT:    [],                           # No tools for pure conversational chat
-    INTENT_WEB_SEARCH:     ["tavily_search", "web_search", "web_fetch", "web_extract"],
+    INTENT_WEB_SEARCH:     ["tavily_search"],
     INTENT_CODE_EXECUTION: ["python_sandbox"],
-    INTENT_MCP_TOOL:       [
-        "calculate", "add_expense", "get_expenses", "list_expenses",
-        "update_expense", "delete_expense", "search_expenses",
-        "monthly_summary", "category_summary", "top_merchants",
-        "summarize_expenses", "create_reminder", "send_email"
-    ],
-    INTENT_DOCUMENT_QA:    ["search_documents"],
-    INTENT_VISION:         ["search_documents"],         # Vision + doc search for context
+    # Remote MCP tools are loaded dynamically from authenticated users' configured servers.
+    INTENT_MCP_TOOL:       ["calculate"],
+    INTENT_DOCUMENT_QA:    [],                           # Retrieval is handled by the RAG graph, not a model tool call
+    INTENT_VISION:         [],                           # Vision and retrieval are handled by dedicated graph stages
     INTENT_COMPLEX:        [
-        "tavily_search", "web_search", "web_fetch", "web_extract",
-        "python_sandbox", "calculate", "add_expense",
-        "get_expenses", "list_expenses", "update_expense", "delete_expense",
-        "search_expenses", "monthly_summary", "category_summary",
-        "top_merchants", "summarize_expenses", "create_reminder", "send_email",
+        "tavily_search", "python_sandbox", "calculate",
         "search_documents", "summarize_text", "translate_text",
         "execute_sql", "list_tables", "describe_table", "chunk_and_analyze"
     ],
     INTENT_PROGRAMMING:    ["python_sandbox"],
     INTENT_MATH:           ["calculate", "python_sandbox"],
-    INTENT_FINANCE:        ["tavily_search", "calculate", "add_expense", "list_expenses", "get_expenses", "monthly_summary", "category_summary", "top_merchants", "summarize_expenses"],
+    INTENT_FINANCE:        ["tavily_search", "calculate"],
     INTENT_NEWS:           ["tavily_search"],
     INTENT_CURRENT_EVENTS: ["tavily_search"],
     INTENT_PDF_QA:         ["search_documents"],
@@ -227,12 +214,12 @@ def compile_system_prompt(
     system += (
         "\n### Internal System & Tool Execution Rules (NEVER VIOLATE):\n"
         "- NEVER mention the names of internal tools or systems in your response.\n"
-        "- NEVER mention internal tool function names (like 'tavily_search', 'python_sandbox', 'add_expense') directly in conversation.\n"
-        "- When executing an MCP tool (adding/listing/updating/deleting expenses, summary, math, reminders, email), invoke the tool directly.\n"
-        "- When asked to retrieve, add, update, calculate, or summarize expenses, transactions, math calculations, reminders, or emails, YOU MUST INVOKE THE RELEVANT MCP TOOL(S).\n"
-        "- FOR COMPOUND QUERIES WITH MULTIPLE QUESTIONS: If any sub-question requests an action or data lookup supported by a tool (e.g. adding an expense, checking total spending, math), YOU MUST ISSUE THE TOOL CALL(S) FIRST before finalizing your complete response.\n"
-        "- NEVER write Python code snippets or script blocks (`import os`, `pandas`, `csv`) to calculate expenses or read files when expense tools are available — execute the tool(s) instead.\n"
-        "- NEVER ask the user to provide their own expense records when expense/calculator tools are available — execute the tool(s) instead.\n"
+        "- NEVER mention internal tool function names directly in conversation.\n"
+        "- Invoke only capabilities whose schemas are provided for this request. Never claim a capability is connected when no matching schema is available.\n"
+        "- For a supported data lookup or external action, invoke the matching provided capability before finalizing the answer.\n"
+        "- For compound requests, invoke every relevant provided capability before answering the complete request.\n"
+        "- Do not substitute host-side code, files, or invented records for an available capability.\n"
+        "- External actions may require the user's explicit confirmation; report that confirmation is needed without claiming the action completed.\n"
         "- LIVE SEARCH RESULTS DIRECTIVE: If 'Search results for:' context is provided in your prompt, YOU DO HAVE REAL-TIME INFORMATION. Use the search results directly to answer the question — NEVER claim you cannot access real-time information or predict future events when search results are present.\n"
         "- DOCUMENT DEDUCTION DIRECTIVE: When retrieved documentation lists supported technologies (e.g., Python, JS, C++, Java) and the user asks about an unlisted item (e.g. Rust), state clearly based on the document that it is NOT listed as a supported language.\n"
         "- MISSING DOCUMENTATION DIRECTIVE: If no document in context describes a specific project/topic (e.g. IoT food tracking), state clearly: 'I don't have documentation for [topic] in my knowledge base' rather than generating generic textbook filler.\n"
@@ -566,7 +553,7 @@ Reply with ONLY this JSON object (no markdown, no extra text):
   "memory_content": "<extracted fact if MEMORY_WRITE, else null>",
   "memory_category": "<fact|preference|goal|topic if MEMORY_WRITE, else null>",
   "detected_language": "<detected language name, e.g. English, Hindi, Odia>",
-  "tool_hints": ["<tool names you think are needed, e.g. calculate, web_search, add_expense — leave [] if unsure>"]
+  "tool_hints": ["<tool names you think are needed, e.g. calculate or tavily_search — leave [] if unsure>"]
 }}
 """
 

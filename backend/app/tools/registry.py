@@ -1,9 +1,8 @@
-import os
-import sys
 import asyncio
 import logging
+import re
 from typing import Dict, Any, List, Optional
-from app.tools.local_tools import tavily_search, python_sandbox
+from app.tools.local_tools import tavily_search, python_sandbox, calculate
 from app.tools.advanced_tools import (
     translate_text,
     summarize_text,
@@ -13,9 +12,10 @@ from app.tools.advanced_tools import (
     search_documents,
     chunk_and_analyze,
 )
-from app.tools.mcp_client import McpStdioClient, McpHttpClient
+from app.tools.mcp_client import McpHttpClient
+from app.tools.network_safety import assert_public_dns_resolution
+from app.core.config import settings
 
-import threading
 
 # Module-level imports for DB/audit/metrics — kept here (not inline) so that
 # unit tests can patch them via `app.tools.registry.AsyncSessionLocal`, etc.
@@ -30,20 +30,84 @@ except ImportError:  # pragma: no cover — tolerate missing deps in isolated en
 
 logger = logging.getLogger(__name__)
 
-_singleton_cls_lock = threading.Lock()
+_ADMIN_DATABASE_TOOLS = frozenset({"list_tables", "describe_table", "execute_sql"})
 
+
+def remote_server_key(name: str) -> str:
+    """Create a stable, non-ambiguous internal key for a validated server name."""
+    normalized = re.sub(r"[^a-z0-9]+", "_", (name or "").lower()).strip("_")
+    if not normalized:
+        raise ValueError("Remote MCP server name must contain letters or numbers.")
+    return f"remote_{normalized}"
+def tool_requires_confirmation(name: str, is_remote_mcp: bool) -> bool:
+    """Require a user gesture for every third-party remote MCP invocation.
+
+    A tool name such as ``list_*`` or ``get_*`` is not a trustworthy security
+    contract: an arbitrary MCP server can make a side effect behind any name.
+    Native, tenant-scoped read tools remain automatic; remote servers always
+    receive a durable, one-time approval before the outbound tool call.
+    """
+    return bool(is_remote_mcp)
+
+
+_SENSITIVE_ARGUMENT_KEYS = {
+    "code", "api_key", "apikey", "token", "authorization", "password",
+    "secret", "credential",
+}
+
+
+def _audit_safe_arguments(arguments: Dict[str, Any]) -> Dict[str, Any]:
+    """Avoid persisting raw code, credentials, and unbounded nested payloads."""
+    def scrub(value: Any, depth: int = 0) -> Any:
+        if depth >= 4:
+            return "[truncated nested value]"
+        if isinstance(value, str):
+            return value[:500] + "… [truncated]" if len(value) > 500 else value
+        if isinstance(value, dict):
+            safe_dict: Dict[str, Any] = {}
+            for index, (key, nested_value) in enumerate(value.items()):
+                if index >= 30:
+                    safe_dict["[remaining]"] = "[truncated]"
+                    break
+                key_text = str(key)
+                if key_text.lower() in _SENSITIVE_ARGUMENT_KEYS:
+                    safe_dict[key_text] = "[redacted]"
+                else:
+                    safe_dict[key_text] = scrub(nested_value, depth + 1)
+            return safe_dict
+        if isinstance(value, (list, tuple)):
+            result = [scrub(item, depth + 1) for item in value[:30]]
+            if len(value) > 30:
+                result.append("[truncated]")
+            return result
+        return value if isinstance(value, (int, float, bool, type(None))) else str(value)[:500]
+
+    return scrub(arguments or {})
+
+
+def _tool_result_is_failure(result: Any) -> bool:
+    """Recognize explicit error prefixes used by built-in and MCP tools."""
+    if not isinstance(result, str):
+        return False
+    normalized = result.lstrip().casefold()
+    return normalized.startswith((
+        "error:", "error ", "sql error:", "calculation failed:",
+        "sandbox execution failed:", "code execution is unavailable",
+        "code execution is temporarily unavailable",
+        "live web search is currently unavailable", "web search error:",
+        "failed to ",
+    ))
 
 class ToolRegistry:
-    _instance = None
+    """A request-scoped tool registry.
 
-    def __new__(cls, *args, **kwargs):
-        # L-1 FIX: Thread-safe singleton creation with double-checked locking
-        if not cls._instance:
-            with _singleton_cls_lock:
-                if not cls._instance:
-                    cls._instance = super(ToolRegistry, cls).__new__(cls, *args, **kwargs)
-                    cls._instance._init_registry()
-        return cls._instance
+    Remote MCP connections and schemas carry a user-owned credential and must
+    never live in a process-global singleton.  Each graph invocation receives
+    one registry via its runtime config; direct callers get an isolated one.
+    """
+
+    def __init__(self):
+        self._init_registry()
 
     def _init_registry(self):
         self.local_tools = {
@@ -73,6 +137,17 @@ class ToolRegistry:
                         }
                     },
                     "required": ["code"]
+                }
+            },
+            "calculate": {
+                "func": calculate,
+                "description": "Evaluate a basic numeric arithmetic expression without executing code.",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "expression": {"type": "string", "description": "Numeric expression such as (25 * 49) + 120"}
+                    },
+                    "required": ["expression"]
                 }
             },
             "translate_text": {
@@ -166,7 +241,10 @@ class ToolRegistry:
         }
 
         self.mcp_clients: Dict[str, Any] = {}
-        self.mcp_tools_map: Dict[str, str] = {}          # tool_name -> server_name
+        # Public tool names are server-namespaced to prevent one remote server
+        # from shadowing another server's common tool name (e.g. `search`).
+        self.mcp_tools_map: Dict[str, str] = {}          # public_tool_name -> server_name
+        self.mcp_tool_original_names: Dict[str, str] = {}  # public_tool_name -> remote name
         self.mcp_tools_schemas: Dict[str, Dict[str, Any]] = {}
         self.is_initialized = False
         self._local_initialized = False
@@ -187,7 +265,9 @@ class ToolRegistry:
         """
         Connects to a remote MCP server by URL, registers its tools in the live registry.
         """
-        server_key = f"remote_{name.replace(' ', '_').lower()}"
+        allow_http = settings.ENVIRONMENT == "development" and settings.ALLOW_INSECURE_MCP_IN_DEVELOPMENT
+        url = await assert_public_dns_resolution(url, allow_http=allow_http)
+        server_key = remote_server_key(name)
         client = McpHttpClient(url=url, auth_header=auth_header, transport_type=transport_type)
         try:
             await asyncio.wait_for(client.connect(), timeout=7.0)
@@ -214,18 +294,24 @@ class ToolRegistry:
             if s_key == server_key:
                 self.mcp_tools_map.pop(t_name, None)
                 self.mcp_tools_schemas.pop(t_name, None)
+                self.mcp_tool_original_names.pop(t_name, None)
 
         registered_tools = []
         for tool in tools:
-            t_name = tool["name"]
+            raw_name = tool.get("name")
+            if not isinstance(raw_name, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]{0,127}", raw_name.strip()):
+                logger.warning("Skipping malformed remote tool name from MCP server '%s'", server_key)
+                continue
+            t_name = f"{server_key}__{raw_name.strip()}"
             self.mcp_tools_map[t_name] = server_key
+            self.mcp_tool_original_names[t_name] = raw_name.strip()
             schema_info = {
                 "description": tool.get("description", ""),
                 "schema": tool.get("inputSchema", {"type": "object"})
             }
             self.mcp_tools_schemas[t_name] = schema_info
             registered_tools.append({"name": t_name, **schema_info})
-            logger.info(f"Registered Remote MCP tool '{t_name}' from '{url}'")
+            logger.info("Registered remote MCP tool '%s' as '%s'", raw_name, t_name)
         return registered_tools
 
     async def unregister_remote_server(self, server_key: str):
@@ -240,52 +326,19 @@ class ToolRegistry:
             if s_key == server_key:
                 self.mcp_tools_map.pop(t_name, None)
                 self.mcp_tools_schemas.pop(t_name, None)
+                self.mcp_tool_original_names.pop(t_name, None)
                 logger.info(f"Unregistered MCP tool '{t_name}' from server '{server_key}'")
 
     async def _init_local_mcp_servers(self):
-        """Initializes internal stdio MCP servers (calculator, web_mcp)."""
+        """Retire unsafe local stdio servers from the public runtime.
+
+        Calculation and web search are native stateless tools.  The old process
+        hosts mixed those read operations with a shared on-disk expense store,
+        reminders, and email actions, which cannot be tenant-safe in a public
+        multi-user service.
+        """
         if self._local_initialized:
             return
-
-        current_dir       = os.path.dirname(os.path.abspath(__file__))
-        calculator_script = os.path.join(current_dir, "mcp_calculator_server.py")
-        web_mcp_script    = os.path.join(current_dir, "mcp_web_server.py")
-        python_exe        = sys.executable or "python"
-
-        mcp_configs = {
-            "calculator": {
-                "command": python_exe,
-                "args":    [calculator_script]
-            },
-            "web_mcp": {
-                "command": python_exe,
-                "args":    [web_mcp_script]
-            }
-        }
-
-        for server_name, cfg in mcp_configs.items():
-            if server_name in self.mcp_clients:
-                continue
-            try:
-                client = McpStdioClient(command=cfg["command"], args=cfg["args"])
-                await client.connect()
-                self.mcp_clients[server_name] = client
-
-                tools = await client.list_tools()
-                for tool in tools:
-                    t_name = tool["name"]
-                    self.mcp_tools_map[t_name]     = server_name
-                    self.mcp_tools_schemas[t_name] = {
-                        "description": tool.get("description", ""),
-                        "schema":      tool.get("inputSchema", {"type": "object"})
-                    }
-                    logger.info(
-                        f"Registered MCP tool '{t_name}' from server '{server_name}'"
-                    )
-            except Exception as e:
-                logger.error(
-                    f"Failed to initialize MCP server '{server_name}': {str(e)}"
-                )
         self._local_initialized = True
 
     async def sync_remote_servers(self, user_id: Optional[str] = None):
@@ -300,20 +353,28 @@ class ToolRegistry:
         async with self._sync_lock:
             await self._init_local_mcp_servers()
 
+            # There is no safe "all users" remote registry in a public
+            # multi-tenant process.  The caller must provide an authenticated
+            # user identity before any remote endpoint is loaded.
+            if not user_id:
+                self.is_initialized = True
+                return
+
             try:
                 from app.models.mcp_server import RemoteMcpServer
                 from sqlalchemy import select
 
                 async with AsyncSessionLocal() as session:
-                    stmt = select(RemoteMcpServer).where(RemoteMcpServer.is_enabled == True)
-                    if user_id:
-                        stmt = stmt.where((RemoteMcpServer.user_id == user_id) | (RemoteMcpServer.user_id.is_(None)))
+                    stmt = select(RemoteMcpServer).where(
+                        RemoteMcpServer.is_enabled == True,
+                        (RemoteMcpServer.user_id == str(user_id)) | (RemoteMcpServer.user_id.is_(None)),
+                    )
                     res = await session.execute(stmt)
                     db_servers = res.scalars().all()
 
                 active_server_keys = set()
                 for r_server in db_servers:
-                    server_key = f"remote_{r_server.name.replace(' ', '_').lower()}"
+                    server_key = remote_server_key(r_server.name)
                     active_server_keys.add(server_key)
 
                     # If already connected and has tools, skip reconnect
@@ -322,34 +383,44 @@ class ToolRegistry:
                         continue
 
                     try:
-                        logger.info(f"Syncing remote MCP server '{r_server.name}' ({r_server.url})...")
+                        logger.info("Syncing configured remote MCP server '%s'", r_server.name)
+                        from app.core.security import decrypt_api_key
+                        auth_header = r_server.auth_header
+                        if auth_header:
+                            try:
+                                auth_header = decrypt_api_key(auth_header)
+                            except Exception:
+                                # Backward compatibility for records created before
+                                # encrypted MCP credentials.  Startup migration will
+                                # re-encrypt them; do not log the raw value.
+                                logger.warning("Migrating legacy plaintext MCP credential for server '%s'", r_server.name)
                         await self.register_remote_server(
                             name=r_server.name,
                             url=r_server.url,
-                            auth_header=r_server.auth_header,
+                            auth_header=auth_header,
                             transport_type=r_server.transport_type
                         )
                     except Exception as exc:
                         logger.warning(f"Failed to sync remote MCP server '{r_server.name}' ({r_server.url}): {exc}")
 
-                # Drop removed/disabled remote servers if this is a global sync
-                if not user_id:
-                    for s_key in list(self.mcp_clients.keys()):
-                        if s_key.startswith("remote_") and s_key not in active_server_keys:
-                            logger.info(f"Cleaning up disabled/removed remote MCP server '{s_key}'")
-                            await self.unregister_remote_server(s_key)
+                # This instance is scoped to one request/user, so drop stale
+                # endpoints eagerly instead of retaining another tenant's tools.
+                for s_key in list(self.mcp_clients.keys()):
+                    if s_key.startswith("remote_") and s_key not in active_server_keys:
+                        logger.info(f"Cleaning up disabled/removed remote MCP server '{s_key}'")
+                        await self.unregister_remote_server(s_key)
 
                 self.is_initialized = True
             except Exception as db_exc:
                 logger.warning(f"Could not load remote MCP servers from DB: {db_exc}")
                 self.is_initialized = True
 
-    async def initialize(self):
+    async def initialize(self, user_id: Optional[str] = None):
         """
         Connects to all configured local & remote MCP servers, fetches tool capabilities,
         and builds the routing table.
         """
-        await self.sync_remote_servers()
+        await self.sync_remote_servers(user_id)
         logger.info("ToolRegistry initialization complete.")
 
 
@@ -463,6 +534,10 @@ class ToolRegistry:
         name: str,
         arguments: Dict[str, Any],
         api_keys: Optional[Dict[str, Any]] = None,
+        user_id: Optional[str] = None,
+        is_admin: bool = False,
+        approved: bool = False,
+        raise_on_error: bool = False,
     ) -> str:
         """
         Routes the tool invocation to the correct local handler or MCP server.
@@ -482,10 +557,15 @@ class ToolRegistry:
         status_label = "success"
         err_msg = None
         result_str = ""
+        execution_error: Exception | None = None
 
+        if name in _ADMIN_DATABASE_TOOLS and (not is_admin or not settings.ENABLE_ADMIN_DATABASE_INSPECTOR):
+            status_label = "blocked"
+            err_msg = "Administrative database inspector is disabled or requires an administrator"
+            result_str = "Administrative database access is disabled for this request."
         # 1. Route to local tool
-        if name in self.local_tools:
-            logger.info(f"Invoking local tool '{name}' with arguments: {arguments}")
+        elif name in self.local_tools:
+            logger.info("Invoking local tool '%s' with arguments: %s", name, _audit_safe_arguments(arguments))
             try:
                 func = self.local_tools[name]["func"]
                 kwargs = dict(arguments or {})
@@ -508,6 +588,12 @@ class ToolRegistry:
                                 break
                     result_str = await func(**kwargs)
                 else:
+                    if name in {"translate_text", "summarize_text", "chunk_and_analyze", "search_documents"} and "api_keys" not in kwargs:
+                        kwargs["api_keys"] = api_keys or {}
+                    if name == "search_documents":
+                        # Tenant scoping comes from authenticated request context,
+                        # never from a model-selected argument.
+                        kwargs["user_id"] = user_id
                     result_str = await func(**kwargs)
             except Exception as e:
                 status_label = "error"
@@ -518,38 +604,66 @@ class ToolRegistry:
         # 2. Route to MCP tool
         elif name in self.mcp_tools_map:
             server_name = self.mcp_tools_map[name]
+            if tool_requires_confirmation(name, server_name.startswith("remote_")) and not approved:
+                status_label = "approval_required"
+                err_msg = "Explicit user confirmation is required for a potentially mutating remote MCP tool"
+                result_str = (
+                    "This external action requires your explicit confirmation before it can run. "
+                    "No change was made."
+                )
+                logger.info("Blocked unapproved remote MCP action '%s' for user=%s", name, user_id)
             # KeyError guard: client may have been removed after shutdown/unregister
             client = self.mcp_clients.get(server_name)
-            if client is None:
+            if not approved and tool_requires_confirmation(name, server_name.startswith("remote_")):
+                client = None
+            if client is None and not result_str:
                 status_label = "error"
                 err_msg = f"MCP client for server '{server_name}' is no longer connected"
                 logger.error(f"[ToolRegistry] {err_msg} (tool='{name}')")
                 result_str = f"Tool execution failed: {err_msg}"
-            else:
+                if raise_on_error:
+                    execution_error = RuntimeError(err_msg)
+            elif not result_str:
                 logger.info(
-                    f"Invoking MCP tool '{name}' on server '{server_name}' "
-                    f"with arguments: {arguments}"
+                    "Invoking approved MCP tool '%s' on server '%s' with arguments: %s",
+                    name,
+                    server_name,
+                    _audit_safe_arguments(arguments),
                 )
                 try:
-                    result_str = await client.call_tool(name, arguments or {})
+                    remote_name = self.mcp_tool_original_names.get(name, name)
+                    result_str = await client.call_tool(remote_name, arguments or {})
                 except Exception as e:
-                    logger.warning(f"Initial call to MCP tool '{name}' on '{server_name}' failed ({e}). Attempting client reconnection...")
-                    try:
-                        await client.connect()
-                        result_str = await client.call_tool(name, arguments or {})
-                    except Exception as retry_err:
-                        status_label = "error"
-                        err_msg = str(retry_err)
-                        logger.error(
-                            f"Error calling MCP tool '{name}' on server '{server_name}' after reconnect: {str(retry_err)}"
-                        )
-                        result_str = f"Tool execution failed. Server returned: {str(retry_err)}"
+                    # The remote tool may have completed its side effect before
+                    # the network failed.  Never retry an approved external
+                    # action automatically, because that could duplicate it.
+                    status_label = "error"
+                    err_msg = type(e).__name__
+                    logger.error(
+                        "MCP tool '%s' on '%s' returned an indeterminate failure (%s)",
+                        name,
+                        server_name,
+                        type(e).__name__,
+                    )
+                    result_str = (
+                        "Tool execution failed and was not retried because its completion "
+                        "state is unknown. Please verify the external system before trying again."
+                    )
+                    if raise_on_error:
+                        execution_error = RuntimeError(result_str)
+                        execution_error.__cause__ = e
 
         else:
             status_label = "error"
             err_msg = f"Tool '{name}' is not registered"
             logger.error(f"Tool '{name}' is not registered.")
             result_str = f"Tool execution failed. Server returned: Tool '{name}' is not registered."
+
+        if _tool_result_is_failure(result_str):
+            status_label = "error"
+            err_msg = result_str[:512]
+            if raise_on_error and execution_error is None:
+                execution_error = RuntimeError("Tool returned an explicit failure result.")
 
         # Record metrics and log audit events (best-effort, 5s timeout to prevent
         # indefinite hang when DB pool is unavailable, e.g. during tests)
@@ -562,7 +676,7 @@ class ToolRegistry:
                         db,
                         None,
                         event_type,
-                        {"tool": name, "arguments": arguments, "status": status_label, "error": err_msg}
+                        {"tool": name, "arguments": _audit_safe_arguments(arguments), "status": status_label, "error": err_msg, "user_id": user_id}
                     )
             await asyncio.wait_for(_do_audit(), timeout=5.0)
         except asyncio.TimeoutError:
@@ -570,12 +684,13 @@ class ToolRegistry:
         except Exception as exc:
             logger.error(f"Failed to log tool execution audit event: {exc}")
 
-
+        if execution_error is not None:
+            raise execution_error
         return result_str
 
     async def shutdown(self):
         """
-        Gracefully terminates all active MCP subprocess connections.
+        Gracefully closes all active remote MCP connections.
         """
         logger.info("Shutting down MCP clients in ToolRegistry...")
         for server_name, client in list(self.mcp_clients.items()):
@@ -588,6 +703,7 @@ class ToolRegistry:
         self.mcp_clients.clear()
         self.mcp_tools_map.clear()
         self.mcp_tools_schemas.clear()
+        self.mcp_tool_original_names.clear()
         self.is_initialized = False
         self._local_initialized = False
         self._sync_lock = None

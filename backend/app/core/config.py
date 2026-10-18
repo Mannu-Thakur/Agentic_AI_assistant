@@ -169,6 +169,30 @@ class Settings(BaseSettings):
     OPENROUTER_API_KEY: Optional[str] = None
     OPENAI_API_KEY: Optional[str] = None
     OPENAI_API_BASE: Optional[str] = None
+    # Model identifiers are deployment configuration, not hard-coded business
+    # logic.  Defaults are current supported fallback candidates, but a staging
+    # deployment must still validate its own account/model access at startup.
+    GEMINI_MODEL: str = "gemini-3.8-flash"
+    GROQ_MODEL: str = "openai/gpt-oss-20b"
+    OPENAI_MODEL: str = "gpt-4o-mini"
+    OPENROUTER_MODEL: str = "openrouter/auto"
+    # Optional per-model input/output USD prices for telemetry. Keep this
+    # deployment-owned because provider prices and enterprise discounts vary.
+    PRICING_OVERRIDE_JSON: str = ""
+
+    # Remote integrations and isolated code execution.  Keep code execution
+    # disabled unless a separate hardened sandbox service is explicitly wired.
+    ALLOW_INSECURE_MCP_IN_DEVELOPMENT: bool = False
+    ENABLE_ADMIN_DATABASE_INSPECTOR: bool = False
+    # These integrations inspect deployment-host state or create long-running
+    # background work.  They are deliberately opt-in in a public deployment.
+    ENABLE_GIT_INTEGRATION: bool = False
+    ENABLE_MISSION_MODE: bool = True
+    MISSION_MAX_QUEUE_SIZE: int = 50
+    ENABLE_CODE_EXECUTION: bool = False
+    CODE_SANDBOX_URL: Optional[str] = None
+    SANDBOX_SHARED_SECRET: Optional[str] = None
+    CODE_SANDBOX_TIMEOUT_SECONDS: float = 8.0
 
     # Search Providers
     TAVILY_API_KEY:  Optional[str] = None   # tavily.com — AI-curated search
@@ -194,6 +218,9 @@ class Settings(BaseSettings):
     # File upload constraints
     MAX_UPLOAD_SIZE_MB: int = 20
     UPLOAD_DIR: str = "./uploads"         # overridden to /app/uploads in Docker
+    # Generated agent files use a separate, persistent, per-user store.
+    ARTIFACT_DIR: str = "./artifacts"     # overridden to /app/artifacts in Docker
+    MAX_ARTIFACT_SIZE_MB: int = 20
 
     # OCR — Tesseract binary path (auto-detected if blank)
     TESSERACT_CMD: Optional[str] = None
@@ -273,6 +300,18 @@ class Settings(BaseSettings):
                 logger.warning(
                     "SECRET_KEY is using the insecure default value. "
                     "Set a strong random SECRET_KEY in .env before deploying."
+                )
+
+        if self.ENABLE_CODE_EXECUTION:
+            if not self.CODE_SANDBOX_URL or not self.SANDBOX_SHARED_SECRET:
+                if self.ENVIRONMENT in ("staging", "production"):
+                    raise ValueError(
+                        "ENABLE_CODE_EXECUTION requires CODE_SANDBOX_URL and "
+                        "SANDBOX_SHARED_SECRET outside development."
+                    )
+                logger.warning(
+                    "[Sandbox] Code execution is enabled but the isolated sandbox "
+                    "is not fully configured; execution will fail closed."
                 )
 
         # ── Tesseract auto-detection & requirement enforcement ───────────────

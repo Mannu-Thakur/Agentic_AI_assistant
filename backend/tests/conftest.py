@@ -16,6 +16,8 @@ if sys.platform == "win32":
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from app.core.database import Base, get_db
 from app.main import app
+import importlib
+importlib.import_module("app.models")  # Register every mapped table before the test schema is created.
 
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 

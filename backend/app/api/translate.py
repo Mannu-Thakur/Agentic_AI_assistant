@@ -5,9 +5,14 @@ POST /api/v1/translate
   Translate text from one language to another using the translate_text tool.
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from typing import Optional
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.api.auth import get_current_user
+from app.core.database import get_db
+from app.schemas.auth import UserOut
+from app.services.provider_key_service import get_request_provider_keys
 
 router = APIRouter(prefix="/translate", tags=["Translation"])
 
@@ -26,7 +31,12 @@ class TranslateResponse(BaseModel):
 
 
 @router.post("", response_model=TranslateResponse, summary="Translate text to another language")
-async def translate_endpoint(body: TranslateRequest):
+async def translate_endpoint(
+    body: TranslateRequest,
+    request: Request,
+    current_user: UserOut = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """
     Translate text into the target language.
 
@@ -39,10 +49,12 @@ async def translate_endpoint(body: TranslateRequest):
         raise HTTPException(status_code=400, detail="target_language must not be empty.")
 
     from app.tools.advanced_tools import translate_text
+    api_keys = await get_request_provider_keys(db, current_user.id, request)
     result = await translate_text(
         text=body.text,
         target_language=body.target_language,
         source_language=body.source_language or "auto",
+        api_keys=api_keys,
     )
 
     if result.startswith("Error:"):

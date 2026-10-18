@@ -125,19 +125,18 @@ const INGESTION_STEPS: IngestionStep[] = [
 ];
 
 // ── Curated model list — only reliably-working providers ────────────────────
-// Gemini (direct via Google API key) and Groq (free, fast, reliable).
+// Gemini (direct via Google API key) and Groq production models.
 // Do NOT add OpenRouter/OpenAI/Anthropic/DeepSeek here — they require paid keys
 // and their availability varies. Users with those keys can use the API key settings.
 const ALL_MODELS = [
   // ── Google Gemini (Direct) ─────────────────────────────────────────────────
-  { id: 'gemini-2.0-flash',            label: 'Gemini 2.0 Flash',      provider: 'Google Gemini', apiProvider: 'google', badge: 'Recommended' },
-  { id: 'gemini-1.5-flash',            label: 'Gemini 1.5 Flash',      provider: 'Google Gemini', apiProvider: 'google', badge: 'Stable' },
-  { id: 'gemini-2.0-flash-lite',       label: 'Gemini 2.0 Flash Lite', provider: 'Google Gemini', apiProvider: 'google', badge: 'Fastest' },
+  { id: 'gemini-3.8-flash',            label: 'Gemini 3.8 Flash',      provider: 'Google Gemini', apiProvider: 'google', badge: 'Recommended' },
+  { id: 'gemini-3.6-flash',            label: 'Gemini 3.6 Flash',      provider: 'Google Gemini', apiProvider: 'google', badge: 'Fast' },
+  { id: 'gemini-3.5-flash-lite',       label: 'Gemini 3.5 Flash-Lite', provider: 'Google Gemini', apiProvider: 'google', badge: 'Lowest cost' },
 
-  // ── Groq (Free, Fast) ─────────────────────────────────────────────────────
-  { id: 'llama-3.3-70b-versatile',     label: 'Llama 3.3 70B',          provider: 'Groq',          apiProvider: 'groq',   badge: 'Fast & Free' },
-  { id: 'llama-3.1-8b-instant',        label: 'Llama 3.1 8B',           provider: 'Groq',          apiProvider: 'groq',   badge: 'Fastest Free' },
-  { id: 'deepseek-r1-distill-llama-70b', label: 'DeepSeek R1 70B',      provider: 'Groq',          apiProvider: 'groq',   badge: 'Reasoning' },
+  // ── Groq production models ────────────────────────────────────────────────
+  { id: 'openai/gpt-oss-20b',          label: 'GPT-OSS 20B',            provider: 'Groq',          apiProvider: 'groq',   badge: 'Fast' },
+  { id: 'openai/gpt-oss-120b',         label: 'GPT-OSS 120B',           provider: 'Groq',          apiProvider: 'groq',   badge: 'Powerful' },
 ];
 
 const MCP_TRANSPORT_OPTIONS: SelectOption[] = [

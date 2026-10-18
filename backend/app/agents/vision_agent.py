@@ -181,7 +181,8 @@ class VisionAgent(BaseAgent):
         query      = task_input.get("query", "Describe this image in detail.")
         user_id    = task_input.get("user_id", "anon")
         session_id = task_input.get("session_id", "default")
-        model      = task_input.get("active_model", "gemini-2.0-flash")
+        from app.core.config import settings
+        model      = task_input.get("active_model", settings.GEMINI_MODEL)
         api_keys   = task_input.get("api_keys", {})
 
         logger.info(f"[VisionAgent] query={query[:60]!r} model={model}")
@@ -209,9 +210,9 @@ class VisionAgent(BaseAgent):
             except Exception as exc:
                 logger.warning(f"[VisionAgent] Vision LLM failed: {exc}, trying OCR")
 
-        # Vision LLM failed or not available — try gemini-2.0-flash as fallback
+        # Vision LLM failed or not available — try the configured Gemini model.
         if not analysis:
-            fallback_model = "gemini-2.0-flash"
+            fallback_model = settings.GEMINI_MODEL
             if fallback_model != model and _model_supports_vision(fallback_model):
                 try:
                     analysis = await _analyse_with_vision_llm(

@@ -103,7 +103,11 @@ def _should_fallback(exc: Exception) -> bool:
     return False
 
 
-async def _llm_complete(prompt: str, max_tokens: int = 1024) -> _LLMResult:
+async def _llm_complete(
+    prompt: str,
+    max_tokens: int = 1024,
+    api_keys: Optional[dict] = None,
+) -> _LLMResult:
     """
     Call the best available LLM provider with a single user prompt.
 
@@ -127,35 +131,41 @@ async def _llm_complete(prompt: str, max_tokens: int = 1024) -> _LLMResult:
     skipped_providers: list[str] = []
 
     # ── Provider definitions ──────────────────────────────────────────────────
-    # Each entry: (env_key_attr, provider_class_path, model_attr, default_model, label)
+    provided_keys = {str(k).lower(): v for k, v in (api_keys or {}).items() if v}
+    # Each entry is intentionally configured through Settings so vendor model
+    # migration is a deploy-time change, not a source-code hotfix.
     provider_chain = [
         {
             "name": "Gemini",
             "key_attr": "GEMINI_API_KEY",
             "class_path": ("app.providers.gemini", "GeminiProvider"),
             "model_attr": "GEMINI_MODEL",
-            "default_model": "gemini-3.5-flash",
+            "default_model": settings.GEMINI_MODEL,
+            "key_aliases": ("gemini", "google"),
         },
         {
             "name": "OpenAI",
             "key_attr": "OPENAI_API_KEY",
             "class_path": ("app.providers.openai_provider", "OpenAIProvider"),
             "model_attr": "OPENAI_MODEL",
-            "default_model": "gpt-4o-mini",
+            "default_model": settings.OPENAI_MODEL,
+            "key_aliases": ("openai",),
         },
         {
             "name": "Groq",
             "key_attr": "GROQ_API_KEY",
             "class_path": ("app.providers.groq", "GroqProvider"),
             "model_attr": "GROQ_MODEL",
-            "default_model": "llama-3.3-70b-versatile",
+            "default_model": settings.GROQ_MODEL,
+            "key_aliases": ("groq",),
         },
         {
             "name": "OpenRouter",
             "key_attr": "OPENROUTER_API_KEY",
             "class_path": ("app.providers.openrouter", "OpenRouterProvider"),
             "model_attr": "OPENROUTER_MODEL",
-            "default_model": "openrouter/auto",
+            "default_model": settings.OPENROUTER_MODEL,
+            "key_aliases": ("openrouter",),
         },
     ]
 
@@ -163,10 +173,8 @@ async def _llm_complete(prompt: str, max_tokens: int = 1024) -> _LLMResult:
 
     for entry in provider_chain:
         # Skip if no API key configured
-        key = (
-            getattr(settings, entry["key_attr"], None)
-            or os.environ.get(entry["key_attr"])
-        )
+        key = next((provided_keys.get(alias) for alias in entry["key_aliases"] if provided_keys.get(alias)), None)
+        key = key or getattr(settings, entry["key_attr"], None) or os.environ.get(entry["key_attr"])
         if not key or str(key).startswith("mock_"):
             logger.debug(f"[_llm_complete] {entry['name']} skipped — no API key.")
             continue
@@ -187,6 +195,7 @@ async def _llm_complete(prompt: str, max_tokens: int = 1024) -> _LLMResult:
                 messages=messages,
                 model=model,
                 max_tokens=max_tokens,
+                api_key=key,
             )
             content = result.get("content") or result.get("text") or ""
             if not content:
@@ -339,7 +348,7 @@ async def translate_text(
         f"Translate the following text into {target_language}. "
         f"Return ONLY the translated text with no additional commentary:\n\n{text}"
     )
-    llm = await _llm_complete(prompt, max_tokens=1024)
+    llm = await _llm_complete(prompt, max_tokens=1024, api_keys=api_keys)
     if llm.ok:
         provider_note = f"via {llm.provider}" + (" [fallback]" if llm.fallback_used else "")
         return (
@@ -412,7 +421,7 @@ async def summarize_text(
 
     # ── LLM-based summarization ──────────────────────────────────────────────
     prompt = f"{instruction}\n\n---\n{text[:8000]}"  # cap at 8k chars input
-    llm = await _llm_complete(prompt, max_tokens=max_length * 2)
+    llm = await _llm_complete(prompt, max_tokens=max_length * 2, api_keys=api_keys)
     if llm.ok:
         label = {"bullet": "Key Points", "paragraph": "Summary", "tldr": "TL;DR"}[style]
         provider_note = f" · {llm.provider}" + (" [fallback]" if llm.fallback_used else "")
@@ -437,45 +446,28 @@ async def summarize_text(
 #  Database / SQL Tools
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _get_db_path() -> str:
-    """Return the SQLite database path from app settings."""
-    try:
-        from app.core.config import settings
-        url = str(settings.DATABASE_URL)
-        if url.startswith("sqlite:///"):
-            return url[len("sqlite:///"):]
-        if url.startswith("sqlite://"):
-            return url[len("sqlite://"):]
-    except Exception:
-        pass
-    return "sql_app.db"
-
-
 async def list_tables(db_path: Optional[str] = None) -> str:
     """
-    List all tables in the application's SQLite database.
+    List tables from the configured application database.
 
-    Args:
-        db_path: Optional path to the SQLite file. Defaults to the app database.
-
-    Returns:
-        Markdown-formatted list of table names.
+    This deliberately does not accept arbitrary database paths: a model must
+    never turn this into local-file discovery.  SQLAlchemy inspection supports
+    both the development SQLite database and production PostgreSQL.
     """
-    import sqlite3
-    path = db_path or _get_db_path()
+    if db_path:
+        return "Error: selecting an arbitrary database path is not supported."
     try:
-        conn = sqlite3.connect(path)
-        cursor = conn.cursor()
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;")
-        tables = [row[0] for row in cursor.fetchall()]
-        conn.close()
+        from sqlalchemy import inspect
+        from app.core.database import AsyncSessionLocal
+        async with AsyncSessionLocal() as db:
+            tables = await db.run_sync(lambda sync_db: inspect(sync_db.connection()).get_table_names())
         if not tables:
             return "No tables found in the database."
-        table_list = "\n".join(f"- `{t}`" for t in tables)
-        return f"**Database Tables** (`{path}`):\n\n{table_list}\n\n*Total: {len(tables)} tables*"
+        table_list = "\n".join(f"- `{t}`" for t in sorted(tables))
+        return f"**Application Database Tables**\n\n{table_list}\n\n*Total: {len(tables)} tables*"
     except Exception as e:
-        logger.error(f"[list_tables] Failed: {e}")
-        return f"Error listing tables: {e}"
+        logger.error("[list_tables] Failed: %s", type(e).__name__)
+        return "Error listing tables from the configured application database."
 
 
 async def describe_table(table_name: str, db_path: Optional[str] = None) -> str:
@@ -484,52 +476,44 @@ async def describe_table(table_name: str, db_path: Optional[str] = None) -> str:
 
     Args:
         table_name: Name of the table to describe.
-        db_path:    Optional path to the SQLite file.
-
     Returns:
         Markdown-formatted table schema.
     """
-    import sqlite3
     if not table_name or not table_name.strip():
         return "Error: No table name provided."
+    if db_path:
+        return "Error: selecting an arbitrary database path is not supported."
 
     # Sanitize: only allow alphanumeric and underscore
     table_name = table_name.strip()
     if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', table_name):
         return f"Error: Invalid table name '{table_name}'. Only letters, digits, and underscores are allowed."
 
-    path = db_path or _get_db_path()
     try:
-        conn = sqlite3.connect(path)
-        cursor = conn.cursor()
+        from sqlalchemy import inspect, text
+        from app.core.database import AsyncSessionLocal
 
-        # Check table exists
-        cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name=?;",
-            (table_name,)
-        )
-        if not cursor.fetchone():
-            conn.close()
+        def _describe(sync_db):
+            connection = sync_db.connection()
+            inspector = inspect(connection)
+            if table_name not in inspector.get_table_names():
+                return None, None
+            columns = inspector.get_columns(table_name)
+            quoted = connection.dialect.identifier_preparer.quote(table_name)
+            count = connection.execute(text(f"SELECT COUNT(*) FROM {quoted}")).scalar_one()
+            return columns, count
+
+        async with AsyncSessionLocal() as db:
+            columns, row_count = await db.run_sync(_describe)
+        if columns is None:
             return f"Table `{table_name}` does not exist."
-
-        cursor.execute(f"PRAGMA table_info({table_name});")
-        columns = cursor.fetchall()
-
-        # Get row count
-        try:
-            cursor.execute(f"SELECT COUNT(*) FROM {table_name};")
-            row_count = cursor.fetchone()[0]
-        except Exception:
-            row_count = "unknown"
-
-        conn.close()
 
         if not columns:
             return f"Table `{table_name}` has no columns (empty schema)."
 
         rows = "\n".join(
-            f"| {col[1]} | {col[2]} | {'NOT NULL' if col[3] else 'nullable'} | "
-            f"{'PRIMARY KEY' if col[5] else ''} |"
+            f"| {col['name']} | {col['type']} | {'NOT NULL' if not col.get('nullable', True) else 'nullable'} | "
+            f"{'PRIMARY KEY' if col.get('primary_key') else ''} |"
             for col in columns
         )
         return (
@@ -539,13 +523,13 @@ async def describe_table(table_name: str, db_path: Optional[str] = None) -> str:
             f"{rows}"
         )
     except Exception as e:
-        logger.error(f"[describe_table] Failed: {e}")
-        return f"Error describing table '{table_name}': {e}"
+        logger.error("[describe_table] Failed: %s", type(e).__name__)
+        return f"Error describing table `{table_name}`."
 
 
 _ALLOWED_SQL_PREFIXES = ("SELECT", "PRAGMA", "EXPLAIN", "WITH")
 _FORBIDDEN_SQL_PATTERNS = re.compile(
-    r'\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|REPLACE|TRUNCATE|ATTACH|DETACH)\b',
+    r'\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|REPLACE|TRUNCATE|ATTACH|DETACH|COPY|VACUUM|GRANT|REVOKE|INTO|CALL|DO)\b',
     re.IGNORECASE
 )
 
@@ -556,26 +540,27 @@ async def execute_sql(
     max_rows: int = 50,
 ) -> str:
     """
-    Execute a READ-ONLY SQL query against the application SQLite database.
+    Execute a READ-ONLY SQL query against the configured application database.
 
     Only SELECT, PRAGMA, EXPLAIN, and WITH queries are allowed.
     INSERT / UPDATE / DELETE / DROP and other destructive operations are blocked.
 
     Args:
         query:    The SQL query to execute.
-        db_path:  Optional path to the SQLite file. Defaults to app database.
         max_rows: Maximum number of rows to return (default 50, max 200).
 
     Returns:
         Markdown-formatted query results table.
     """
-    import sqlite3
-
     if not query or not query.strip():
         return "Error: No SQL query provided."
+    if db_path:
+        return "Error: selecting an arbitrary database path is not supported."
 
     query = query.strip()
     max_rows = min(int(max_rows), 200)
+    if ";" in query.rstrip(";") or query.count(";") > 1:
+        return "Error: Multiple SQL statements are not permitted."
 
     # Security: block destructive statements
     if _FORBIDDEN_SQL_PATTERNS.search(query):
@@ -592,14 +577,17 @@ async def execute_sql(
             f"Got '{first_word}'."
         )
 
-    path = db_path or _get_db_path()
     try:
-        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-        cursor = conn.cursor()
-        cursor.execute(query)
-        rows = cursor.fetchmany(max_rows + 1)
-        col_names = [desc[0] for desc in (cursor.description or [])]
-        conn.close()
+        from sqlalchemy import text
+        from app.core.database import AsyncSessionLocal
+        async with AsyncSessionLocal() as db:
+            # PostgreSQL's transaction-level read-only guard provides defense
+            # in depth if the SQL filter ever misses a vendor-specific write.
+            if db.bind and db.bind.dialect.name == "postgresql":
+                await db.execute(text("SET TRANSACTION READ ONLY"))
+            result = await db.execute(text(query))
+            rows = result.fetchmany(max_rows + 1)
+            col_names = list(result.keys())
 
         if not rows:
             return f"Query executed successfully. **No rows returned.**\n\n```sql\n{query}\n```"
@@ -620,11 +608,9 @@ async def execute_sql(
             f"**Query Results**\n\n```sql\n{query}\n```\n\n"
             f"{header}\n{separator}\n{body}{note}"
         )
-    except sqlite3.OperationalError as e:
-        return f"SQL Error: {e}"
     except Exception as e:
-        logger.error(f"[execute_sql] Failed: {e}")
-        return f"Error executing query: {e}"
+        logger.warning("[execute_sql] Read-only query failed: %s", type(e).__name__)
+        return "SQL Error: the read-only query could not be executed."
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -750,7 +736,7 @@ async def chunk_and_analyze(
 
     # ── Analyze each chunk with LLM ──────────────────────────────────────────
     # First call to check provider availability before processing all chunks
-    probe_llm = await _llm_complete("Respond with OK", max_tokens=5)
+    probe_llm = await _llm_complete("Respond with OK", max_tokens=5, api_keys=api_keys)
     if not probe_llm.ok:
         return (
             f"**Long-Context Analysis** unavailable\n\n"
@@ -771,7 +757,7 @@ async def chunk_and_analyze(
                 f"Provide a concise partial answer based ONLY on this chunk. "
                 f"If this chunk is not relevant, say 'Not relevant in this chunk.'"
             )
-            llm = await _llm_complete(prompt, max_tokens=512)
+            llm = await _llm_complete(prompt, max_tokens=512, api_keys=api_keys)
             if llm.ok and "not relevant" not in llm.content.lower():
                 partial_answers.append(f"**Chunk {i}/{num_chunks}:**\n{llm.content}")
             elif not llm.ok:
@@ -794,7 +780,7 @@ async def chunk_and_analyze(
             f"Now synthesize a single, coherent, comprehensive answer. "
             f"Remove redundancy and organize the information clearly."
         )
-        final_llm = await _llm_complete(agg_prompt, max_tokens=1024)
+        final_llm = await _llm_complete(agg_prompt, max_tokens=1024, api_keys=api_keys)
         synthesized = final_llm.content if final_llm.ok else combined
 
         return (

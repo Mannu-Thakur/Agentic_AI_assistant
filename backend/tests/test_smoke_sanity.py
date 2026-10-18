@@ -1,5 +1,6 @@
 import pytest
 import json
+from unittest.mock import AsyncMock
 from httpx import AsyncClient, ASGITransport
 from app.main import app
 from app.models.user import User
@@ -43,24 +44,16 @@ async def test_smoke_workspace_usage_metrics(auth_user):
 
 @pytest.mark.anyio
 async def test_smoke_git_endpoints(auth_user):
-    """Verify git status inspection and commit assistant endpoints."""
+    """Verify public deployment does not expose host Git state to ordinary users."""
     app.dependency_overrides[get_current_user] = lambda: auth_user
     try:
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             status_resp = await client.get("/api/v1/git/status")
-            assert status_resp.status_code == 200
-            status_data = status_resp.json()
-            assert status_data["git_installed"] is True
-            assert status_data["is_repo"] is True
-            assert status_data["branch"] is not None
+            assert status_resp.status_code == 403
 
             commit_resp = await client.post("/api/v1/git/commit-suggestion")
-            assert commit_resp.status_code == 200
-            commit_data = commit_resp.json()
-            assert commit_data["success"] is True
-            assert "suggested_message" in commit_data
-            assert len(commit_data["suggested_message"]) > 0
+            assert commit_resp.status_code == 403
     finally:
         app.dependency_overrides.pop(get_current_user, None)
 
@@ -84,7 +77,7 @@ async def test_smoke_chat_with_search_modes(auth_user):
                 f"/api/v1/chats/{chat_id}/messages",
                 json={
                     "content": "What is the latest quantum computing breakthrough?",
-                    "model": "llama-3.3-70b-versatile",
+                    "model": "openai/gpt-oss-120b",
                     "search_mode": "web"
                 },
                 headers={"x-api-keys": json.dumps({"groq": "mock_groq_key"})}
@@ -97,7 +90,7 @@ async def test_smoke_chat_with_search_modes(auth_user):
                 f"/api/v1/chats/{chat_id}/messages",
                 json={
                     "content": "Summarize key points from my documents",
-                    "model": "llama-3.3-70b-versatile",
+                    "model": "openai/gpt-oss-120b",
                     "search_mode": "kb"
                 },
                 headers={"x-api-keys": json.dumps({"groq": "mock_groq_key"})}
@@ -109,7 +102,7 @@ async def test_smoke_chat_with_search_modes(auth_user):
                 f"/api/v1/chats/{chat_id}/messages",
                 json={
                     "content": "Compare quantum computing trends with my notes",
-                    "model": "llama-3.3-70b-versatile",
+                    "model": "openai/gpt-oss-120b",
                     "search_mode": "hybrid"
                 },
                 headers={"x-api-keys": json.dumps({"groq": "mock_groq_key"})}
@@ -165,8 +158,10 @@ async def test_smoke_pin_and_star_chat(auth_user):
 
 
 @pytest.mark.anyio
-async def test_api_prefix_normalization_and_mission_endpoints(auth_user):
+async def test_api_prefix_normalization_and_mission_endpoints(auth_user, monkeypatch):
     """Verify ASGI normalizer transparently rewrites duplicate /api/v1 prefixes and mission routes work."""
+    from app.api.mission import job_queue
+    monkeypatch.setattr(job_queue, "user_jobs", AsyncMock(return_value=[]))
     app.dependency_overrides[get_current_user] = lambda: auth_user
     try:
         transport = ASGITransport(app=app)

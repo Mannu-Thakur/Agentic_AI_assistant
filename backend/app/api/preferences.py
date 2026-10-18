@@ -9,6 +9,7 @@ from app.core.database import get_db
 from app.core.redis_client import cache_get, cache_set
 from app.models.user import User, UserPreference
 from app.api.auth import get_current_user
+from app.core.config import settings
 
 logger = logging.getLogger("app.api.preferences")
 
@@ -42,7 +43,7 @@ def _serialize_pref(pref: Optional[UserPreference]) -> Dict[str, Any]:
             "temperature": 0.7,
             "max_tokens": 2048,
             "streaming": True,
-            "default_model": "gemini-2.0-flash",
+            "default_model": settings.GEMINI_MODEL,
             "theme": "dark",
             "font_size": "md",
             "compact_mode": False,
@@ -60,7 +61,7 @@ def _serialize_pref(pref: Optional[UserPreference]) -> Dict[str, Any]:
         "temperature": pref.temperature if pref.temperature is not None else 0.7,
         "max_tokens": pref.max_tokens or 2048,
         "streaming": True if pref.streaming is None else pref.streaming,
-        "default_model": pref.default_model or "gemini-2.0-flash",
+        "default_model": pref.default_model or settings.GEMINI_MODEL,
         "theme": pref.theme or "dark",
         "font_size": pref.font_size or "md",
         "compact_mode": bool(pref.compact_mode),

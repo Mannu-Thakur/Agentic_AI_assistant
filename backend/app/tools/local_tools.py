@@ -8,19 +8,13 @@ tavily_search():
   • api_keys dict accepted so user-supplied keys override .env
 
 python_sandbox():
-  • Hard output size limit (64 KB) prevents memory exhaustion.
-  • Kills the subprocess on timeout AND on output-size overflow.
-  • Adds a security warning header when dangerous stdlib modules are imported.
-  • Strips ANSI escape codes from output.
+  • Delegates computation-only code to an isolated, authenticated service.
+  • Fails closed when that service is not configured or reachable.
+  • Strips ANSI escape codes and caps returned output.
 """
 
-import os
 import re
-import sys
-import json
-import asyncio
 import logging
-import tempfile
 from typing import Optional
 from app.core.config import settings
 
@@ -30,12 +24,7 @@ from app.core.cache_service import web_search_cache
 logger = logging.getLogger(__name__)
 
 # ── Safety constants ───────────────────────────────────────────────────────────
-_SANDBOX_TIMEOUT   = 10.0        # seconds
 _MAX_OUTPUT_BYTES  = 65_536      # 64 KB output cap
-_DANGEROUS_MODULES = frozenset([
-    "subprocess", "socket", "shutil", "ctypes",
-    "importlib", "__import__", "eval", "exec", "compile",
-])
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -45,48 +34,6 @@ def _strip_ansi(text: str) -> str:
 
 
 import ast
-
-
-def _check_dangerous(code: str) -> Optional[str]:
-    """AST-level analysis to detect obfuscated dynamic imports, dangerous reflection, and system calls."""
-    hits = set()
-    # NEW-LOW-1 FIX: Use word-boundary regex instead of bare `m in code` substring
-    # search. The old check matched "os" inside words like "cosmos", "awesome",
-    # or inside string literals / comments, generating noisy false-positive warnings.
-    import re as _re
-    for m in _DANGEROUS_MODULES:
-        # \b is a word boundary; escape dots in module names like "os.system"
-        pattern = r"\b" + _re.escape(m).replace(r"\.", r"[.\s]*") + r"\b"
-        if _re.search(pattern, code):
-            hits.add(m)
-    try:
-
-        parsed = ast.parse(code)
-        for node in ast.walk(parsed):
-            # Detect dynamic imports & dangerous calls like getattr/eval/exec
-            if isinstance(node, ast.Call):
-                if isinstance(node.func, ast.Name):
-                    if node.func.id in ("eval", "exec", "__import__", "getattr", "compile", "globals", "locals"):
-                        hits.add(f"reflection:{node.func.id}")
-            elif isinstance(node, ast.Attribute):
-                if node.attr in ("__subclasses__", "__bases__", "__mro__", "__globals__", "__builtins__"):
-                    hits.add(f"dunder:{node.attr}")
-            elif isinstance(node, ast.Import):
-                for alias in node.names:
-                    if any(d in alias.name for d in ("os", "subprocess", "sys", "shutil", "socket", "ctypes", "pty")):
-                        hits.add(f"import:{alias.name}")
-            elif isinstance(node, ast.ImportFrom):
-                if node.module and any(d in node.module for d in ("os", "subprocess", "sys", "shutil", "socket", "ctypes", "pty")):
-                    hits.add(f"import:{node.module}")
-    except Exception:
-        pass
-
-    if hits:
-        return (
-            f"⚠️ Security notice: potentially unsafe operations or identifiers detected: {', '.join(sorted(hits))}. "
-            f"Execution is monitored and output is controlled.\n\n"
-        )
-    return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -140,136 +87,95 @@ async def tavily_search(query: str, api_keys: Optional[dict] = None) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Stateless calculation
+# ─────────────────────────────────────────────────────────────────────────────
+
+_CALC_OPERATORS = {
+    ast.Add: lambda a, b: a + b,
+    ast.Sub: lambda a, b: a - b,
+    ast.Mult: lambda a, b: a * b,
+    ast.Div: lambda a, b: a / b,
+    ast.FloorDiv: lambda a, b: a // b,
+    ast.Mod: lambda a, b: a % b,
+    ast.Pow: lambda a, b: a ** b,
+}
+
+
+def _evaluate_expression(node: ast.AST) -> int | float:
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
+        return node.value
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+        operand = _evaluate_expression(node.operand)
+        return -operand if isinstance(node.op, ast.USub) else operand
+    if isinstance(node, ast.BinOp) and type(node.op) in _CALC_OPERATORS:
+        left, right = _evaluate_expression(node.left), _evaluate_expression(node.right)
+        if isinstance(node.op, ast.Pow) and (abs(right) > 100 or abs(left) > 1_000_000):
+            raise ValueError("exponent is outside the safe calculator range")
+        return _CALC_OPERATORS[type(node.op)](left, right)
+    raise ValueError("only numeric arithmetic is supported")
+
+
+async def calculate(expression: str) -> str:
+    """Evaluate a basic arithmetic expression without a subprocess or MCP server."""
+    if not expression or len(expression) > 256:
+        return "Calculation failed: provide an arithmetic expression up to 256 characters."
+    try:
+        tree = ast.parse(expression, mode="eval")
+        result = _evaluate_expression(tree.body)
+        if isinstance(result, complex) or (isinstance(result, float) and (result != result or result in (float("inf"), float("-inf")))):
+            raise ValueError("result is not a finite real number")
+        return str(result)
+    except (SyntaxError, ValueError, ZeroDivisionError, OverflowError) as exc:
+        return f"Calculation failed: {exc}"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Python sandbox
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def python_sandbox(code: str) -> str:
     """
-    Execute arbitrary Python code in a subprocess with:
-      • 10-second hard timeout.
-      • 64 KB text output cap + 512 KB plot output cap.
-      • Automatic subprocess kill on timeout or overflow.
-      • Security notice for dangerous identifiers and AST structures.
-      • ANSI escape-code stripping.
-      • Matplotlib plot capture with output overflow cap.
+    Execute computation-only Python through the separate isolated sandbox
+    service.  The web process never executes user code on its own host.
+
+    The service accepts a deliberately small Python subset (no imports,
+    attributes, files, network, or reflection).  If the service is not wired,
+    fail closed with an operator-actionable message rather than falling back to
+    a local subprocess.
     """
-    warning = _check_dangerous(code)
-
-    fd, temp_path = tempfile.mkstemp(suffix=".py", text=True)
-    # M-2 FIX: Initialize proc before try block so finally block never encounters UnboundLocalError
-    proc = None
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-
-            # Inject output-size guard + matplotlib plot capture header
-            header = (
-                "import sys as _sys\n"
-                "_orig_write = _sys.stdout.write\n"
-                "_bytes_written = 0\n"
-                "_plot_bytes_written = 0\n"
-                "def _guarded_write(s):\n"
-                "    global _bytes_written, _plot_bytes_written\n"
-                "    if '[PLOT_BASE64:' in s or s.startswith('[PLOT_BASE64:'):\n"
-                "        _plot_bytes_written += len(s.encode('utf-8', errors='replace'))\n"
-                "        if _plot_bytes_written > 524288:\n"
-                "            _sys.stdout = _sys.__stdout__\n"
-                "            raise RuntimeError('Plot output size limit exceeded (512 KB cap).')\n"
-                "        return _orig_write(s)\n"
-                "    _bytes_written += len(s.encode('utf-8', errors='replace'))\n"
-                f"    if _bytes_written > {_MAX_OUTPUT_BYTES}:\n"
-                "        _sys.stdout = _sys.__stdout__\n"
-                "        raise RuntimeError('Output size limit exceeded (64 KB).')\n"
-                "    return _orig_write(s)\n"
-                "_sys.stdout.write = _guarded_write\n\n"
-                "# Matplotlib plot-capture shim: intercepts plt.show() and prints base64\n"
-                "try:\n"
-                "    import matplotlib\n"
-                "    matplotlib.use('Agg')  # headless non-interactive backend\n"
-                "    import matplotlib.pyplot as _plt\n"
-                "    import io as _io, base64 as _b64\n"
-                "    _orig_show = _plt.show\n"
-                "    def _capture_show(*args, **kwargs):\n"
-                "        buf = _io.BytesIO()\n"
-                "        _plt.savefig(buf, format='png', dpi=80, bbox_inches='tight')\n"
-                "        buf.seek(0)\n"
-                "        encoded = _b64.b64encode(buf.read()).decode('utf-8')\n"
-                "        _orig_write(f'[PLOT_BASE64:{encoded}]\\n')\n"
-                "        _plt.close('all')\n"
-                "    _plt.show = _capture_show\n"
-                "except ImportError:\n"
-                "    pass  # matplotlib not installed, skip shim\n\n"
-            )
-            f.write(header + code)
-
-        python_exe = sys.executable or "python"
-        proc = await asyncio.create_subprocess_exec(
-            python_exe,
-            temp_path,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-
-        try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                proc.communicate(), timeout=_SANDBOX_TIMEOUT
-            )
-        except asyncio.TimeoutError:
-            try:
-                proc.kill()
-                await proc.wait()
-            except Exception:
-                pass
-            return (
-                f"{warning or ''}"
-                f"⏱  Execution Timeout: code ran longer than {_SANDBOX_TIMEOUT}s and was killed."
-            )
-
-        stdout_str = _strip_ansi(stdout_bytes.decode("utf-8", errors="replace").strip())
-        stderr_str = _strip_ansi(stderr_bytes.decode("utf-8", errors="replace").strip())
-
-        # Cap stdout and stderr cleanly to _MAX_OUTPUT_BYTES
-        if len(stdout_str.encode("utf-8")) > _MAX_OUTPUT_BYTES:
-            stdout_str = stdout_str.encode("utf-8")[:_MAX_OUTPUT_BYTES].decode("utf-8", errors="replace") + "\n… [Truncated: stdout exceeded 64 KB cap]"
-
-        if len(stderr_str.encode("utf-8")) > _MAX_OUTPUT_BYTES:
-            stderr_str = stderr_str.encode("utf-8")[:_MAX_OUTPUT_BYTES].decode("utf-8", errors="replace") + "\n… [Truncated: stderr exceeded 64 KB cap]"
-
-        prefix = warning or ""
-        if proc.returncode == 0:
-            return prefix + (stdout_str or "[Execution completed with no output]")
+    if not code or not code.strip():
+        return "Sandbox execution failed: no Python code was provided."
+    if len(code) > 20_000:
+        return "Sandbox execution failed: code exceeds the 20,000 character safety limit."
+    if not settings.ENABLE_CODE_EXECUTION:
         return (
-            prefix
-            + f"Runtime Error (exit {proc.returncode}):\n"
-            + (f"STDOUT:\n{stdout_str}\n" if stdout_str else "")
-            + (f"STDERR:\n{stderr_str}" if stderr_str else "")
-        ).strip()
+            "Code execution is unavailable because this deployment has not enabled "
+            "the isolated code sandbox. It was not executed."
+        )
+    if not settings.CODE_SANDBOX_URL or not settings.SANDBOX_SHARED_SECRET:
+        logger.error("Code execution requested without a configured isolated sandbox")
+        return "Code execution is unavailable: the isolated sandbox is not configured. It was not executed."
 
-    except Exception as e:
-        logger.error(f"Python sandbox exception: {e}")
-        return f"Sandbox execution failed: {e}"
-    finally:
-        if proc is not None:
-            try:
-
-                if proc.stdin and not proc.stdin.is_closing():
-                    try:
-                        proc.stdin.close()
-                    except Exception:
-                        pass
-                if proc.returncode is None:
-                    proc.kill()
-                    await proc.wait()
-                transport = getattr(proc, "_transport", None)
-                if transport and not transport.is_closing():
-                    try:
-                        transport.close()
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-        if os.path.exists(temp_path):
-            try:
-                os.remove(temp_path)
-            except Exception:
-                pass
+    try:
+        import httpx
+        timeout = max(1.0, min(float(settings.CODE_SANDBOX_TIMEOUT_SECONDS), 30.0))
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+            response = await client.post(
+                settings.CODE_SANDBOX_URL.rstrip("/") + "/execute",
+                json={"code": code},
+                headers={"X-Sandbox-Token": settings.SANDBOX_SHARED_SECRET},
+            )
+        if response.status_code == 401:
+            logger.error("Isolated sandbox rejected backend authentication")
+            return "Code execution is temporarily unavailable because sandbox authentication failed. It was not executed."
+        if response.status_code == 422:
+            detail = response.json().get("detail", "The code violates sandbox policy.")
+            return f"Sandbox policy blocked execution: {detail}"
+        response.raise_for_status()
+        payload = response.json()
+        output = _strip_ansi(str(payload.get("output", ""))).strip()
+        return output[:_MAX_OUTPUT_BYTES] or "[Execution completed with no output]"
+    except Exception as exc:
+        logger.error("Isolated sandbox request failed: %s", type(exc).__name__)
+        return "Code execution is temporarily unavailable because the isolated sandbox could not be reached. It was not executed."
 

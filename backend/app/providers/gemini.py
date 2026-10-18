@@ -223,7 +223,7 @@ class GeminiProvider(BaseLLMProvider):
             raise ProviderCircuitOpenError(err_msg)
 
         # ── Deprecated/alias model remapping ──────────────────────────────────
-        model = model or os.getenv("DEFAULT_GEMINI_MODEL") or "gemini-2.0-flash"
+        model = model or os.getenv("DEFAULT_GEMINI_MODEL") or settings.GEMINI_MODEL
         model = registry.remap_model(model)
         if model.startswith("google/"):
             model = model[len("google/"):]
@@ -396,7 +396,7 @@ class GeminiProvider(BaseLLMProvider):
             raise ProviderCircuitOpenError(err_msg)
 
         # ── Deprecated model remapping ────────────────────────────────────────
-        model = model or os.getenv("DEFAULT_GEMINI_MODEL") or "gemini-2.0-flash"
+        model = model or os.getenv("DEFAULT_GEMINI_MODEL") or settings.GEMINI_MODEL
         model = registry.remap_model(model)
         if model.startswith("google/"):
             model = model[len("google/"):]
