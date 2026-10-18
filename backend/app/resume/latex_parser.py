@@ -24,6 +24,10 @@ def unescape_latex_text(text: str) -> str:
     s = s.replace(r'\$', '$').replace(r'\{', '{').replace(r'\}', '}')
     s = s.replace(r'\#', '#').replace(r'\~', '~').replace(r'\^', '^')
     s = s.replace(r'\cdot', '•').replace(r'\bullet', '•')
+
+    # Remove structural environments before parsing plain-text fallbacks. An
+    # empty itemize block must not become a fake skill containing its commands.
+    s = re.sub(r'\\(?:begin|end)\{[^}]+\}(?:\[[^\]]*\])?', '', s)
     
     # Remove text styling tags like \textbf{...}, \textit{...}, \small{...}, \color{...}{...}
     s = re.sub(r'\\textbf\{([^}]+)\}', r'\1', s)
@@ -162,7 +166,7 @@ def parse_latex_to_resume(latex_code: str) -> ResumeData:
                 items = re.findall(r'\\item\s*(\\textbf\{([^}]+)\}:?)?\s*([^\n\\]+)', sec_content)
                 if items:
                     for item in items:
-                        cat = unescape_latex_text(item[1]) if item[1] else "General"
+                        cat = unescape_latex_text(item[1]).rstrip(":").strip() if item[1] else "General"
                         sk_str = unescape_latex_text(item[2])
                         sk_list = [s.strip() for s in sk_str.split(',') if s.strip()]
                         if sk_list:

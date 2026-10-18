@@ -16,6 +16,7 @@ import os
 import sys
 import tempfile
 import pytest
+from unittest.mock import AsyncMock
 from datetime import datetime
 from fastapi.testclient import TestClient
 
@@ -209,7 +210,7 @@ def test_full_resume_pipeline():
     _run_export(tailored)
 
 
-def test_tailor_empty_resume_populates_all_sections():
+def test_tailor_empty_resume_keeps_unsupported_sections_empty(monkeypatch):
     empty_resume = ResumeData().model_dump()
     jd_analysis = {
         "role": "Senior Full Stack AI Engineer",
@@ -219,6 +220,11 @@ def test_tailor_empty_resume_populates_all_sections():
         "technologies": ["PostgreSQL", "Redis", "Docker", "Terraform", "Pinecone"],
         "keywords": ["RAG", "Vector Search", "LLMs", "Microservices"]
     }
+
+    monkeypatch.setattr(
+        "app.resume.services.call_llm_json",
+        AsyncMock(side_effect=RuntimeError("provider unavailable")),
+    )
 
     res = client.post(
         "/api/v1/resume/tailor",
@@ -233,8 +239,69 @@ def test_tailor_empty_resume_populates_all_sections():
     data = res.json()
     tailored = data["tailored_resume"]
 
-    assert tailored["headline"] != ""
-    assert len(tailored["summary"]) > 20
-    assert len(tailored["skills"]) >= 1
+    assert tailored["headline"] == jd_analysis["role"]
+    assert tailored["summary"] == ""
+    assert tailored["skills"] == []
+    assert tailored["experience"] == []
+    assert tailored["projects"] == []
+    assert tailored["education"] == []
+    assert tailored["certifications"] == []
+    assert tailored["achievements"] == []
+    assert tailored["languages"] == []
+    assert data["model_used"] == "rule-based-fallback"
+
+
+def test_tailor_rejects_model_created_resume_facts(monkeypatch):
+    from app.resume.models import ResumeData
+
+    source = ResumeData.model_validate({
+        "personal": {"name": "Morgan Test", "email": "morgan@example.test"},
+        "headline": "Software Engineer",
+        "summary": "Software engineer experienced in Python APIs.",
+        "skills": [{"category": "Languages", "skills": ["Python"]}],
+        "experience": [{
+            "id": "source-exp", "company": "SourceCo", "role": "Developer",
+            "start_date": "2020", "end_date": "2022", "bullets": ["Built Python APIs."],
+            "technologies": ["Python"],
+        }],
+        "education": [{"id": "source-edu", "institution": "State College", "degree": "BSc"}],
+    }).model_dump()
+    malicious_model_output = {
+        "personal": {"name": "Invented Person", "email": "fake@example.com"},
+        "headline": "Invented Engineering Director",
+        "summary": "Senior architect with 15 years of experience leading global teams.",
+        "skills": [{"category": "Languages", "skills": ["Python", "Kubernetes"]}],
+        "experience": [{
+            "id": "fake-exp", "company": "FakeCorp", "role": "Director",
+            "start_date": "2010", "end_date": "Present", "bullets": ["Led teams of 10 engineers."],
+            "technologies": ["Kubernetes"],
+        }],
+        "projects": [{"id": "fake-project", "name": "Invented Product"}],
+        "education": [{"id": "fake-edu", "institution": "Invented University", "degree": "PhD"}],
+    }
+    monkeypatch.setattr(
+        "app.resume.services.call_llm_json",
+        AsyncMock(return_value=malicious_model_output),
+    )
+
+    res = client.post(
+        "/api/v1/resume/tailor",
+        json={
+            "resume": source,
+            "jd_analysis": {"role": "Senior Software Engineer", "required_skills": ["Kubernetes"]},
+            "section": "all",
+            "style": "rewrite",
+        },
+    )
+
+    assert res.status_code == 200
+    tailored = res.json()["tailored_resume"]
+    assert tailored["personal"] == source["personal"]
+    assert tailored["headline"] == source["headline"]
+    assert tailored["summary"] == source["summary"]
+    assert tailored["skills"] == source["skills"]
+    assert tailored["experience"] == source["experience"]
+    assert tailored["projects"] == []
+    assert tailored["education"] == source["education"]
 
 

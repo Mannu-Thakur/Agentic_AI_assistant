@@ -128,13 +128,14 @@ You are improving and tailoring resume content to match a specific job descripti
 
 CRITICAL RULES:
 - Return ONLY valid JSON matching the input schema exactly.
-- PRESERVE EXISTING DATA: If the input resume has non-empty fields (name, existing companies, dates), preserve them while tailoring wording to target the JD.
-- POPULATE MISSING SECTIONS: If any section (headline, summary, skills, experience, projects, education) is empty or missing, GENERATE professional, high-quality, production-grade content tailored specifically to the target role, experience level, and tech stack described in the JD!
+- NEVER invent or infer facts: do not create employers, roles, dates, degrees, certifications, projects, skills, responsibilities, achievements, team sizes, or metrics.
+- PRESERVE SOURCE FACTS: Keep contact information and factual fields exactly as supplied. Rewrite only wording already supported by the source resume.
+- KEEP MISSING DATA EMPTY: Empty sections and missing entries must remain empty. A job description describes the target, not the candidate's history or qualifications.
 - SKILLS CATEGORIZATION: Group skills logically into categories (e.g., Languages, Frameworks & AI, Databases & Storage, Cloud & DevOps).
-- BULLET QUALITY: Start all experience bullets with strong action verbs (Architected, Engineered, Developed, Built, Spearheaded) and include quantified impact metrics where appropriate.
-- Never return an incomplete or mostly-empty resume."""
+- BULLET QUALITY: Improve clarity without changing the underlying claim, adding responsibilities, or adding any number/metric absent from the source.
+- Return a complete JSON object while preserving empty values; never fill emptiness with examples or placeholders."""
 
-TAILOR_ALL_USER = """Tailor and complete this resume to perfectly match the target job requirements.
+TAILOR_ALL_USER = """Tailor this resume to the target job using only facts in the source resume.
 Style: {style}
 
 Target Job Details:
@@ -147,11 +148,11 @@ Current Resume JSON:
 {resume_json}
 
 INSTRUCTIONS:
-1. Set 'headline' to a strong professional title matching the target role (e.g., {role}).
-2. If 'summary' is empty or brief, write a compelling 3-4 sentence summary highlighting experience in {required_skills}.
-3. Organize 'skills' into clean, categorized skill groups (e.g. Languages, Frameworks & AI, Databases & Storage, Cloud & DevOps) based on the JD tech stack.
-4. If 'experience' is empty, generate 2 realistic, high-impact work experience entries tailored to this role with bullet points demonstrating expertise in {required_skills} and {keywords}. If 'experience' is not empty, rewrite bullet points to emphasize relevant skills and strong action verbs.
-5. If 'projects' or 'education' are empty, generate realistic entries matching the JD requirements.
+1. Preserve the existing headline; if it is empty, use the target role title {role} as a desired headline.
+2. Rewrite a non-empty summary only with facts stated in that summary. Leave an empty summary empty.
+3. Reorder existing skills for relevance. Do not add JD skills unless they already appear in the resume's skills, experience technologies, or project technologies.
+4. Rewrite existing experience bullets without changing the underlying claims, adding numbers, or creating entries. Preserve company, role, dates, location, and technologies exactly.
+5. Preserve project, education, certification, achievement, and language entries exactly. Keep empty sections empty.
 
 Return the complete tailored resume as valid JSON matching the exact schema."""
 
@@ -165,11 +166,10 @@ Keywords to include naturally: {keywords}
 Current summary:
 {summary}
 
-Return JSON: {{"summary": "improved summary here"}}
-- 3-5 sentences maximum
-- Start with a strong professional identity statement
-- Include 2-3 of the most relevant keywords naturally
-- Do NOT fabricate any credentials"""
+Return JSON: {{"summary": "..."}}
+- If the current summary is empty, return an empty string.
+- Otherwise, use only the facts already stated in the current summary.
+- Do not add years, credentials, skills, responsibilities, accomplishments, or metrics that are not present in it."""
 
 TAILOR_SKILLS_USER = """Reorganize and optimize ONLY the skills section to match this job.
 Style: {style}
@@ -182,7 +182,7 @@ Current skills:
 
 Return JSON: {{"skills": [same structure with skills prioritized for this role]}}
 - Put most JD-relevant skills first within each category
-- Add missing JD-required skills ONLY if they appear elsewhere in the resume context
+- Do not add a skill unless it already appears in the current skills or is explicitly listed as a technology in the source experience/projects
 - Remove clearly irrelevant skills if requested
 - Keep category structure"""
 
@@ -198,11 +198,10 @@ Current experience:
 
 Return JSON: {{"experience": [same structure with improved bullets]}}
 Rules:
-- Start each bullet with a strong action verb (Developed, Led, Built, Reduced, Increased, etc.)
-- Quantify existing achievements where reasonable (use ranges like "20-30%", "2x" if implied)
+- Clarify and reorder existing bullets only; do not create entries or bullets
+- Do not add metrics, outcomes, responsibilities, or claims, even if they seem implied
 - Include relevant keywords naturally
-- Keep company, role, dates, and location EXACTLY the same
-- Do NOT add new bullet points — only improve existing ones"""
+- Keep company, role, dates, location, technologies, and number of bullets EXACTLY the same"""
 
 TAILOR_PROJECTS_USER = """Improve ONLY the projects section bullets to match this job.
 Style: {style}
@@ -215,9 +214,9 @@ Current projects:
 
 Return JSON: {{"projects": [same structure with improved descriptions and bullets]}}
 Rules:
-- Lead with impact and technologies
-- Include relevant keywords
-- Keep names, dates, URLs exactly the same"""
+- Improve wording using only the existing description and bullets; do not add outcomes, facts, technologies, or quantified claims
+- Keep project count, names, dates, URLs, technologies, and number of bullets EXACTLY the same
+- Keep empty project fields empty"""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -225,9 +224,8 @@ Rules:
 # ─────────────────────────────────────────────────────────────────────────────
 
 SUGGESTION_PROMPTS = {
-    "add_achievements": """Add measurable achievements to experience bullets.
-For each bullet that describes a task, add or suggest a measurable outcome.
-Use realistic ranges based on the role level and industry.
+    "add_achievements": """Improve the wording of achievements already present in the resume.
+Never invent a measurable outcome, estimate, responsibility, or experience. If no achievement is supplied, return the resume unchanged.
 Resume JSON: {resume_json}
 Return improved full resume JSON.""",
 
@@ -248,8 +246,8 @@ JD required skills: {jd_keywords}
 Resume JSON: {resume_json}
 Return improved full resume JSON.""",
 
-    "improve_ats": """Optimize for ATS systems.
-Add missing JD keywords naturally into existing bullets.
+    "improve_ats": """Optimize formatting and wording for ATS systems using only evidence in the resume.
+Do not add a JD keyword unless the corresponding skill or experience is already present in the resume.
 JD keywords missing from resume: {missing_keywords}
 Resume JSON: {resume_json}
 Return improved full resume JSON.""",

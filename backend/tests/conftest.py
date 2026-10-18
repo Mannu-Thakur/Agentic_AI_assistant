@@ -1,7 +1,18 @@
 import pytest
 import asyncio
 import sys
+import os
 from typing import AsyncGenerator
+
+# Tests that exercise app routes without overriding ``get_db`` must never use
+# the developer's persistent database or uploads. Configure process-local paths
+# before importing application settings, and let the app lifespan migration run
+# against this disposable SQLite database.
+_TEST_RUNTIME_ID = f"pytest_{os.getpid()}"
+os.environ["DATABASE_URL"] = f"sqlite:///./data/{_TEST_RUNTIME_ID}.db"
+os.environ["UPLOAD_DIR"] = f"./uploads/{_TEST_RUNTIME_ID}"
+os.environ["VECTOR_DB_DIR"] = f"./vector_db/{_TEST_RUNTIME_ID}"
+os.environ["ARTIFACT_DIR"] = f"./artifacts/{_TEST_RUNTIME_ID}"
 
 # ── Windows IOCP hang fix ─────────────────────────────────────────────────────
 # Python 3.11+ on Windows defaults to ProactorEventLoop (IOCP). asyncio.wait_for
@@ -16,8 +27,14 @@ if sys.platform == "win32":
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from app.core.database import Base, get_db
 from app.main import app
+from app.core.database import run_schema_migrations
 import importlib
 importlib.import_module("app.models")  # Register every mapped table before the test schema is created.
+
+# TestClient instances in several test modules are intentionally created
+# without a context manager. Initialize the same schema those real app startup
+# hooks provide, while staying on the disposable test database above.
+run_schema_migrations()
 
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 
@@ -86,5 +103,9 @@ def event_loop_policy():
 
 @pytest.fixture(autouse=True)
 def reset_dependency_overrides():
+    # Preserve module-scoped overrides (for example, a test module's dedicated
+    # database) while still removing per-test overrides after each case.
+    saved_overrides = app.dependency_overrides.copy()
     yield
     app.dependency_overrides.clear()
+    app.dependency_overrides.update(saved_overrides)

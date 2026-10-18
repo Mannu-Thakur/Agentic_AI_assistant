@@ -68,6 +68,17 @@ def _find_poppler() -> Optional[str]:
 class ParserService:
 
     @staticmethod
+    async def _document_exists(document_id: str) -> bool:
+        """Return whether the document still exists before publishing index data."""
+        from sqlalchemy import select
+
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(Document.id).where(Document.id == document_id)
+            )
+            return result.scalar_one_or_none() is not None
+
+    @staticmethod
     async def _set_ingestion_progress(
         document_id: str,
         *,
@@ -1020,6 +1031,12 @@ class ParserService:
         """
         logger.info(f"[Parser] Starting ingestion for document {document_id} ({filename})")
         try:
+            # A user may delete a document while its background ingestion task is
+            # queued. Do not spend work parsing a record that no longer exists.
+            if not await cls._document_exists(document_id):
+                logger.info(f"[Parser] Skipping ingestion for deleted document {document_id}")
+                return
+
             ext = os.path.splitext(file_path)[1].lower()
             await cls._set_ingestion_progress(
                 document_id, stage="extracting", progress=10
@@ -1114,6 +1131,15 @@ class ParserService:
                 chunk_metadatas=chunk_metadatas,
                 api_key=api_key,  # FIX-12: forward user key for real semantic embeddings
             )
+
+            # Deletion can race with embedding/index writes. The delete endpoint
+            # removes the row and current chunks; if indexing finished after that
+            # cleanup, remove the late chunks here so deleted content cannot be
+            # retrieved as an orphan.
+            if not await cls._document_exists(document_id):
+                await vector_store.delete_document_chunks(document_id, user_id=user_id)
+                logger.info(f"[Parser] Removed late index for deleted document {document_id}")
+                return
 
             await cls._set_ingestion_progress(
                 document_id,

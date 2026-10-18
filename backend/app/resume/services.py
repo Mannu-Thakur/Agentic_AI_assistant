@@ -6,9 +6,10 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import List, Optional
 
-from app.resume.models import ResumeData, JDAnalysis, ATSScoreBreakdown, SkillGroup, ExperienceEntry, ProjectEntry, EducationEntry
+from app.resume.models import ResumeData, JDAnalysis, SkillGroup, ExperienceEntry, ProjectEntry
 from app.resume.schemas import TailorResumeRequest, TailorResumeResponse, SuggestionResult
 from app.resume.prompts import (
     TAILOR_SYSTEM, TAILOR_ALL_USER, TAILOR_SUMMARY_USER,
@@ -21,124 +22,110 @@ logger = logging.getLogger("app.resume.services")
 
 
 def _rule_based_tailor_fallback(resume: ResumeData, jd: JDAnalysis, section: str, style: str) -> ResumeData:
-    """Deterministic fallback tailoring when LLM API providers are unavailable."""
+    """Align existing resume facts without creating candidate biography."""
     tailored = resume.model_copy(deep=True)
 
-    role = jd.role or "Senior Full Stack AI Engineer"
-    company = jd.company or ""
-    req_skills = jd.required_skills or []
-    techs = jd.technologies or []
-    keywords = jd.keywords or []
+    # A target role is a positioning choice. The JD alone is never evidence for
+    # skills, experience, projects, or education.
+    if not tailored.headline and jd.role:
+        tailored.headline = jd.role
 
-    all_tech = list(dict.fromkeys(techs + req_skills + keywords))
-    tech_str = ", ".join(all_tech[:6]) if all_tech else "Python, React, FastAPI, Docker, PostgreSQL"
-
-    # 1. Headline
-    tailored.headline = f"{role}" + (f" | {company}" if company else "")
-
-    # 2. Summary
-    if section in ("all", "summary"):
-        if not tailored.summary or len(tailored.summary.strip()) < 15:
-            tailored.summary = (
-                f"Accomplished {role} with proven expertise in building scalable cloud-native applications, "
-                f"distributed microservices, and AI-powered systems. Proficient in {tech_str}. "
-                f"Adept at optimizing system performance, delivering production-grade APIs, and driving end-to-end technical execution."
-            )
-        elif req_skills:
-            req_str = ", ".join(req_skills[:5])
-            if req_str.lower() not in tailored.summary.lower():
-                tailored.summary = f"{tailored.summary} Proficient in {req_str}."
-
-    # 3. Categorized Skills
     if section in ("all", "skills"):
-        langs = [t for t in all_tech if t.lower() in ("python", "typescript", "javascript", "java", "c++", "go", "rust", "sql")]
-        frameworks = [t for t in all_tech if t.lower() in ("react", "next.js", "node.js", "fastapi", "express.js", "django", "spring boot", "langchain", "langgraph", "pytorch", "transformers")]
-        databases = [t for t in all_tech if t.lower() in ("postgresql", "mongodb", "redis", "elasticsearch", "pinecone", "weaviate", "faiss", "vector databases")]
-        devops_cloud = [t for t in all_tech if t.lower() in ("docker", "kubernetes", "aws", "terraform", "helm", "git", "ci/cd", "kafka", "rabbitmq", "rest apis", "graphql", "websockets", "mcp", "streaming apis")]
-        others = [t for t in all_tech if t not in (langs + frameworks + databases + devops_cloud)]
-
-        groups = []
-        if langs:
-            groups.append(SkillGroup(category="Languages", skills=langs))
-        if frameworks:
-            groups.append(SkillGroup(category="Frameworks & AI", skills=frameworks))
-        if databases:
-            groups.append(SkillGroup(category="Databases & Vector Search", skills=databases))
-        if devops_cloud:
-            groups.append(SkillGroup(category="Cloud, DevOps & APIs", skills=devops_cloud))
-        if others:
-            groups.append(SkillGroup(category="Tools & Methodologies", skills=others[:10]))
-
-        if groups:
-            tailored.skills = groups
-        elif not tailored.skills:
-            tailored.skills = [SkillGroup(category="Technical Skills", skills=all_tech[:15])]
-
-    # 4. Experience (if empty)
-    if section == "all" and not tailored.experience:
-        tailored.experience = [
-            ExperienceEntry(
-                id="exp_1",
-                company="Enterprise AI Solutions",
-                role=role,
-                location="Bangalore, India",
-                start_date="2022",
-                end_date="Present",
-                is_current=True,
-                bullets=[
-                    f"Architected distributed microservices and AI workflows using {', '.join((techs + req_skills)[:3]) or 'Python, FastAPI, and React'}, improving throughput by 40%.",
-                    "Designed Retrieval-Augmented Generation (RAG) pipelines and vector search infrastructure handling 100k+ daily queries.",
-                    "Deployed cloud-native microservices using Docker, Kubernetes, and Terraform with automated CI/CD pipelines."
-                ],
-                technologies=all_tech[:6]
-            ),
-            ExperienceEntry(
-                id="exp_2",
-                company="Tech Innovation Systems",
-                role="Full Stack Software Engineer",
-                location="Bangalore, India",
-                start_date="2020",
-                end_date="2022",
-                is_current=False,
-                bullets=[
-                    "Developed production web applications and REST APIs using React, TypeScript, and Node.js.",
-                    "Optimized PostgreSQL and Redis query performance, cutting average p99 latency from 250ms to 45ms."
-                ],
-                technologies=all_tech[6:12]
-            )
-        ]
-
-    # 5. Projects (if empty)
-    if section == "all" and not tailored.projects:
-        tailored.projects = [
-            ProjectEntry(
-                id="proj_1",
-                name="Agentic AI RAG Knowledge Engine",
-                description="Production-grade AI platform implementing vector search, streaming APIs, and agentic workflows.",
-                technologies=all_tech[:5],
-                bullets=[
-                    "Implemented semantic search and RAG retrieval with vector databases.",
-                    "Built real-time streaming response API using WebSockets and FastAPI."
-                ]
-            )
-        ]
-
-    # 6. Education (if empty)
-    if section == "all" and not tailored.education:
-        tailored.education = [
-            EducationEntry(
-                id="edu_1",
-                institution="Institute of Technology",
-                degree="B.Tech",
-                field_of_study="Computer Science & Engineering",
-                location="India",
-                start_date="2016",
-                end_date="2020"
-            )
-        ]
+        evidence = list(dict.fromkeys(
+            [skill for group in resume.skills for skill in group.skills]
+            + [tech for entry in resume.experience for tech in entry.technologies]
+            + [tech for project in resume.projects for tech in project.technologies]
+        ))
+        if not tailored.skills and evidence:
+            tailored.skills = [SkillGroup(category="Technical Skills", skills=evidence)]
+        elif tailored.skills:
+            relevant = {
+                value.casefold()
+                for value in (jd.required_skills + jd.technologies + jd.keywords)
+            }
+            for group in tailored.skills:
+                group.skills = sorted(
+                    dict.fromkeys(group.skills),
+                    key=lambda value: (value.casefold() not in relevant, value.casefold()),
+                )
 
     return tailored
 
+
+def _number_claims(text: str) -> set[str]:
+    return {match.replace(",", "") for match in re.findall(r"\b\d[\d,]*(?:\.\d+)?%?\b", text or "")}
+
+
+def _preserve_source_facts(source: ResumeData, tailored: ResumeData, jd: JDAnalysis) -> ResumeData:
+    """Reject model-created entities, contact changes, and unsupported metrics."""
+    tailored.personal = source.personal.model_copy(deep=True)
+
+    if not source.summary:
+        tailored.summary = ""
+    elif not _number_claims(tailored.summary).issubset(_number_claims(source.summary)):
+        tailored.summary = source.summary
+
+    skill_evidence = {
+        value.strip().casefold(): value.strip()
+        for value in (
+            [skill for group in source.skills for skill in group.skills]
+            + [tech for entry in source.experience for tech in entry.technologies]
+            + [tech for project in source.projects for tech in project.technologies]
+        )
+        if value and value.strip()
+    }
+    if not skill_evidence:
+        tailored.skills = []
+    else:
+        filtered_groups = []
+        for group in tailored.skills:
+            allowed = list(dict.fromkeys(
+                skill_evidence[skill.strip().casefold()]
+                for skill in group.skills
+                if skill.strip().casefold() in skill_evidence
+            ))
+            if allowed:
+                filtered_groups.append(SkillGroup(category=group.category, skills=allowed))
+        if not filtered_groups and source.skills:
+            filtered_groups = [group.model_copy(deep=True) for group in source.skills]
+        elif not filtered_groups and skill_evidence:
+            filtered_groups = [SkillGroup(category="Technical Skills", skills=list(skill_evidence.values()))]
+        tailored.skills = filtered_groups
+
+    if not source.experience or len(tailored.experience) != len(source.experience):
+        tailored.experience = [entry.model_copy(deep=True) for entry in source.experience]
+    else:
+        for original, updated in zip(source.experience, tailored.experience):
+            for field in ("id", "company", "role", "location", "start_date", "end_date", "is_current"):
+                setattr(updated, field, getattr(original, field))
+            updated.technologies = list(original.technologies)
+            source_numbers = _number_claims(" ".join(original.bullets))
+            added_numbers = _number_claims(" ".join(updated.bullets)) - source_numbers
+            if not original.bullets or len(updated.bullets) != len(original.bullets) or added_numbers:
+                updated.bullets = list(original.bullets)
+
+    if not source.projects or len(tailored.projects) != len(source.projects):
+        tailored.projects = [project.model_copy(deep=True) for project in source.projects]
+    else:
+        for original, updated in zip(source.projects, tailored.projects):
+            for field in ("id", "name", "url", "github_url", "start_date", "end_date"):
+                setattr(updated, field, getattr(original, field))
+            updated.technologies = list(original.technologies)
+            if not original.description or _number_claims(updated.description) - _number_claims(original.description):
+                updated.description = original.description
+            source_numbers = _number_claims(" ".join(original.bullets))
+            added_numbers = _number_claims(" ".join(updated.bullets)) - source_numbers
+            if not original.bullets or len(updated.bullets) != len(original.bullets) or added_numbers:
+                updated.bullets = list(original.bullets)
+
+    # These sections are not requested for rewriting and must remain grounded.
+    tailored.education = [entry.model_copy(deep=True) for entry in source.education]
+    tailored.certifications = [entry.model_copy(deep=True) for entry in source.certifications]
+    tailored.achievements = [entry.model_copy(deep=True) for entry in source.achievements]
+    tailored.languages = [entry.model_copy(deep=True) for entry in source.languages]
+
+    tailored.headline = source.headline or jd.role or tailored.headline
+    return tailored
 
 def _rule_based_suggestion_fallback(resume: ResumeData, suggestion_type: str, jd: Optional[JDAnalysis]) -> ResumeData:
     """Deterministic fallback suggestion application when LLM API providers are unavailable."""
@@ -146,9 +133,20 @@ def _rule_based_suggestion_fallback(resume: ResumeData, suggestion_type: str, jd
 
     if suggestion_type == "add_missing_skills" and jd:
         existing = {s.lower() for sg in updated.skills for s in sg.skills}
+        source_evidence = " ".join(
+            [resume.summary]
+            + [bullet for entry in resume.experience for bullet in entry.bullets]
+            + [tech for entry in resume.experience for tech in entry.technologies]
+            + [project.description for project in resume.projects]
+            + [bullet for project in resume.projects for bullet in project.bullets]
+            + [tech for project in resume.projects for tech in project.technologies]
+        ).casefold()
         req_skills = jd.required_skills or []
         techs = jd.technologies or []
-        missing = [k for k in (req_skills + techs) if k.lower() not in existing]
+        missing = [
+            skill for skill in dict.fromkeys(req_skills + techs)
+            if skill.casefold() not in existing and skill.casefold() in source_evidence
+        ]
         if missing:
             if updated.skills:
                 updated.skills[0].skills.extend(missing[:5])
@@ -318,122 +316,13 @@ class ResumeService:
             changes_summary.append(f"Tailored section '{section}' using deterministic keyword alignment fallback")
             model_used = "rule-based-fallback"
 
-        # Preserve original personal info from input resume
-        if resume.personal.name and not tailored.personal.name:
-            tailored.personal.name = resume.personal.name
-        if resume.personal.email and not tailored.personal.email:
-            tailored.personal.email = resume.personal.email
-        if resume.personal.phone and not tailored.personal.phone:
-            tailored.personal.phone = resume.personal.phone
-
-        # Post-processing enrichment: Ensure empty sections are NEVER returned for a tailored resume
-        if not tailored.headline:
-            tailored.headline = f"{role}" + (f" | {company}" if company and company != "Target Company" else "")
-
-        if section in ("all", "summary") and (not tailored.summary or len(tailored.summary.strip()) < 15):
-            tech_str = ", ".join((required_skills + technologies + keywords)[:6])
-            tailored.summary = (
-                f"Accomplished {role} with extensive experience building scalable cloud-native applications, "
-                f"distributed microservices, and AI-powered systems. Proficient in {tech_str or 'Python, FastAPI, React, and Kubernetes'}. "
-                f"Adept at optimizing system performance, delivering production-grade APIs, and driving end-to-end technical execution."
-            )
-
-        if section in ("all", "skills"):
-            all_tech = []
-            for sg in tailored.skills:
-                all_tech.extend(sg.skills)
-            all_tech = list(dict.fromkeys(all_tech + technologies + required_skills + keywords))
-
-            if len(tailored.skills) <= 1 or any(sg.category.lower() in ("technical skills", "skills", "general", "") for sg in tailored.skills):
-                langs = [t for t in all_tech if t.lower() in ("python", "typescript", "javascript", "java", "c++", "go", "rust", "sql")]
-                frameworks = [t for t in all_tech if t.lower() in ("react", "next.js", "node.js", "fastapi", "express.js", "django", "spring boot", "langchain", "langgraph", "pytorch", "transformers", "spring")]
-                databases = [t for t in all_tech if t.lower() in ("postgresql", "mongodb", "redis", "elasticsearch", "pinecone", "weaviate", "faiss", "vector databases")]
-                devops_cloud = [t for t in all_tech if t.lower() in ("docker", "kubernetes", "aws", "terraform", "helm", "git", "ci/cd", "kafka", "rabbitmq", "rest apis", "graphql", "websockets", "mcp", "streaming apis")]
-                others = [t for t in all_tech if t.lower() not in [x.lower() for x in (langs + frameworks + databases + devops_cloud)]]
-
-                groups = []
-                if langs:
-                    groups.append(SkillGroup(category="Languages", skills=langs))
-                if frameworks:
-                    groups.append(SkillGroup(category="Frameworks & AI", skills=frameworks))
-                if databases:
-                    groups.append(SkillGroup(category="Databases & Vector Search", skills=databases))
-                if devops_cloud:
-                    groups.append(SkillGroup(category="Cloud, DevOps & APIs", skills=devops_cloud))
-                if others:
-                    groups.append(SkillGroup(category="Tools & Methodologies", skills=others[:10]))
-
-                if groups:
-                    tailored.skills = groups
-
-        if section == "all" and not tailored.experience:
-            all_tech = list(dict.fromkeys(technologies + required_skills + keywords))
-            tailored.experience = [
-                ExperienceEntry(
-                    id="exp_1",
-                    company="Enterprise AI Solutions",
-                    role=role,
-                    location="Bangalore, India",
-                    start_date="2022",
-                    end_date="Present",
-                    is_current=True,
-                    bullets=[
-                        f"Architected and deployed distributed microservices and AI workflows using {', '.join((technologies + required_skills)[:3]) or 'Python, FastAPI, and React'}, improving API throughput by 40%.",
-                        "Designed Retrieval-Augmented Generation (RAG) pipelines and vector search infrastructure handling 100k+ daily queries.",
-                        "Deployed cloud-native microservices using Docker, Kubernetes, and Terraform with automated CI/CD pipelines."
-                    ],
-                    technologies=all_tech[:6]
-                ),
-                ExperienceEntry(
-                    id="exp_2",
-                    company="Tech Innovation Systems",
-                    role="Full Stack Software Engineer",
-                    location="Bangalore, India",
-                    start_date="2020",
-                    end_date="2022",
-                    is_current=False,
-                    bullets=[
-                        "Developed production web applications and REST APIs using React, TypeScript, and Node.js.",
-                        "Optimized PostgreSQL and Redis query performance, cutting average p99 latency from 250ms to 45ms."
-                    ],
-                    technologies=all_tech[6:12]
-                )
-            ]
-
-        if section == "all" and not tailored.projects:
-            all_tech = list(dict.fromkeys(technologies + required_skills + keywords))
-            tailored.projects = [
-                ProjectEntry(
-                    id="proj_1",
-                    name="Agentic AI RAG Knowledge Engine",
-                    description="Production-grade AI platform implementing vector search, streaming APIs, and agentic workflows.",
-                    technologies=all_tech[:5],
-                    bullets=[
-                        "Implemented semantic search and RAG retrieval with vector databases.",
-                        "Built real-time streaming response API using WebSockets and FastAPI."
-                    ]
-                )
-            ]
-
-        if section == "all" and not tailored.education:
-            tailored.education = [
-                EducationEntry(
-                    id="edu_1",
-                    institution="Institute of Technology",
-                    degree="B.Tech",
-                    field_of_study="Computer Science & Engineering",
-                    location="India",
-                    start_date="2016",
-                    end_date="2020"
-                )
-            ]
+        tailored = _preserve_source_facts(resume, tailored, jd)
 
         return TailorResumeResponse(
             tailored_resume=tailored,
             changes_summary=changes_summary,
             model_used=model_used,
         )
-
     @staticmethod
     async def apply_suggestion(
         resume: ResumeData,
@@ -462,6 +351,7 @@ class ResumeService:
             )
 
             updated_resume = ResumeData(**_unwrap_resume_json(result))
+            updated_resume = _preserve_source_facts(resume, updated_resume, jd or JDAnalysis())
             changes = [f"Applied AI suggestion: {suggestion_type.replace('_', ' ').title()}"]
         except Exception as exc:
             logger.warning(f"[ResumeService] LLM suggestion unavailable ({exc}). Using deterministic fallback.")

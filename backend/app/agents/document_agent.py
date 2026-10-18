@@ -23,6 +23,7 @@ task_input keys
 from __future__ import annotations
 
 import io
+import json
 import logging
 import re
 from typing import Any, Dict, List, Optional
@@ -51,7 +52,7 @@ def _requested_slide_count(query: str) -> Optional[int]:
         return None
     raw_count = match.group(1).lower()
     count = int(raw_count) if raw_count.isdigit() else _NUMBER_WORDS[raw_count]
-    return max(2, count)
+    return max(1, count)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -211,12 +212,65 @@ class DocumentAgent(BaseAgent):
                 error=f"Document planning failed: {exc}",
             )
 
-        if not plan:
+        if not isinstance(plan, dict) or not plan:
             return AgentResult(
                 agent_name=self.name,
                 success=False,
                 error="LLM returned empty plan",
             )
+
+        if doc_type == "pptx" and total_slide_count:
+            expected_content_slides = total_slide_count - 1
+            planned_slides = plan.get("slides", [])
+            if not isinstance(planned_slides, list):
+                planned_slides = []
+            planned_slides = [slide for slide in planned_slides if isinstance(slide, dict)]
+
+            if len(planned_slides) < expected_content_slides:
+                repair_prompt = (
+                    f"Repair this PowerPoint plan for the request: {query}\n\n"
+                    f"The rendered deck must contain exactly {total_slide_count} slides total, "
+                    f"including one title slide, so return exactly {expected_content_slides} "
+                    "content slides. Keep and improve the supplied content, adding any missing "
+                    "content slides needed to reach the exact total. Return the same JSON schema.\n\n"
+                    f"Current draft:\n{json.dumps(plan, ensure_ascii=False)}"
+                )
+                try:
+                    repaired_plan = await call_llm_json(
+                        prompt=repair_prompt,
+                        model=model,
+                        api_keys=api_keys,
+                        system="You are an expert document planner. Output only valid JSON.",
+                        temperature=0.4,
+                    )
+                except Exception as exc:
+                    logger.error(f"[DocumentAgent] Slide-count repair failed: {exc}")
+                    return AgentResult(
+                        agent_name=self.name,
+                        success=False,
+                        error=f"Could not complete the requested {total_slide_count}-slide deck: {exc}",
+                    )
+
+                if isinstance(repaired_plan, dict):
+                    plan = repaired_plan
+                    repaired_slides = plan.get("slides", [])
+                    planned_slides = (
+                        [slide for slide in repaired_slides if isinstance(slide, dict)]
+                        if isinstance(repaired_slides, list) else []
+                    )
+
+            if len(planned_slides) < expected_content_slides:
+                return AgentResult(
+                    agent_name=self.name,
+                    success=False,
+                    error=(
+                        f"Requested {total_slide_count} total slides, but the presentation plan "
+                        f"contained only {len(planned_slides) + 1} after one repair attempt. "
+                        "No incomplete deck was exported."
+                    ),
+                )
+
+            plan["slides"] = planned_slides[:expected_content_slides]
 
         doc_title = plan.get("title", query[:60])
 

@@ -571,9 +571,12 @@ def generate_latex(resume: ResumeData, template: TemplateType = "modern") -> str
     # Contact items row
     contacts = []
     if p.email:
-        email_clean = escape_latex_url(p.email)
-        email_txt = escape_latex(p.email)
-        contacts.append(f"\\faEnvelope\\ \\href{{mailto:{email_clean}}}{{{email_txt}}}")
+        email_display = p.email.strip()
+        if email_display.lower().startswith("mailto:"):
+            email_display = email_display[len("mailto:"):]
+        email_clean = escape_latex_url(f"mailto:{email_display}")
+        email_txt = escape_latex(email_display)
+        contacts.append(f"\\faEnvelope\\ \\href{{{email_clean}}}{{{email_txt}}}")
     if p.phone:
         phone_txt = escape_latex(p.phone)
         contacts.append(f"\\faPhone\\ {phone_txt}")

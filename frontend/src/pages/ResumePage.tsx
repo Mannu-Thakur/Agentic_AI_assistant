@@ -22,7 +22,7 @@ export default function ResumePage() {
   const navigate = useNavigate();
   const {
     step, setStep, activeTab, setActiveTab,
-    atsScore, isTailoring, tailorResume, resetAll, showReviewModal
+    atsScore, jdAnalysis, isTailoring, tailorResume, resetAll, showReviewModal
   } = useResumeStore();
 
 
@@ -218,7 +218,9 @@ export default function ResumePage() {
               <div className="flex items-center space-x-2">
                 <button
                   onClick={() => handleTailorClick('rewrite')}
-                  disabled={isTailoring}
+                  disabled={isTailoring || !jdAnalysis}
+                  title={!jdAnalysis ? 'Add and analyze a job description before tailoring.' : undefined}
+                  aria-describedby={!jdAnalysis ? 'resume-tailor-requirement' : undefined}
                   className="flex items-center space-x-2 px-4 py-1.5 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white text-xs font-semibold shadow-lg shadow-violet-600/25 disabled:opacity-50 transition-all"
                 >
                   {isTailoring ? (
@@ -229,10 +231,15 @@ export default function ResumePage() {
                   ) : (
                     <>
                       <Wand2 className="w-3.5 h-3.5" />
-                      <span>AI Tailor Resume</span>
+                      <span>{jdAnalysis ? 'AI Tailor Resume' : 'Add Job Description to Tailor'}</span>
                     </>
                   )}
                 </button>
+                {!jdAnalysis && (
+                  <span id="resume-tailor-requirement" className="sr-only">
+                    Open Target Job and analyze a job description to enable AI tailoring.
+                  </span>
+                )}
               </div>
             </div>
 
