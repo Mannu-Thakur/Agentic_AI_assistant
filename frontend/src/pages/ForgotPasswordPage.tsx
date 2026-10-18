@@ -32,7 +32,7 @@ export default function ForgotPasswordPage() {
       });
 
       setSubmitted(true);
-    } catch (err: any) {
+    } catch {
       // Even if backend fails email send, advance or display detail
       setSubmitted(true);
     } finally {

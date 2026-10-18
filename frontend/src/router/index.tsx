@@ -1,16 +1,7 @@
 import { Navigate, createBrowserRouter } from 'react-router-dom';
 import AppLayout from '../layouts/AppLayout';
 import AuthLayout from '../layouts/AuthLayout';
-import LoginPage from '../pages/LoginPage';
-import ForgotPasswordPage from '../pages/ForgotPasswordPage';
-import ResetPasswordPage from '../pages/ResetPasswordPage';
-import ChatPage from '../pages/ChatPage';
-import WorkspacePage from '../pages/WorkspacePage';
-import SettingsPage from '../pages/SettingsPage';
 import OAuthCallbackPage from '../pages/OAuthCallbackPage';
-import SharedChatPage from '../pages/SharedChatPage';
-import ResumePage from '../pages/ResumePage';
-import AnalyticsPage from '../pages/AnalyticsPage';
 import { useAuthStore } from '../store/authStore';
 
 // Protected Route Helper
@@ -36,7 +27,10 @@ export const router = createBrowserRouter([
     children: [
       {
         path: '',
-        element: <LoginPage />,
+        lazy: async () => {
+          const { default: LoginPage } = await import('../pages/LoginPage');
+          return { Component: LoginPage };
+        },
       },
     ],
   },
@@ -50,7 +44,10 @@ export const router = createBrowserRouter([
     children: [
       {
         path: '',
-        element: <ForgotPasswordPage />,
+        lazy: async () => {
+          const { default: ForgotPasswordPage } = await import('../pages/ForgotPasswordPage');
+          return { Component: ForgotPasswordPage };
+        },
       },
     ],
   },
@@ -60,7 +57,10 @@ export const router = createBrowserRouter([
     children: [
       {
         path: '',
-        element: <ResetPasswordPage />,
+        lazy: async () => {
+          const { default: ResetPasswordPage } = await import('../pages/ResetPasswordPage');
+          return { Component: ResetPasswordPage };
+        },
       },
     ],
   },
@@ -82,33 +82,54 @@ export const router = createBrowserRouter([
     children: [
       {
         path: '',
-        element: <ChatPage />,
+        lazy: async () => {
+          const { default: ChatPage } = await import('../pages/ChatPage');
+          return { Component: ChatPage };
+        },
       },
       {
         path: 'c/:chatId',
-        element: <ChatPage />,
+        lazy: async () => {
+          const { default: ChatPage } = await import('../pages/ChatPage');
+          return { Component: ChatPage };
+        },
       },
       {
         path: 'workspace',
-        element: <WorkspacePage />,
+        lazy: async () => {
+          const { default: WorkspacePage } = await import('../pages/WorkspacePage');
+          return { Component: WorkspacePage };
+        },
       },
       {
         path: 'settings',
-        element: <SettingsPage />,
+        lazy: async () => {
+          const { default: SettingsPage } = await import('../pages/SettingsPage');
+          return { Component: SettingsPage };
+        },
       },
       {
         path: 'resume',
-        element: <ResumePage />,
+        lazy: async () => {
+          const { default: ResumePage } = await import('../pages/ResumePage');
+          return { Component: ResumePage };
+        },
       },
       {
         path: 'analytics',
-        element: <AnalyticsPage />,
+        lazy: async () => {
+          const { default: AnalyticsPage } = await import('../pages/AnalyticsPage');
+          return { Component: AnalyticsPage };
+        },
       },
     ],
   },
   {
     path: '/share/:chatId',
-    element: <SharedChatPage />,
+    lazy: async () => {
+      const { default: SharedChatPage } = await import('../pages/SharedChatPage');
+      return { Component: SharedChatPage };
+    },
   },
   {
     path: '*',

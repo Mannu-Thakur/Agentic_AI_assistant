@@ -409,7 +409,7 @@ function autoLinkBareUrls(text: string): string {
   // Negative lookbehind: not preceded by ]( (already a link target)
   // Negative lookahead: not followed by ) immediately (already a link target)
   return text.replace(
-    /(?<![\]\(])\b(https?:\/\/[^\s<>"'`()[\]{}|\\^]*[^\s<>"'`()[\]{}|\\^.,;:!?])/g,
+    /(?<![\](])\b(https?:\/\/[^\s<>"'`()[\]{}|\\^]*[^\s<>"'`()[\]{}|\\^.,;:!?])/g,
     (url) => `[${url}](${url})`
   );
 }
@@ -645,7 +645,11 @@ function CitedContent({
                     <div className="flex flex-wrap gap-1.5">
                       {srcs.map((src) => {
                         let domain = '';
-                        try { domain = new URL(src.url!).hostname.replace('www.', ''); } catch {}
+                        try {
+                          domain = new URL(src.url!).hostname.replace('www.', '');
+                        } catch {
+                          // Keep the source link usable even if its URL cannot be parsed for a label.
+                        }
                         return (
                           <a
                             key={src.index}
@@ -991,7 +995,7 @@ function formatShortTitle(text: string): string {
   const firstLine = clean.split('\n')[0] || clean;
   const stripped = firstLine
     .replace(/^(can you|please|help me|how to|write|create|explain|tell me|what is|who is|show me)\s+/i, '')
-    .replace(/[?.,!\"':;]+$/, '')
+    .replace(/[?.,!"':;]+$/, '')
     .trim();
   const words = (stripped || firstLine).split(/\s+/).slice(0, 5);
   const result = words.join(' ');
@@ -999,6 +1003,21 @@ function formatShortTitle(text: string): string {
 }
 
 
+
+const CURATED_MODELS = [
+  // Google Gemini — current models (Oct 2026)
+  { id: 'gemini-3.8-flash',      name: 'Gemini 3.8 Flash',      provider: 'Google Gemini', apiProvider: 'google', icon: Sparkles, badge: 'Recommended',   desc: 'Stable multimodal model for production' },
+  { id: 'gemini-3.6-flash',      name: 'Gemini 3.6 Flash',      provider: 'Google Gemini', apiProvider: 'google', icon: Cpu,      badge: 'Fast',          desc: 'Stable fast fallback model' },
+  { id: 'gemini-3.5-flash-lite', name: 'Gemini 3.5 Flash-Lite', provider: 'Google Gemini', apiProvider: 'google', icon: Cpu,      badge: 'Lowest cost',   desc: 'High-throughput lightweight model' },
+  // Groq production models (Oct 2026)
+  { id: 'openai/gpt-oss-20b',    name: 'GPT-OSS 20B (Groq)',    provider: 'Groq', apiProvider: 'groq', icon: Cpu, badge: 'Fast', desc: 'Fast production model with tool support' },
+  { id: 'openai/gpt-oss-120b',   name: 'GPT-OSS 120B (Groq)',   provider: 'Groq', apiProvider: 'groq', icon: Cpu, badge: 'Powerful', desc: 'High-capability production model with tool support' },
+  // OpenAI — exposed when a server or user OpenAI key is verified. Without
+  // this entry a valid OpenAI-only installation leaves the chat locked.
+  { id: 'gpt-4o-mini',           name: 'GPT-4o mini',           provider: 'OpenAI',        apiProvider: 'openai', icon: Sparkles, badge: 'Reliable',     desc: 'Fast general-purpose model with document support' },
+];
+
+const EMPTY_MODEL = { id: '', name: 'No Models', provider: 'None', icon: Cpu, desc: 'Please add keys in Settings' };
 
 // ─────────────────────────────────────────────────────────────
 //  Main ChatPage
@@ -1240,30 +1259,19 @@ export default function ChatPage() {
 
 
 
-  // ── Curated model list — same as SettingsPage ALL_MODELS ─────────────────
-  // Only show reliably-working providers. Never use provider.availableModels
-  // which floods the picker with 300+ OpenRouter entries.
-  const CURATED_MODELS = [
-    // Google Gemini — current models (Oct 2026)
-    { id: 'gemini-3.8-flash',      name: 'Gemini 3.8 Flash',      provider: 'Google Gemini', apiProvider: 'google', icon: Sparkles, badge: 'Recommended',   desc: 'Stable multimodal model for production' },
-    { id: 'gemini-3.6-flash',      name: 'Gemini 3.6 Flash',      provider: 'Google Gemini', apiProvider: 'google', icon: Cpu,      badge: 'Fast',          desc: 'Stable fast fallback model' },
-    { id: 'gemini-3.5-flash-lite', name: 'Gemini 3.5 Flash-Lite', provider: 'Google Gemini', apiProvider: 'google', icon: Cpu,      badge: 'Lowest cost',   desc: 'High-throughput lightweight model' },
-    // Groq production models (Oct 2026)
-    { id: 'openai/gpt-oss-20b',    name: 'GPT-OSS 20B (Groq)',    provider: 'Groq', apiProvider: 'groq', icon: Cpu, badge: 'Fast', desc: 'Fast production model with tool support' },
-    { id: 'openai/gpt-oss-120b',   name: 'GPT-OSS 120B (Groq)',   provider: 'Groq', apiProvider: 'groq', icon: Cpu, badge: 'Powerful', desc: 'High-capability production model with tool support' },
-    // OpenAI — exposed when a server or user OpenAI key is verified. Without
-    // this entry a valid OpenAI-only installation leaves the chat locked.
-    { id: 'gpt-4o-mini',           name: 'GPT-4o mini',           provider: 'OpenAI',        apiProvider: 'openai', icon: Sparkles, badge: 'Reliable',     desc: 'Fast general-purpose model with document support' },
-  ];
+  // Show only models whose provider key is verified. Keeping this list and the
+  // selected model stable avoids rebuilding streaming callbacks every render.
+  const models = useMemo(() => {
+    const verifiedProviderSet = new Set(
+      providers.filter((p) => p.status === 'VERIFIED').map((p) => p.id)
+    );
+    return CURATED_MODELS.filter((model) => verifiedProviderSet.has(model.apiProvider));
+  }, [providers]);
 
-  const verifiedProviderSet = new Set(
-    providers.filter((p) => p.status === 'VERIFIED').map((p) => p.id)
+  const currentModel = useMemo(
+    () => models.find((model) => model.id === activeModel) || models[0] || EMPTY_MODEL,
+    [activeModel, models],
   );
-
-  // Show only models whose provider key is verified
-  const models = CURATED_MODELS.filter((m) => verifiedProviderSet.has(m.apiProvider));
-
-  const currentModel = models.find((m) => m.id === activeModel) || models[0] || { id: '', name: 'No Models', provider: 'None', icon: Cpu, desc: 'Please add keys in Settings' };
 
   const activeChat   = chats.find((c) => c.id === activeChatId);
   const isLocked     = !loadingKeys && models.length === 0;
@@ -1562,7 +1570,6 @@ export default function ChatPage() {
     }
 
     return () => { active = false; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeChatId, historyRetryCount, setMessagesForChat, setMessages, hasCachedMessages, setIsStreaming]);
 
   useEffect(() => {
@@ -1585,7 +1592,7 @@ export default function ChatPage() {
       }, 50);
       return () => clearTimeout(timer);
     }
-  }, [activeChatId, messagesLoading]);
+  }, [activeChatId, messagesLoading, messages.length]);
 
   // ── HUD: track last assistant message ───────────────────────
   const assistantMessages = useMemo(() => messages.filter((m) => m.role === 'assistant'), [messages]);
@@ -1856,7 +1863,7 @@ export default function ChatPage() {
         setActiveChatId(chatId);
         window.history.replaceState(null, '', `/c/${chatId}`);
         navigate(`/c/${chatId}`, { replace: true });
-      } catch (err) {
+      } catch {
         creatingChatRef.current = false;
         setIsStreaming(false);
         updateMessage(asstMsgId, { content: '*[Failed to create conversation session]*' });
@@ -2001,7 +2008,7 @@ export default function ChatPage() {
       if (!reader) throw new Error('No reader');
 
       let buffer = '';
-      while (true) {
+      for (;;) {
         const { value, done } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
@@ -2126,7 +2133,7 @@ export default function ChatPage() {
       }
 
     }
-  }, [activeChatId, isStreaming, messages, activeModel, language, token, addChat, addMessage, updateMessage, setActiveChatId, setIsStreaming, navigate, currentModel, validateChatRequest, missionModeEnabled, startMission, addToast]);
+  }, [activeChatId, connectedChat, isStreaming, messages, activeModel, language, token, user, addChat, addMessage, updateMessage, setActiveChatId, setIsStreaming, navigate, currentModel, validateChatRequest, missionModeEnabled, startMission, addToast, fetchChatDocuments, handleToolApproval, searchMode]);
 
   // ── Message actions ──────────────────────────────────────────
   const handleCopyMessage = (id: string, content: string) => {
@@ -2362,7 +2369,7 @@ export default function ChatPage() {
       if (!reader) throw new Error('No reader');
 
       let buffer = '';
-      while (true) {
+      for (;;) {
         const { value, done } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
@@ -2502,7 +2509,7 @@ export default function ChatPage() {
       if (!reader) throw new Error('No reader');
 
       let buf = '';
-      while (true) {
+      for (;;) {
         const { value, done } = await reader.read();
         if (done) break;
         buf += decoder.decode(value, { stream: true });

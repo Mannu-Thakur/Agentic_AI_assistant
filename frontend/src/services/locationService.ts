@@ -38,7 +38,9 @@ export async function detectUserLocation(): Promise<string> {
             return result;
           }
         }
-      } catch (_) {}
+      } catch {
+        // This geocoder is optional; continue to the next reverse-geocoding provider.
+      }
 
       // OpenStreetMap Nominatim fallback
       try {
@@ -57,7 +59,9 @@ export async function detectUserLocation(): Promise<string> {
             return result;
           }
         }
-      } catch (_) {}
+      } catch {
+        // Continue to IP-based lookup when reverse geocoding is unavailable.
+      }
     } catch (e) {
       console.warn('HTML5 Geolocation API unavailable or permission denied, falling back to IP geolocation:', e);
     }
@@ -92,7 +96,9 @@ export async function detectUserLocation(): Promise<string> {
         }
       }
     }
-  } catch (_) {}
+  } catch {
+    // A failed provider should not block the remaining location fallbacks.
+  }
 
   // 3. IP Geolocation Provider 2: BigDataCloud IP Geocode
   try {
@@ -108,7 +114,9 @@ export async function detectUserLocation(): Promise<string> {
         return result;
       }
     }
-  } catch (_) {}
+  } catch {
+    // A failed provider should not block the remaining location fallbacks.
+  }
 
   // 4. IP Geolocation Provider 3: ipapi.co
   try {
@@ -123,7 +131,9 @@ export async function detectUserLocation(): Promise<string> {
         return result;
       }
     }
-  } catch (_) {}
+  } catch {
+    // A failed provider should not block the remaining location fallbacks.
+  }
 
   const cached = localStorage.getItem('omni_user_location');
   if (cached) return cached;

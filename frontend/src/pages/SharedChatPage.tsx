@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Bot, User, Loader2, AlertCircle, Lock, ExternalLink, Copy, Check, Radio } from 'lucide-react';
 import { BASE_URL } from '../services/api';
@@ -67,7 +67,7 @@ export default function SharedChatPage() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const fetchChat = async (id: string, showLoadingSpinner = false) => {
+  const fetchChat = useCallback(async (id: string, showLoadingSpinner = false) => {
     if (showLoadingSpinner) setLoading(true);
     try {
       const res = await fetch(`${BASE_URL}/chats/shared/${id}`);
@@ -85,22 +85,22 @@ export default function SharedChatPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     if (!chatId) { setError('No chat ID provided.'); setLoading(false); return; }
     fetchChat(chatId, true);
-  }, [chatId]);
+  }, [chatId, fetchChat]);
 
   // Once we have the chat data, start polling if it's a live share
   useEffect(() => {
-    if (!chat || !chat.is_live_share || !chatId) return;
+    if (chat?.is_live_share !== true || !chatId) return;
     if (pollRef.current) clearInterval(pollRef.current);
     pollRef.current = setInterval(() => fetchChat(chatId), 5000);
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
     };
-  }, [chat?.is_live_share, chatId]);
+  }, [chat?.is_live_share, chatId, fetchChat]);
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(window.location.href);

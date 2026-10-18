@@ -18,7 +18,9 @@ function getLocationLabel(): { city: string; region: string; country: string } {
         country: parts[2] || '',
       };
     }
-  } catch (_) {}
+  } catch {
+    // Storage can be unavailable in restricted browsing contexts; use the default label.
+  }
   return { city: 'Your Location', region: '', country: '' };
 }
 
@@ -92,7 +94,8 @@ export const TimeWidget: React.FC<TimeWidgetProps> = () => {
         region: parts[1] || '',
         country: parts[2] || '',
       });
-    } catch (_) {
+    } catch {
+      // The location service already has provider fallbacks; keep the clock usable.
     } finally {
       setIsDetectingLoc(false);
     }

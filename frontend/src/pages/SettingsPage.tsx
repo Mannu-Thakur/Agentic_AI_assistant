@@ -987,7 +987,7 @@ function UsageTab() {
 
   useEffect(() => {
     apiRequest('/health')
-      .then((_h) => {
+      .then(() => {
         setStats({ total_messages: 0, total_conversations: 0, total_documents: 0 });
         return apiRequest('/metrics/usage').catch(() => null);
       })
@@ -1541,9 +1541,10 @@ export default function SettingsPage() {
 
   // Cleanup active document progress poll intervals when the component unmounts
   useEffect(() => {
+    const pollIntervals = pollIntervalsRef.current;
     return () => {
-      pollIntervalsRef.current.forEach((id) => clearInterval(id));
-      pollIntervalsRef.current.clear();
+      pollIntervals.forEach((id) => clearInterval(id));
+      pollIntervals.clear();
     };
   }, []);
 
@@ -1828,7 +1829,7 @@ export default function SettingsPage() {
         console.error('Failed to update provider on toggle off:', err);
       }
     }
-  }, [setProviders]);
+  }, []);
 
   const handleFocusProviderKey = useCallback((apiProvider: string) => {
     if (apiProvider === 'none') return;
@@ -1943,7 +1944,7 @@ export default function SettingsPage() {
       const doc: DocumentFile = await apiRequestWithWakeup(
         '/documents/upload',
         { method: 'POST', body: formData, timeoutMs: 180_000 },  // 3 min — covers parse+embed on cold Render
-        (_attempt, _max) => {
+        () => {
           // Keep the waking step active during each retry tick — UI already shows it.
           setIngestStep(0);
         },

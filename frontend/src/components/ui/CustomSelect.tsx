@@ -53,7 +53,7 @@ export function CustomSelect({
     const spaceBelow = window.innerHeight - rect.bottom;
     const openUpward = spaceBelow < 250 && rect.top > 250;
 
-    let coords: {
+    const coords: {
       top?: number;
       bottom?: number;
       left?: number;

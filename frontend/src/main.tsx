@@ -42,12 +42,33 @@ const queryClient = new QueryClient({
   },
 });
 
+const subscribeToRouter = (onStoreChange: () => void) => router.subscribe(onStoreChange);
+const getRouterInitialized = () => router.state.initialized;
+
+function RouterStartupGate() {
+  const isInitialized = React.useSyncExternalStore(
+    subscribeToRouter,
+    getRouterInitialized,
+    getRouterInitialized,
+  );
+
+  if (!isInitialized) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background text-muted-foreground" role="status">
+        Loading workspace…
+      </div>
+    );
+  }
+
+  return <RouterProvider router={router} />;
+}
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <AppErrorBoundary>
-          <RouterProvider router={router} />
+          <RouterStartupGate />
         </AppErrorBoundary>
       </TooltipProvider>
     </QueryClientProvider>

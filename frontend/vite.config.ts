@@ -47,6 +47,9 @@ export default defineConfig({
             if (id.includes('katex')) {
               return 'vendor-katex';
             }
+            if (id.includes('react-syntax-highlighter') || id.includes('/refractor/')) {
+              return 'vendor-syntax-highlighter';
+            }
             if (id.includes('react-dom') || id.includes('react-router-dom')) {
               return 'vendor-react';
             }

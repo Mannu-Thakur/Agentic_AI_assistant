@@ -23,8 +23,9 @@ export default function LoginPage() {
   const passwordId = useId();
   const fullNameId = useId();
 
-  const isEmailValid = email.trim().length >= 3;
-  const isPasswordValid = password.length >= 6;
+  const isEmailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+  const minimumPasswordLength = isLogin ? 6 : 8;
+  const isPasswordValid = password.length >= minimumPasswordLength;
   const isFullNameValid = fullName.trim().length >= 2;
 
   const handleSubmit = async (e?: React.FormEvent) => {
@@ -32,11 +33,11 @@ export default function LoginPage() {
     setError(null);
 
     if (!isEmailValid) {
-      setError('Please enter your username or email address.');
+      setError('Please enter a valid email address.');
       return;
     }
     if (!isPasswordValid) {
-      setError('Password must be at least 6 characters long.');
+      setError(`Password must be at least ${minimumPasswordLength} characters long.`);
       return;
     }
     if (!isLogin && !isFullNameValid) {
@@ -254,17 +255,17 @@ export default function LoginPage() {
           </div>
         )}
 
-        {/* Username or Email Field */}
+        {/* Email Field */}
         <div className="space-y-1">
           <label htmlFor={emailId} className="text-xs font-semibold text-gray-200 select-none block">
-            Username or Email
+            Email address
           </label>
           <input
             id={emailId}
             type="text"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            placeholder="Username or Email"
+            placeholder="name@example.com"
             disabled={loading}
             className="w-full h-11 bg-[#272a33]/80 border border-white/10 rounded-xl py-2 px-3.5 text-sm text-white placeholder:text-gray-500 transition-all duration-200 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 disabled:opacity-50"
             required

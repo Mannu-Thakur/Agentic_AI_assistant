@@ -32,7 +32,7 @@ export function NotificationBell({ placement = 'sidebar' }: { placement?: 'sideb
       initSSE();
     }
     return () => closeSSE();
-  }, [isAuthenticated]);
+  }, [isAuthenticated, initSSE, closeSSE]);
 
   // Pulse animation when new alert arrives while panel is closed
   useEffect(() => {

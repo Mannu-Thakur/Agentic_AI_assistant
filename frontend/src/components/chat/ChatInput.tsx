@@ -417,7 +417,11 @@ export const ChatInput = React.memo(
       recognition.onerror = (_err: any) => {
         console.warn('[SpeechRecognition] Error event:', _err);
         setIsListening(false);
-        try { recognition.abort(); } catch (_) {}
+        try {
+          recognition.abort();
+        } catch {
+          // The recognition service may already be stopped; local state is reset below.
+        }
         recognitionRef.current = null;
       };
       recognition.onend = () => {

@@ -266,7 +266,16 @@ export async function apiRequest<T = any>(
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({ detail: `HTTP ${response.status} Request failed` }));
-    const errorMessage = errorData.detail || errorData.message || `API request failed (${response.status})`;
+    const validationDetails = Array.isArray(errorData.errors)
+      ? errorData.errors
+          .map((error: { field?: string; message?: string }) => {
+            const field = error.field?.split(' -> ').pop();
+            return [field, error.message].filter(Boolean).join(': ');
+          })
+          .filter(Boolean)
+          .join(' ')
+      : '';
+    const errorMessage = validationDetails || errorData.detail || errorData.message || `API request failed (${response.status})`;
 
     if (localStorage.getItem('developer_mode') === 'true') {
       console.error(`[API ERROR] ${options.method || 'GET'} ${url} -> ${response.status}`, errorData);
