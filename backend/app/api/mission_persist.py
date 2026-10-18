@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import get_current_user
@@ -38,6 +38,8 @@ class PersistMissionRequest(BaseModel):
     agent_names:  List[str]        = []
     artifacts:    List[Dict]       = []
     job_id:       Optional[str]    = None
+    latency_ms:   int              = Field(default=0, ge=0, le=3_600_000)
+    execution_trace: List[Dict[str, Any]] = Field(default_factory=list, max_length=100)
 
 
 class PersistMissionResponse(BaseModel):
@@ -85,7 +87,7 @@ async def persist_mission_messages(
     import json
     dev_metrics = {
         "model_used":       req.model,
-        "latency_ms":       0,
+        "latency_ms":       req.latency_ms,
         "tokens_input":     0,
         "tokens_output":    0,
         "cost_estimate":    0.0,
@@ -93,6 +95,7 @@ async def persist_mission_messages(
         "memory_hits":      0,
         "generation_mode":  "normal_rag",
         "steps":            [f"[Mission] {a}" for a in req.agent_names],
+        "execution_trace":  req.execution_trace,
         "source_documents": [
             {
                 "index":    i + 1,

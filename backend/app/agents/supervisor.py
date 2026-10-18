@@ -52,6 +52,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 import uuid
 from typing import Any, Dict, List, Optional, Annotated
@@ -97,6 +98,7 @@ class MissionState(TypedDict, total=False):
 
     # ── Routing ───────────────────────────────────────────────────────────────
     is_mission: bool          # True → use multi-agent path
+    force_mission: bool       # Explicit Mission Mode composer selection
     mission_id: str
     mission_goal: str
 
@@ -192,6 +194,55 @@ Respond ONLY with valid JSON (no markdown fences):
 {retry_hint}"""
 
 
+def _forced_agent_specs(query: str) -> List[Dict[str, Any]]:
+    """Choose deterministic specialists when Mission Mode was explicitly requested.
+
+    The planner remains useful for decomposing broad work, but a weak/simple
+    planner response must not discard an explicit artifact or specialist task.
+    """
+    text = query.lower()
+    specs: List[Dict[str, Any]] = []
+    asks_for_artifact = bool(re.search(
+        r"\b(create|make|generate|build|produce|export|downloadable|prepare)\b.{0,100}\b"
+        r"(presentation|powerpoint|pptx|slide deck|slides?|word document|docx|report)\b|"
+        r"\b(presentation|powerpoint|pptx|slide deck|slides?|word document|docx|report)\b.{0,100}\b"
+        r"(create|make|generate|build|produce|export|downloadable|prepare)\b",
+        text,
+    ))
+    if asks_for_artifact:
+        is_presentation = bool(re.search(r"\b(powerpoint|pptx|presentation|slide deck|slides?)\b", text))
+        doc_type = "pptx" if is_presentation else "docx"
+        specs.append({"agent": "document", "query": query, "doc_type": doc_type})
+
+    asks_for_research = bool(re.search(
+        r"\b(research|latest|current|up.to.date|find sources|cite sources|web search)\b",
+        text,
+    ))
+    if asks_for_research:
+        specs.append({"agent": "web_research", "query": query})
+
+    if not specs and re.search(r"\b(implement|write|create|debug|refactor)\b.{0,80}\b(code|script|api|function|program)\b", text):
+        specs.append({"agent": "code", "query": query})
+    if not specs and re.search(r"\b(csv|spreadsheet|dataset|data analysis|statistics|chart)\b", text):
+        specs.append({"agent": "data_analysis", "query": query})
+    if not specs and re.search(
+        r"\b(knowledge base|uploaded documents?|my documents|my files|workspace files|internal documents)\b",
+        text,
+    ):
+        specs.append({"agent": "rag", "query": query})
+
+    # Mission Mode is opt-in. For a substantial comparison or step-based
+    # deliverable that has no narrower specialist match, route it to the
+    # research agent instead of silently switching back to ordinary chat.
+    if not specs and len(text) >= 55 and re.search(
+        r"\b(compare|comparison|step.by.step|\d+[- ]step|plan|checklist|trade.offs)\b",
+        text,
+    ):
+        specs.append({"agent": "web_research", "query": query})
+
+    return [spec for spec in specs if spec["agent"] in agent_registry.list_agents()]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  Node: Supervisor Classify
 # ─────────────────────────────────────────────────────────────────────────────
@@ -206,6 +257,31 @@ async def supervisor_classify_node(state: MissionState, config: RunnableConfig) 
     retry_hint  = state.get("critic_retry_hint", "")
 
     trace = list(state.get("supervisor_trace") or [])
+
+    # Resolve explicit Mission Mode requests deterministically before invoking
+    # the LLM planner. This avoids paying for a classification call that the
+    # user's opt-in has already answered and prevents simple misclassifications.
+    forced_specs = _forced_agent_specs(query) if state.get("force_mission") else []
+    if forced_specs:
+        if retry_hint:
+            for spec in forced_specs:
+                spec["query"] = (
+                    f"{spec['query']}\n\nAddress this quality-review feedback in the retry: "
+                    f"{retry_hint[:1200]}"
+                )
+        plan: Dict[str, Any] = {
+            "is_mission": True,
+            "reason": "Mission Mode selected specialist execution for: " +
+                      ", ".join(spec["agent"] for spec in forced_specs),
+            "selected_agents": [spec["agent"] for spec in forced_specs],
+            "tasks": [
+                {"agent": spec["agent"], "query": spec["query"],
+                 "doc_type": spec.get("doc_type"), "priority": index + 1}
+                for index, spec in enumerate(forced_specs)
+            ],
+        }
+    else:
+        plan = {}
 
     agents_desc = json.dumps(agent_registry.describe_all(), indent=2)
 
@@ -223,19 +299,19 @@ async def supervisor_classify_node(state: MissionState, config: RunnableConfig) 
         retry_hint=retry_section,
     )
 
-    plan: Dict[str, Any] = {}
-    try:
-        from app.agents.node_helpers import call_llm_json
-        plan = await call_llm_json(
-            prompt=f"User query:\n{query}",
-            model=model,
-            api_keys=api_keys,
-            system=planner_prompt,
-            temperature=0.0,
-        )
-    except Exception as exc:
-        logger.warning(f"[Supervisor] Classify failed: {exc} — defaulting to simple")
-        plan = {"is_mission": False, "reason": str(exc), "selected_agents": [], "tasks": []}
+    if not forced_specs:
+        try:
+            from app.agents.node_helpers import call_llm_json
+            plan = await call_llm_json(
+                prompt=f"User query:\n{query}",
+                model=model,
+                api_keys=api_keys,
+                system=planner_prompt,
+                temperature=0.0,
+            )
+        except Exception as exc:
+            logger.warning(f"[Supervisor] Classify failed: {exc} — defaulting to simple")
+            plan = {"is_mission": False, "reason": str(exc), "selected_agents": [], "tasks": []}
 
     is_mission     = bool(plan.get("is_mission", False))
     selected       = plan.get("selected_agents", [])
@@ -257,6 +333,7 @@ async def supervisor_classify_node(state: MissionState, config: RunnableConfig) 
                     "active_model": model,
                     "api_keys":    api_keys,
                     "messages":    state.get("messages", []),
+                    **({"doc_type": raw["doc_type"]} if raw.get("doc_type") else {}),
                 },
                 metadata={"priority": raw.get("priority", 1)},
             )

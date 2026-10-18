@@ -45,6 +45,8 @@ class MissionRequest(BaseModel):
     query: str = Field(min_length=1, max_length=12_000)
     model: Optional[str] = Field(default=None, max_length=200)
     session_id: Optional[str] = None
+    # Honor explicit Mission Mode intent for requests that map to a specialist.
+    force_mission: bool = False
 
     @field_validator("session_id")
     @classmethod
@@ -121,6 +123,7 @@ async def run_mission(
             session_id=session_id,
             model=req.model or settings.GEMINI_MODEL,
             api_keys=api_keys,
+            force_mission=req.force_mission,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc

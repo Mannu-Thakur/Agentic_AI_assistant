@@ -21,6 +21,7 @@ class DeveloperMetricsSchema(BaseModel):
   search_queries: Optional[List[str]] = None
   chunks_used: Optional[int] = None
   steps: Optional[List[str]] = None
+  execution_trace: Optional[List[Dict[str, Any]]] = None
   retrieved_context: Optional[List[Dict[str, Any]]] = None
   source_documents: Optional[List[Dict[str, Any]]] = None
 

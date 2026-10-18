@@ -77,6 +77,16 @@ const INITIAL: MissionState = {
   retryCount:    0,
 };
 
+function mergeArtifacts(...groups: any[][]): any[] {
+  const merged = new Map<string, any>();
+  for (const artifact of groups.flat()) {
+    if (!artifact) continue;
+    const key = artifact.id || artifact.download_url || artifact.filename;
+    if (key) merged.set(String(key), artifact);
+  }
+  return [...merged.values()];
+}
+
 interface MissionCallbacks {
   onDelegated?: () => void;
   onMissionAccepted?: () => void;
@@ -99,6 +109,7 @@ export function useMission() {
     callbacks: MissionCallbacks = {},
   ) => {
     if (!token) return;
+    const startedAt = Date.now();
 
     // Cancel any previous mission stream
     cleanupRef.current?.();
@@ -110,7 +121,7 @@ export function useMission() {
     let jobId = '';
     try {
       const res = await enqueueMission(
-        { query, model, session_id: sessionId },
+        { query, model, session_id: sessionId, force_mission: true },
         token,
         apiKeys,
       );
@@ -134,6 +145,7 @@ export function useMission() {
     // launched from the welcome view, where this hook's activeChatId closure
     // may still be null until React renders the newly created chat.
     const missionChatId = sessionId || activeChatId;
+    let completedArtifacts: any[] = [];
     let statusPollCancelled = false;
     let statusPollStarted = false;
     let terminalHandled = false;
@@ -174,6 +186,8 @@ export function useMission() {
       }
 
       else if (type === 'agent_done') {
+        const newArtifacts = Array.isArray(data.artifacts) ? data.artifacts : [];
+        completedArtifacts = mergeArtifacts(completedArtifacts, newArtifacts);
         setMission(prev => ({
           ...prev,
           agentSteps: prev.agentSteps.map(step =>
@@ -181,7 +195,7 @@ export function useMission() {
               ? { ...step, status: data.success ? 'done' : 'failed', artifacts: data.artifacts || [] }
               : step
           ),
-          artifacts: [...prev.artifacts, ...(data.artifacts || [])],
+          artifacts: mergeArtifacts(prev.artifacts, newArtifacts),
         }));
       }
 
@@ -215,6 +229,23 @@ export function useMission() {
         terminalHandled = true;
         statusPollCancelled = true;
         const finalResponse: string = data.response || '';
+        const rawTrace: Array<Record<string, any>> = Array.isArray(data.execution_trace)
+          ? data.execution_trace
+          : [];
+        const executionTrace = rawTrace
+          .filter((item) => typeof item.node === 'string')
+          .map((item) => ({
+            name: item.node as string,
+            status: item.status === 'DONE' ? 'EXECUTED' as const :
+              item.status === 'SKIPPED' ? 'BYPASSED' as const : 'FAILED' as const,
+            duration_ms: Number(item.duration_ms) || 0,
+            metadata: item,
+          }));
+        const latencyMs = Math.max(0, Number(data.duration_ms) || (Date.now() - startedAt));
+        const finalArtifacts = mergeArtifacts(
+          completedArtifacts,
+          Array.isArray(data.artifacts) ? data.artifacts : [],
+        );
         if (finalResponse) notifyMissionAccepted();
 
         setMission(prev => {
@@ -222,7 +253,7 @@ export function useMission() {
             ...prev,
             status:        'complete' as MissionStatus,
             finalResponse,
-            artifacts:     [...prev.artifacts, ...(data.artifacts || [])],
+            artifacts:     mergeArtifacts(prev.artifacts, finalArtifacts),
             hitlRequest:   null,
           };
 
@@ -238,13 +269,14 @@ export function useMission() {
               created_at:        new Date().toISOString(),
               developer_metrics: {
                 model_used:       model,
-                latency_ms:       0,
+                latency_ms:       latencyMs,
                 tokens_input:     0,
                 tokens_output:    0,
                 cost_estimate:    0,
                 confidence_score: data.critic_score ?? 0.8,
                 memory_hits:      0,
                 generation_mode:  'normal_rag',
+                execution_trace:  executionTrace,
               },
             };
             addMessage(missionMessage);
@@ -262,8 +294,10 @@ export function useMission() {
             model,
             critic_score: data.critic_score ?? 0.8,
             agent_names:  data.agents || [],
-            artifacts:    data.artifacts || [],
+            artifacts:    finalArtifacts,
             job_id:       jobId,
+            latency_ms:   latencyMs,
+            execution_trace: executionTrace,
           }).catch(err => console.warn('[useMission] persist failed:', err));
         }
       }

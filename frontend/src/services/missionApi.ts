@@ -14,6 +14,7 @@ export interface MissionRunRequest {
   query: string;
   model?: string;
   session_id?: string;
+  force_mission?: boolean;
 }
 
 export interface MissionRunResponse {
@@ -233,6 +234,8 @@ export async function persistMission(
     agent_names:  string[];
     artifacts:    any[];
     job_id?:      string;
+    latency_ms?:  number;
+    execution_trace?: Array<Record<string, any>>;
   },
 ): Promise<{ user_message_id: string; assistant_message_id: string } | null> {
   try {

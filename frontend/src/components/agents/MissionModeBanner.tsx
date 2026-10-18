@@ -103,22 +103,22 @@ export function MissionModeBanner({
 
   if (status === 'idle') {
     return (
-      <section className={`flex items-center gap-3 rounded-2xl border px-3.5 py-3 transition-colors sm:px-4 ${
+      <section className={`relative flex min-h-12 items-center gap-3 overflow-hidden rounded-2xl border px-3 py-2 transition-all duration-200 ${
         isActive
-          ? 'border-violet-400/25 bg-gradient-to-r from-violet-500/[0.11] via-violet-500/[0.05] to-transparent shadow-[0_8px_28px_rgba(91,33,182,0.08)]'
+          ? 'border-violet-400/25 bg-gradient-to-r from-violet-500/[0.12] via-violet-500/[0.055] to-surface/75 shadow-[0_8px_28px_rgba(91,33,182,0.08)]'
           : 'border-border/70 bg-surface/75 hover:border-violet-400/25 hover:bg-surface-2/70'
       }`}>
-        <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border ${
-          isActive ? 'border-violet-400/25 bg-violet-400/15 text-violet-200' : 'border-border bg-surface-2 text-foreground-3'
+        <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border transition-colors ${
+          isActive ? 'border-violet-400/25 bg-violet-400/15 text-violet-200' : 'border-border/80 bg-surface-2 text-foreground-3'
         }`}>
           <Zap className="h-4 w-4" />
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <h3 className="text-xs font-semibold text-foreground">Mission Mode</h3>
-            {isActive && <span className="rounded-full border border-violet-300/20 bg-violet-300/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-violet-200">Ready</span>}
+            {isActive && <span className="rounded-full border border-violet-300/20 bg-violet-300/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-violet-200">On</span>}
           </div>
-          <p className="mt-0.5 text-[11px] leading-4 text-foreground-3">
+          <p className="mt-0.5 hidden text-[11px] leading-4 text-foreground-3 sm:block">
             {isActive ? 'Complex requests can be planned across specialist agents.' : 'Coordinate specialist agents for larger, multi-step tasks.'}
           </p>
         </div>
@@ -126,7 +126,7 @@ export function MissionModeBanner({
           type="button"
           aria-pressed={isActive}
           onClick={onToggle}
-          className={`shrink-0 rounded-xl border px-3 py-2 text-[11px] font-semibold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/60 ${
+          className={`shrink-0 rounded-full border px-3.5 py-1.5 text-[11px] font-semibold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/60 ${
             isActive
               ? 'border-violet-300/20 bg-violet-400/10 text-violet-100 hover:bg-violet-400/15'
               : 'border-border/80 bg-surface-2/80 text-foreground-2 hover:border-violet-400/25 hover:text-foreground'

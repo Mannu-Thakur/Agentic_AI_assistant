@@ -283,6 +283,19 @@ def run_schema_migrations() -> None:
                         _safe_add_column(conn, "documents", col_name, col_type)
                         existing_doc_cols.add(col_name)
 
+        # 1.4 Mission Mode routing signal. Older databases may already have
+        # mission_jobs from create_all, so reconcile the new column in place.
+        if inspector.has_table("mission_jobs"):
+            mission_cols = {col["name"] for col in inspector.get_columns("mission_jobs")}
+            if "force_mission" not in mission_cols:
+                with engine.begin() as conn:
+                    _safe_add_column(
+                        conn,
+                        "mission_jobs",
+                        "force_mission",
+                        "BOOLEAN NOT NULL DEFAULT FALSE",
+                    )
+
         # 2. Update users table (add role)
         if inspector.has_table("users"):
             existing_users_cols = {col["name"] for col in inspector.get_columns("users")}

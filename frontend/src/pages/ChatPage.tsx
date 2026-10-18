@@ -429,12 +429,20 @@ function MermaidBlock({ code }: { code: string }) {
         // Dynamic import — requires mermaid package (npm install mermaid)
         const mermaidModule = await import('mermaid');
         const mermaid = mermaidModule.default;
-        mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'loose' });
+        mermaid.initialize({
+          startOnLoad: false,
+          theme: 'dark',
+          securityLevel: 'loose',
+          suppressErrorRendering: true,
+        });
+        const valid = await mermaid.parse(code, { suppressErrors: true });
+        if (!valid) throw new Error('Invalid Mermaid syntax');
         const id = `mermaid-${Math.random().toString(36).slice(2, 9)}`;
         const { svg } = await mermaid.render(id, code);
         if (!cancelled) setSvgContent(svg);
-      } catch {
-        if (!cancelled) setError('mermaid');
+      } catch (renderError) {
+        console.warn('[Mermaid] Diagram could not be rendered:', renderError);
+        if (!cancelled) setError('parse');
       }
     };
     render();
@@ -443,12 +451,22 @@ function MermaidBlock({ code }: { code: string }) {
 
   if (error) {
     return (
-      <div className="rounded-xl border border-border bg-surface-2 overflow-hidden my-2">
-        <div className="flex items-center gap-2 px-4 py-2 bg-surface-3 border-b border-border">
-          <span className="text-[10px] font-bold text-amber-400">Mermaid Diagram</span>
-          <span className="text-[10px] text-foreground-3">— install mermaid to render: <code className="font-mono">npm install mermaid</code></span>
+      <div className="my-3 overflow-hidden rounded-2xl border border-border/80 bg-gradient-to-br from-surface-2 to-surface/80 shadow-[0_12px_36px_rgba(0,0,0,0.16)]">
+        <div className="flex items-start gap-3 px-4 py-3.5">
+          <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-amber-400/15 bg-amber-400/[0.08] text-amber-300">
+            <AlertCircle className="h-4 w-4" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-semibold text-foreground">Diagram could not render</p>
+            <p className="mt-0.5 text-[11px] leading-4 text-foreground-3">The diagram source is still available to inspect.</p>
+          </div>
         </div>
-        <pre className="px-4 py-3 text-xs text-foreground-2 font-mono overflow-x-auto">{code}</pre>
+        <details className="group border-t border-border/70">
+          <summary className="cursor-pointer list-none px-4 py-2.5 text-[11px] font-medium text-foreground-2 transition hover:bg-white/[0.025] [&::-webkit-details-marker]:hidden">
+            View diagram source
+          </summary>
+          <pre className="max-h-72 overflow-auto border-t border-border/60 bg-black/15 px-4 py-3 text-xs leading-5 text-foreground-2 font-mono">{code}</pre>
+        </details>
       </div>
     );
   }
@@ -4618,6 +4636,11 @@ export default function ChatPage() {
 type ExecutionTraceItem = NonNullable<DeveloperMetrics['execution_trace']>[number];
 
 const EXECUTION_STEP_LABELS: Record<string, string> = {
+  supervisor_classify: 'Planned specialist agent work',
+  parallel_dispatch: 'Ran specialist agents',
+  result_collector: 'Combined agent outputs',
+  critic_verification: 'Reviewed output quality',
+  synthesizer: 'Prepared the final response',
   classify_intent: 'Classified the request and selected a route',
   contextual_query_resolution: 'Resolved the follow-up from conversation context',
   query_rewriter: 'Checked whether the query needed rewriting',

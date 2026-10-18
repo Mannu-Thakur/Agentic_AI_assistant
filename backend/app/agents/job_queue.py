@@ -49,6 +49,7 @@ class Job:
     session_id: str
     model: str
     api_keys: Dict[str, str]
+    force_mission: bool = False
     status: str = "queued"          # queued | running | complete | error | awaiting_approval
     events: List[JobEvent] = field(default_factory=list)
     result: Optional[str] = None
@@ -107,6 +108,7 @@ class JobQueue:
         session_id: str,
         model: str,
         api_keys: Dict[str, str],
+        force_mission: bool = False,
     ) -> Job:
         """Create a job, add to queue, return immediately with job.id."""
         if not self._started:
@@ -120,6 +122,7 @@ class JobQueue:
             session_id=session_id,
             model=model,
             api_keys=api_keys,
+            force_mission=force_mission,
         )
         await self._create_persisted_job(job)
         self._jobs[job.id] = job
@@ -245,12 +248,15 @@ class JobQueue:
 
         async def _run_graph(graph) -> None:
             """Stream supervisor graph events and emit them onto the job."""
+            selected_agents: List[str] = []
+            latest_critic_score: Optional[float] = None
             initial_state: dict = {
                 "query":            job.query,
                 "user_id":          job.user_id,
                 "session_id":       job.session_id,
                 "active_model":     job.model,
                 "api_keys":         job.api_keys,
+                "force_mission":    job.force_mission,
                 "messages":         [],
                 "supervisor_trace": [],
                 "artifacts":        [],
@@ -264,6 +270,7 @@ class JobQueue:
             async for event in graph.astream(initial_state, config=config, stream_mode="updates"):
                 for node_name, node_output in event.items():
                     if node_name == "supervisor_classify":
+                        selected_agents = node_output.get("selected_agents", [])
                         self._emit(job, "mission_classified", {
                             "job_id":      job.id,
                             "is_mission":  node_output.get("is_mission", False),
@@ -279,6 +286,7 @@ class JobQueue:
                                 "artifacts": result.get("artifacts", []),
                             })
                     elif node_name == "critic_verification":
+                        latest_critic_score = node_output.get("critic_score")
                         self._emit(job, "critic_done", {
                             "job_id":   job.id,
                             "score":    node_output.get("critic_score", 0.0),
@@ -292,6 +300,10 @@ class JobQueue:
                             "job_id":    job.id,
                             "response":  final,
                             "artifacts": node_output.get("artifacts", []),
+                            "agents": selected_agents,
+                            "critic_score": latest_critic_score,
+                            "execution_trace": node_output.get("supervisor_trace", []),
+                            "duration_ms": round((time.time() - job.created_at) * 1000, 2),
                         })
                     elif node_name == "delegate":
                         self._emit(job, "mission_delegated", {
@@ -371,6 +383,7 @@ class JobQueue:
             session_id=record.session_id,
             model=record.model,
             api_keys=api_keys,
+            force_mission=bool(getattr(record, "force_mission", False)),
             status=record.status,
             events=[self._event_from_dict(event) for event in raw_events if isinstance(event, dict)],
             result=record.result,
@@ -391,6 +404,7 @@ class JobQueue:
                 session_id=job.session_id,
                 query=job.query,
                 model=job.model,
+                force_mission=job.force_mission,
                 encrypted_api_keys=encrypt_api_key(json.dumps(job.api_keys)),
                 status=job.status,
                 events=[],

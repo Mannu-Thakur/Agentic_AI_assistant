@@ -7,7 +7,7 @@ persisted.  Credentials are encrypted before this model is written.
 
 import uuid
 
-from sqlalchemy import Column, DateTime, ForeignKey, JSON, String, Text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, JSON, String, Text
 from sqlalchemy.sql import func
 
 from app.core.database import Base
@@ -21,6 +21,7 @@ class MissionJob(Base):
     session_id = Column(String(128), nullable=False, index=True)
     query = Column(Text, nullable=False)
     model = Column(String(200), nullable=False)
+    force_mission = Column(Boolean, nullable=False, default=False, server_default="false")
     encrypted_api_keys = Column(Text, nullable=True)
     status = Column(String(32), nullable=False, default="queued", index=True)
     events = Column(JSON, nullable=False, default=list)

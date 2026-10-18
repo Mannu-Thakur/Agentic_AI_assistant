@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 from app.agents.registry import BaseAgent, AgentResult, agent_registry
@@ -31,6 +32,26 @@ from app.agents.artifacts import artifact_store
 from app.agents.node_helpers import call_llm_json, call_llm_simple
 
 logger = logging.getLogger("agents.document")
+
+
+_NUMBER_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}
+
+
+def _requested_slide_count(query: str) -> Optional[int]:
+    """Read an explicit total slide count, including common number words."""
+    match = re.search(
+        r"\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s*[- ]?slides?\b",
+        query,
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    raw_count = match.group(1).lower()
+    count = int(raw_count) if raw_count.isdigit() else _NUMBER_WORDS[raw_count]
+    return max(2, count)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -151,11 +172,19 @@ class DocumentAgent(BaseAgent):
 
         # ── Step 1: Plan structure via LLM ────────────────────────────────────
         if doc_type == "pptx":
+            total_slide_count = _requested_slide_count(query)
+            slide_count_instruction = (
+                f"Create exactly {total_slide_count - 1} content slides because the rendered "
+                f"deck includes one title slide for {total_slide_count} slides total."
+                if total_slide_count else
+                "Include 6-10 content slides plus a title slide."
+            )
             plan_prompt = (
                 f"Create a structured PowerPoint presentation plan for: {query}\n\n"
                 "Respond with JSON:\n"
                 '{"title": "...", "slides": [{"title": "...", "bullets": ["...", "..."], "notes": "..."}, ...]}\n'
-                "Include 6-10 slides with 4-6 bullet points each. Be specific and informative."
+                f"{slide_count_instruction} Use 3-5 concise bullet points per content slide. "
+                "Be specific and informative."
             )
         else:
             plan_prompt = (
@@ -198,12 +227,14 @@ class DocumentAgent(BaseAgent):
         try:
             if doc_type == "pptx":
                 slides = plan.get("slides", [])
+                if total_slide_count:
+                    slides = slides[:total_slide_count - 1]
                 doc_bytes = _build_pptx(doc_title, slides)
                 filename  = f"{doc_title[:40].replace(' ', '_')}.pptx"
                 art_type  = "pptx"
                 content_summary = (
                     f"📊 **PowerPoint Presentation: {doc_title}**\n\n"
-                    f"Generated **{len(slides)} slides**:\n" +
+                    f"Generated **{len(slides) + 1} slides**:\n" +
                     "\n".join(f"- {s.get('title', '')}" for s in slides[:8])
                 )
             else:
@@ -256,7 +287,7 @@ class DocumentAgent(BaseAgent):
                 "doc_type":   doc_type,
                 "title":      doc_title,
                 "filename":   filename,
-                "slide_count": len(plan.get("slides", [])) if doc_type == "pptx" else 0,
+                "slide_count": len(slides) + 1 if doc_type == "pptx" else 0,
                 "section_count": len(plan.get("sections", [])) if doc_type != "pptx" else 0,
             },
         )
