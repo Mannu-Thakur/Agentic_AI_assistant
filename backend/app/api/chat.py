@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import time
 import traceback
 import uuid
 from datetime import datetime, timezone
@@ -195,6 +196,7 @@ async def stream_agent_message(
     db: AsyncSession = Depends(get_db)
 ):
   logger.info(f"stream_agent_message: chat_id={chat_id}")
+  request_started_at = time.perf_counter()
 
   # ── Per-user rate limit (200 req/min per user ID) ─────────────────────────
   # Complements the per-IP limit (100/min) in the global middleware.
@@ -933,7 +935,9 @@ async def stream_agent_message(
         metrics_store.update({
             "model_used": final_state.get("model_used") or final_state.get("active_model") or schema.model,
             "provider_used": final_state.get("provider_used") or resolved_prov,
-            "latency_ms": getattr(_telemetry, "total_latency_ms", 0) if _telemetry else 0,
+            # Use the server-observed request duration so the chat disclosure
+            # still has a real elapsed time when optional telemetry is absent.
+            "latency_ms": max(1, round((time.perf_counter() - request_started_at) * 1000)),
             "cost_estimate": 0.0,
             "tokens_input": getattr(_telemetry, "token_estimate", 0) if _telemetry else 0,
             "tokens_output": len(response_content) // 4,

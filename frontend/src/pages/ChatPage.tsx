@@ -3816,7 +3816,10 @@ export default function ChatPage() {
                             <div className={`assistant-bubble text-foreground rounded-2xl rounded-bl-sm px-4 py-3 text-sm w-full transition-all ${
                               developerMode && selectedMessageId === m.id ? 'ring-2 ring-accent/60 bg-accent/[0.03] shadow-sm' : ''
                             }`}>
-                              <ExecutionThoughtDisclosure metrics={m.developer_metrics} />
+                              <ExecutionThoughtDisclosure
+                                metrics={m.developer_metrics}
+                                hasAnswer={Boolean(displayContent.trim()) && !error}
+                              />
                               {/* Response meta bar — premium editorial style */}
                               {responseMeta?.isLong && !isStreaming && (
                                 <div className="response-meta-bar">
@@ -4554,6 +4557,7 @@ const EXECUTION_STEP_LABELS: Record<string, string> = {
 };
 
 function formatExecutionDuration(durationMs: number): string {
+  if (durationMs < 1000) return '<1 sec';
   const totalSeconds = Math.max(0, Math.round(durationMs / 1000));
   if (totalSeconds < 60) return `${totalSeconds} sec`;
   const minutes = Math.floor(totalSeconds / 60);
@@ -4561,16 +4565,22 @@ function formatExecutionDuration(durationMs: number): string {
   return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`;
 }
 
-/** Shows elapsed time and the backend's safe execution trace, never hidden chain-of-thought. */
-function ExecutionThoughtDisclosure({ metrics }: { metrics: DeveloperMetrics | null }) {
+/** Shows server-measured elapsed time and recorded execution stages, never hidden chain-of-thought. */
+function ExecutionThoughtDisclosure({
+  metrics,
+  hasAnswer,
+}: {
+  metrics: DeveloperMetrics | null;
+  hasAnswer: boolean;
+}) {
   const [expanded, setExpanded] = useState(false);
   const trace = (metrics?.execution_trace || []).filter((item) => item?.name);
-  if (!trace.length) return null;
-
-  const measuredDuration = metrics?.latency_ms || trace.reduce(
+  const traceDuration = trace.reduce(
     (total, item) => total + (Number(item.duration_ms) || 0),
     0,
   );
+  const measuredDuration = Math.max(Number(metrics?.latency_ms) || 0, traceDuration);
+  if (!hasAnswer || measuredDuration <= 0) return null;
 
   return (
     <section className="mb-3 text-foreground-3">
@@ -4586,11 +4596,14 @@ function ExecutionThoughtDisclosure({ metrics }: { metrics: DeveloperMetrics | n
 
       {expanded && (
         <ol className="mt-2 ml-1 space-y-0.5" aria-label="Actual execution path">
-          {trace.map((item: ExecutionTraceItem, index) => {
+          {trace.length === 0 ? (
+            <li className="py-1 text-[12px] text-foreground-3">
+              The server did not return an execution path for this response.
+            </li>
+          ) : trace.map((item: ExecutionTraceItem, index) => {
             const label = EXECUTION_STEP_LABELS[item.name] || item.name.replaceAll('_', ' ');
             const skipped = item.status === 'BYPASSED';
             const failed = item.status === 'FAILED';
-            const description = item.reason || item.error;
             return (
               <li key={`${item.name}-${index}`} className="relative flex gap-3 pb-3 last:pb-0">
                 {index < trace.length - 1 && (
@@ -4604,9 +4617,8 @@ function ExecutionThoughtDisclosure({ metrics }: { metrics: DeveloperMetrics | n
                     {label}{skipped ? ' · skipped' : failed ? ' · failed' : ''}
                     {item.duration_ms ? <span className="ml-2 text-[11px] text-foreground-3">{Math.round(item.duration_ms)} ms</span> : null}
                   </span>
-                  {description && (
-                    <span className="mt-0.5 block text-[11px] leading-4 text-foreground-3">{description}</span>
-                  )}
+                  {skipped && <span className="mt-0.5 block text-[11px] leading-4 text-foreground-3">Not needed for this request.</span>}
+                  {failed && <span className="mt-0.5 block text-[11px] leading-4 text-foreground-3">This stage reported a failure.</span>}
                 </span>
               </li>
             );

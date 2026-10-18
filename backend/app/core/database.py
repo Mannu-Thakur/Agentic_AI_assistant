@@ -208,7 +208,9 @@ def run_schema_migrations() -> None:
     from app.models.evaluation import EvalResult
     from app.models.tool_approval import ToolApproval
 
-    _SAFE_DDL_TYPE_RE = _re_ddl.compile(r'^[A-Z0-9_\s\(\)\.\,]+$', _re_ddl.IGNORECASE)
+    # Quotes are allowed for static DEFAULT string literals; semicolons,
+    # comments, and other SQL operators remain rejected.
+    _SAFE_DDL_TYPE_RE = _re_ddl.compile(r"^[A-Z0-9_\s\(\)\.\,']+$", _re_ddl.IGNORECASE)
     _SAFE_DDL_NAME_RE = _re_ddl.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
 
     def _safe_add_column(conn, table_name: str, col_name: str, col_type: str):
@@ -262,17 +264,24 @@ def run_schema_migrations() -> None:
                 ))
                 logger.info("[schema] Ensured index idx_messages_chat_id_created")
 
-        # 1.3 Update documents table (add error_message and chat_id columns)
+        # 1.3 Update documents table. Older deployments can have Alembic marked
+        # current while the ingestion progress columns are still absent, so
+        # reconcile them here before document APIs query those fields.
         if inspector.has_table("documents"):
             existing_doc_cols = {col["name"] for col in inspector.get_columns("documents")}
-            if "error_message" not in existing_doc_cols:
-                with engine.begin() as conn:
-                    conn.execute(text("ALTER TABLE documents ADD COLUMN error_message TEXT"))
-                    logger.info("[schema] Added column documents.error_message")
-            if "chat_id" not in existing_doc_cols:
-                with engine.begin() as conn:
-                    conn.execute(text("ALTER TABLE documents ADD COLUMN chat_id VARCHAR(36)"))
-                    logger.info("[schema] Added column documents.chat_id")
+            document_columns = (
+                ("error_message", "TEXT"),
+                ("chat_id", "VARCHAR(36)"),
+                ("stage", "VARCHAR(40) NOT NULL DEFAULT 'queued'"),
+                ("progress", "INTEGER NOT NULL DEFAULT 0"),
+                ("chunk_count", "INTEGER NOT NULL DEFAULT 0"),
+                ("processing_started_at", "TIMESTAMP WITH TIME ZONE"),
+            )
+            with engine.begin() as conn:
+                for col_name, col_type in document_columns:
+                    if col_name not in existing_doc_cols:
+                        _safe_add_column(conn, "documents", col_name, col_type)
+                        existing_doc_cols.add(col_name)
 
         # 2. Update users table (add role)
         if inspector.has_table("users"):
