@@ -1569,6 +1569,7 @@ async def classify_intent_node(
     # ── Ambiguity check via LLM (no keyword shortcuts) ───────────────────────
     # Let the AMBIGUITY_DETECTOR_PROMPT decide — it's already calibrated to
     # never flag normal questions as ambiguous. No keyword bypass needed.
+    contextual_query_rewrite_duration_ms: Optional[float] = None
     if not resolved_query and last_query and not images_present and not _skip_ambiguity_check:
         ambiguity_prompt = AMBIGUITY_DETECTOR_PROMPT.format(
             query=last_query,
@@ -1577,9 +1578,11 @@ async def classify_intent_node(
         parsed_ambiguity = await _call_llm_judge(ambiguity_prompt, config)
         if parsed_ambiguity and isinstance(parsed_ambiguity, dict) and parsed_ambiguity.get("is_ambiguous", False):
             reason = parsed_ambiguity.get("reason", "Query lacks context")
+            rewrite_started_at = time.perf_counter()
             contextual_rewrite = await _rewrite_with_conversation_context(
                 last_query_clean, conversation_context, config
             )
+            contextual_query_rewrite_duration_ms = (time.perf_counter() - rewrite_started_at) * 1000
             if contextual_rewrite:
                 original_query = last_query_clean
                 resolved_query = contextual_rewrite
@@ -1883,6 +1886,15 @@ async def classify_intent_node(
         },
         duration_ms=dur
     )
+    if contextual_query_rewrite_duration_ms is not None and resolved_query and original_query:
+        record_node_execution(
+            state,
+            "contextual_query_resolution",
+            "EXECUTED",
+            "Resolved an ambiguous follow-up from recent conversation context.",
+            metadata={"rewritten": resolved_query.strip() != original_query.strip()},
+            duration_ms=contextual_query_rewrite_duration_ms,
+        )
     await _notify_routing(
         config,
         intent=intent,

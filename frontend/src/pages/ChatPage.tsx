@@ -4540,6 +4540,7 @@ type ExecutionTraceItem = NonNullable<DeveloperMetrics['execution_trace']>[numbe
 
 const EXECUTION_STEP_LABELS: Record<string, string> = {
   classify_intent: 'Classified the request and selected a route',
+  contextual_query_resolution: 'Resolved the follow-up from conversation context',
   query_rewriter: 'Checked whether the query needed rewriting',
   plan: 'Prepared an execution plan',
   planner: 'Prepared an execution plan',
